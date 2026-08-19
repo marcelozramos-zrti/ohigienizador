@@ -1,0 +1,6 @@
+{
+  "name": "Sistema Higienizador",
+  "description": "Plataforma SaaS corporativa para gestão de Ordens de Serviço (Porto Seguro), controle de técnicos, estoque e fechamento financeiro quinzenal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

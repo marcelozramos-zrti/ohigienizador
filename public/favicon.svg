@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 140">
+  <defs>
+    <linearGradient id="sofaGradPrimary" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00A3E0" />
+      <stop offset="40%" stop-color="#0066CC" />
+      <stop offset="100%" stop-color="#003366" />
+    </linearGradient>
+    <linearGradient id="sofaGradCushion" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="60%" stop-color="#0284C7" />
+      <stop offset="100%" stop-color="#0369A1" />
+    </linearGradient>
+    <linearGradient id="sofaHighlight" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.1" />
+    </linearGradient>
+  </defs>
+
+  <rect x="36" y="118" width="12" height="14" rx="3" fill="#002244" />
+  <rect x="152" y="118" width="12" height="14" rx="3" fill="#002244" />
+
+  <rect x="22" y="98" width="156" height="24" rx="10" fill="#00264d" />
+  <rect x="20" y="86" width="160" height="34" rx="14" fill="url(#sofaGradPrimary)" />
+  <path d="M 28 88 Q 100 86 172 88" stroke="url(#sofaHighlight)" stroke-width="2.5" stroke-linecap="round" />
+
+  <rect x="34" y="28" width="62" height="62" rx="14" fill="url(#sofaGradCushion)" stroke="#FFFFFF" stroke-width="2.5" />
+  <path d="M 42 34 Q 65 30 88 34" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.7" stroke-linecap="round" />
+
+  <rect x="104" y="28" width="62" height="62" rx="14" fill="url(#sofaGradCushion)" stroke="#FFFFFF" stroke-width="2.5" />
+  <path d="M 112 34 Q 135 30 158 34" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.7" stroke-linecap="round" />
+
+  <rect x="42" y="68" width="54" height="28" rx="12" fill="#0284C7" stroke="#FFFFFF" stroke-width="3" />
+  <rect x="104" y="68" width="54" height="28" rx="12" fill="#0284C7" stroke="#FFFFFF" stroke-width="3" />
+
+  <ellipse cx="28" cy="74" rx="18" ry="24" fill="url(#sofaGradPrimary)" stroke="#FFFFFF" stroke-width="3" />
+  <path d="M 20 62 Q 26 56 34 62" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.8" stroke-linecap="round" />
+
+  <ellipse cx="172" cy="74" rx="18" ry="24" fill="url(#sofaGradPrimary)" stroke="#FFFFFF" stroke-width="3" />
+  <path d="M 164 62 Q 172 56 180 62" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.8" stroke-linecap="round" />
+
+  <path d="M 64 16 L 66 22 L 72 24 L 66 26 L 64 32 L 62 26 L 56 24 L 62 22 Z" fill="#38BDF8" />
+  <circle cx="64" cy="24" r="1.5" fill="#FFFFFF" />
+
+  <path d="M 174 20 L 175.5 24.5 L 180 26 L 175.5 27.5 L 174 32 L 172.5 27.5 L 168 26 L 172.5 24.5 Z" fill="#38BDF8" />
+  <circle cx="174" cy="26" r="1.2" fill="#FFFFFF" />
+
+  <circle cx="48" cy="20" r="1.5" fill="#00A3E0" />
+  <circle cx="152" cy="18" r="1.8" fill="#00A3E0" />
+</svg>

@@ -1,0 +1,361 @@
+// Prisma Schema for MariaDB - Sistema Higienizador
+// Plataforma SaaS Corporativa para Gestão de OS (Porto Seguro), Técnicos, Estoque e Fechamento Financeiro
+
+datasource db {
+  provider = "mysql" // MariaDB / MySQL compatible
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN       // Henrique (Acesso total, fechamento financeiro, CSV, gestão de contas)
+  OPERATIONAL // Gestão diária de OS e estoque, sem acesso a relatórios financeiros fechados
+  TECHNICIAN  // Acesso exclusivo ao App Mobile
+}
+
+enum OsStatus {
+  PENDING       // Aguardando início / agendado
+  IN_PROGRESS   // Técnico a caminho ou em execução
+  COMPLETED     // Finalizado com apontamento de KM, pedágio e insumos
+  CANCELLED     // Cancelado pela Porto Seguro ou cliente
+}
+
+enum MovementType {
+  INCOME              // Entrada (Faturamento Porto Seguro / Particular)
+  EXPENSE             // Despesa Geral (Insumos, Equipamentos, Manutenção)
+  ADVANCE_VALE        // Vale / Adiantamento ao técnico (descontado na quinzena)
+  TECHNICIAN_PAYMENT  // Pagamento líquido quinzenal do técnico
+  TAX_DEDUCTION       // Retenção/Dedução de impostos
+  COST_ALLOWANCE      // Ajuda de custo fixa
+}
+
+enum MovementStatus {
+  PENDING
+  CONFIRMED
+  PAID
+  CANCELLED
+}
+
+enum ClosingStatus {
+  OPEN
+  CALCULATING
+  CLOSED
+  PAID
+}
+
+enum PixKeyType {
+  CPF
+  CNPJ
+  EMAIL
+  PHONE
+  RANDOM
+}
+
+// -------------------------------------------------------------
+// 1. USUÁRIOS & TÉCNICOS (Users)
+// -------------------------------------------------------------
+model User {
+  id                  String       @id @default(uuid()) @db.VarChar(36)
+  name                String       @db.VarChar(120)
+  email               String       @unique @db.VarChar(150)
+  passwordHash        String       @db.VarChar(255)
+  role                Role         @default(TECHNICIAN)
+  documentCpf         String       @unique @db.VarChar(14)
+  phone               String       @db.VarChar(20) // Celular com DDD para disparo WhatsApp (Evolution / Z-API)
+  avatarUrl           String?      @db.VarChar(255)
+  isActive            Boolean      @default(true)
+
+  // Dados Bancários e PIX para Repasse Financeiro
+  pixKeyType          PixKeyType?  @default(CPF)
+  pixKey              String?      @db.VarChar(100)
+  bankName            String?      @db.VarChar(80)
+  bankAgency          String?      @db.VarChar(20)
+  bankAccount         String?      @db.VarChar(30)
+
+  // Regras de Remuneração e Exceção Fiscal
+  baseCostAllowance   Decimal      @default(0.00) @db.Decimal(10, 2) // Ajuda de custo fixa quinzenal
+  
+  // REGRA DE EXCEÇÃO: Flag para os 2 técnicos com dedução de impostos calculada separadamente
+  hasSpecialTaxRule   Boolean      @default(false)                   // True apenas para os 2 técnicos específicos
+  specialTaxRate      Decimal      @default(0.00) @db.Decimal(5, 2)  // Alíquota percentual específica de dedução (ex: 6.00%)
+
+  // Relacionamentos
+  assignedOrders      ServiceOrder[]               @relation("TechnicianOrders")
+  financialMovements  FinancialMovement[]          @relation("TechnicianMovements")
+  closingSummaries    TechnicianClosingSummary[]   @relation("TechnicianClosings")
+
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([role])
+  @@index([hasSpecialTaxRule])
+  @@map("users")
+}
+
+// -------------------------------------------------------------
+// 2. ORDENS DE SERVIÇO (OS - Foco Porto Seguro)
+// -------------------------------------------------------------
+model ServiceOrder {
+  id                   String        @id @default(uuid()) @db.VarChar(36)
+  callNumber           String        @unique @db.VarChar(50) // Número do Chamado (Porto Seguro)
+  portoSeguroProtocol  String?       @db.VarChar(50)         // Protocolo de sinistro/assistência
+  serviceCategory      String        @db.VarChar(80)         // Ex: Higienização Sofá, Impermeabilização, Colchão King
+  baseServiceFee       Decimal       @db.Decimal(10, 2)      // Taxa Fixa por Categoria de Serviço
+
+  // Dados do Cliente Porto Seguro
+  customerName         String        @db.VarChar(120)
+  customerCpf          String        @db.VarChar(14)
+  customerPhone        String?       @db.VarChar(20)
+
+  // Localidade
+  city                 String        @db.VarChar(80)
+  uf                   String        @db.VarChar(2)
+  neighborhood         String        @db.VarChar(80)
+  addressStreet        String        @db.VarChar(150)
+  addressNumber        String        @db.VarChar(20)
+  addressComplement    String?       @db.VarChar(50)
+  postalCode           String        @db.VarChar(10)
+
+  // Técnico e Execução
+  technicianId         String?       @db.VarChar(36)
+  technician           User?         @relation("TechnicianOrders", fields: [technicianId], references: [id], onDelete: SetNull)
+  status               OsStatus      @default(PENDING)
+  scheduledDate        DateTime
+  startedAt            DateTime?
+  completedAt          DateTime?
+
+  // Fechamento da OS pelo App Mobile
+  kmTraveled           Decimal       @default(0.00) @db.Decimal(8, 2)  // KM Rodado apontado pelo técnico
+  kmRateApplied        Decimal       @default(1.20) @db.Decimal(8, 2)  // Valor por KM na data
+  kmTotalCost          Decimal       @default(0.00) @db.Decimal(10, 2) // KM * Taxa
+  tollCost             Decimal       @default(0.00) @db.Decimal(10, 2) // Custos com Pedágio
+  supportCost          Decimal       @default(0.00) @db.Decimal(10, 2) // Custos de Suporte adicionais
+  
+  // Total Bruto a Repassar ao Técnico por esta OS
+  totalTechnicianGross Decimal       @default(0.00) @db.Decimal(10, 2) // Base + KM + Pedágio + Suporte
+  faturamentoPorto     Decimal       @default(0.00) @db.Decimal(10, 2) // Valor Cobrado da Porto Seguro
+
+  // Comprovação
+  customerSignature    String?       @db.LongText                      // Base64 ou URL da assinatura do cliente
+  executionNotes       String?       @db.Text
+  tollReceiptUrl       String?       @db.VarChar(255)
+
+  // Itens de estoque/suportes consumidos nesta OS
+  itemsUsed            OSStockItem[]
+  financialMovements   FinancialMovement[]
+
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([status])
+  @@index([technicianId])
+  @@index([scheduledDate])
+  @@index([callNumber])
+  @@map("service_orders")
+}
+
+// -------------------------------------------------------------
+// 3. ESTOQUE & INVENTÁRIO (StockItem)
+// -------------------------------------------------------------
+model StockItem {
+  id                String         @id @default(uuid()) @db.VarChar(36)
+  code              String         @unique @db.VarChar(30)
+  name              String         @db.VarChar(120)
+  description       String?        @db.VarChar(255)
+  category          String         @db.VarChar(60) // Ex: "Químicos / Limpeza", "Impermeabilizantes", "Suportes / Acessórios"
+  unit              String         @db.VarChar(20) // Ex: "UN", "L", "FRASCO", "PAR"
+  quantityInStock   Decimal        @default(0.00) @db.Decimal(10, 2)
+  minimumThreshold  Decimal        @default(5.00) @db.Decimal(10, 2)
+  unitCost          Decimal        @default(0.00) @db.Decimal(10, 2)
+  isSupportSupply   Boolean        @default(true) // Se marcado, abate automaticamente no fechamento da OS
+
+  usedInOrders      OSStockItem[]
+  movements         StockMovementHistory[]
+
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@map("stock_items")
+}
+
+// Tabela Associativa: Itens/Suportes Usados por OS
+model OSStockItem {
+  id              String        @id @default(uuid()) @db.VarChar(36)
+  serviceOrderId  String        @db.VarChar(36)
+  serviceOrder    ServiceOrder  @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  stockItemId     String        @db.VarChar(36)
+  stockItem       StockItem     @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+
+  quantityUsed    Decimal       @db.Decimal(10, 2)
+  unitCostSnapshot Decimal      @db.Decimal(10, 2) // Custo do item no momento do uso
+
+  createdAt       DateTime      @default(now())
+
+  @@unique([serviceOrderId, stockItemId])
+  @@map("os_stock_items")
+}
+
+// Histórico de Movimentações de Estoque (Entradas e Baixas de OS)
+model StockMovementHistory {
+  id              String        @id @default(uuid()) @db.VarChar(36)
+  stockItemId     String        @db.VarChar(36)
+  stockItem       StockItem     @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  type            String        @db.VarChar(20) // "ENTRY", "OS_DEDUCTION", "ADJUSTMENT"
+  quantity        Decimal       @db.Decimal(10, 2)
+  previousQty     Decimal       @db.Decimal(10, 2)
+  newQty          Decimal       @db.Decimal(10, 2)
+  referenceOsId   String?       @db.VarChar(36)
+  reason          String?       @db.VarChar(200)
+  createdAt       DateTime      @default(now())
+
+  @@map("stock_movements_history")
+}
+
+// -------------------------------------------------------------
+// 4. MOVIMENTAÇÕES FINANCEIRAS (Movimentacoes_Financeiras)
+// -------------------------------------------------------------
+model FinancialMovement {
+  id                  String              @id @default(uuid()) @db.VarChar(36)
+  type                MovementType
+  category            String              @db.VarChar(80)
+  description         String              @db.VarChar(200)
+  amount              Decimal             @db.Decimal(10, 2)
+  status              MovementStatus      @default(CONFIRMED)
+  
+  // Vinculação com Técnico (quando aplicável, ex: Vales/Adiantamentos)
+  technicianId        String?             @db.VarChar(36)
+  technician          User?               @relation("TechnicianMovements", fields: [technicianId], references: [id], onDelete: SetNull)
+
+  // Vinculação com OS (quando aplicável, ex: Faturamento Porto)
+  serviceOrderId      String?             @db.VarChar(36)
+  serviceOrder        ServiceOrder?       @relation(fields: [serviceOrderId], references: [id], onDelete: SetNull)
+
+  // Vinculação com Fechamento Quinzenal
+  biweeklyClosingId   String?             @db.VarChar(36)
+  biweeklyClosing     BiweeklyClosing?    @relation(fields: [biweeklyClosingId], references: [id], onDelete: SetNull)
+
+  paymentMethod       String?             @db.VarChar(50) // "PIX", "TRANSFERENCIA", "FATURA_PORTO"
+  dueDate             DateTime?
+  paymentDate         DateTime?
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([type])
+  @@index([technicianId])
+  @@index([biweeklyClosingId])
+  @@map("financial_movements")
+}
+
+// -------------------------------------------------------------
+// 5. FECHAMENTO FINANCEIRO QUINZENAL (BiweeklyClosing)
+// -------------------------------------------------------------
+model BiweeklyClosing {
+  id                  String                      @id @default(uuid()) @db.VarChar(36)
+  referenceMonth      Int                         // Mês de referência (1-12)
+  referenceYear       Int                         // Ano (ex: 2026)
+  periodNumber        Int                         // 1 (1 a 15) ou 2 (16 ao fim do mês)
+  startDate           DateTime
+  endDate             DateTime
+  status              ClosingStatus               @default(OPEN)
+
+  // Totais Consolidados da Empresa
+  totalFaturamentoPorto Decimal                   @default(0.00) @db.Decimal(12, 2)
+  totalTechnicianGross  Decimal                   @default(0.00) @db.Decimal(12, 2)
+  totalKmReimbursement  Decimal                   @default(0.00) @db.Decimal(12, 2)
+  totalTollsReimbursement Decimal                 @default(0.00) @db.Decimal(12, 2)
+  totalSupportPaid      Decimal                   @default(0.00) @db.Decimal(12, 2)
+  totalAdvancesDeducted Decimal                   @default(0.00) @db.Decimal(12, 2)
+  totalTaxesDeducted    Decimal                   @default(0.00) @db.Decimal(12, 2) // Deduções dos técnicos com regra especial
+  totalNetPayout        Decimal                   @default(0.00) @db.Decimal(12, 2)
+  companyProfitMargin   Decimal                   @default(0.00) @db.Decimal(12, 2)
+
+  closedByUserId      String?                     @db.VarChar(36)
+  closedAt            DateTime?
+
+  // Relacionamentos
+  technicianSummaries TechnicianClosingSummary[]
+  financialMovements  FinancialMovement[]
+
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  @@unique([referenceYear, referenceMonth, periodNumber])
+  @@map("biweekly_closings")
+}
+
+// Resumo Quinzenal Detalhado por Técnico (Usado para gerar o PDF e Disparo WhatsApp)
+model TechnicianClosingSummary {
+  id                     String           @id @default(uuid()) @db.VarChar(36)
+  closingId              String           @db.VarChar(36)
+  closing                BiweeklyClosing  @relation(fields: [closingId], references: [id], onDelete: Cascade)
+
+  technicianId           String           @db.VarChar(36)
+  technician             User             @relation("TechnicianClosings", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  osCount                Int              @default(0)
+  totalBaseFee           Decimal          @default(0.00) @db.Decimal(10, 2)
+  totalKmTraveled        Decimal          @default(0.00) @db.Decimal(8, 2)
+  totalKmCost            Decimal          @default(0.00) @db.Decimal(10, 2)
+  totalTollCost          Decimal          @default(0.00) @db.Decimal(10, 2)
+  totalSupportCost       Decimal          @default(0.00) @db.Decimal(10, 2)
+  fixedCostAllowance     Decimal          @default(0.00) @db.Decimal(10, 2)
+
+  // Total Bruto = Base + KM + Pedágio + Suporte + Ajuda Fixa
+  grossTotal             Decimal          @default(0.00) @db.Decimal(10, 2)
+
+  // Descontos
+  advancesDeduction      Decimal          @default(0.00) @db.Decimal(10, 2) // Vales retirados no período
+  
+  // REGRA DE EXCEÇÃO DE IMPOSTOS (Apenas para os 2 técnicos específicos)
+  hasSpecialTaxRule      Boolean          @default(false)
+  taxDeductionRate       Decimal          @default(0.00) @db.Decimal(5, 2)
+  taxDeductionAmount     Decimal          @default(0.00) @db.Decimal(10, 2)
+  
+  otherDeductions        Decimal          @default(0.00) @db.Decimal(10, 2)
+  totalDeductions        Decimal          @default(0.00) @db.Decimal(10, 2)
+
+  // Valor Líquido Final a Pagar ao Técnico via PIX
+  netTotal               Decimal          @default(0.00) @db.Decimal(10, 2)
+
+  // Controle de Extrato e WhatsApp
+  pdfStatementHash       String?          @db.VarChar(64)
+  pdfStatementUrl        String?          @db.VarChar(255)
+  whatsappDispatched     Boolean          @default(false)
+  whatsappDispatchedAt   DateTime?
+  whatsappMessageId      String?          @db.VarChar(100)
+  whatsappStatus         String?          @db.VarChar(30) // "PENDING", "SENT", "DELIVERED", "FAILED"
+
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  @@unique([closingId, technicianId])
+  @@map("technician_closing_summaries")
+}
+
+// -------------------------------------------------------------
+// 6. CONFIGURAÇÕES GERAIS (Configuracoes_Gerais)
+// -------------------------------------------------------------
+model GeneralSettings {
+  id                         String    @id @default("default") @db.VarChar(36)
+  companyName                String    @default("O Higienizador") @db.VarChar(100)
+  companyCnpj                String    @default("32.145.890/0001-44") @db.VarChar(20)
+  kmRateDefault              Decimal   @default(1.20) @db.Decimal(6, 2) // R$/km padrão
+  portoSeguroBaseFeeDefault  Decimal   @default(180.00) @db.Decimal(10, 2)
+  defaultSpecialTaxRate      Decimal   @default(6.00) @db.Decimal(5, 2) // Alíquota da regra de exceção (%)
+  
+  // Integração WhatsApp (Evolution API / Z-API / Baileys)
+  whatsappApiUrl             String    @default("https://api.evolution-api.com/message/sendMedia") @db.VarChar(255)
+  whatsappApiKey             String    @default("evo_live_sec_higienizador_2026") @db.VarChar(255)
+  whatsappInstanceName       String    @default("higienizador-financeiro") @db.VarChar(100)
+  whatsappTemplateMessage    String    @default("Olá, {NOME_TECNICO}! Segue seu extrato de fechamento quinzenal ({PERIODO}) da empresa O Higienizador. Valor líquido a receber via PIX: {VALOR_LIQUIDO}. O PDF detalhado está anexo.") @db.Text
+
+  autoStockDeduction         Boolean   @default(true)
+  updatedAt                  DateTime  @updatedAt
+
+  @@map("general_settings")
+}
