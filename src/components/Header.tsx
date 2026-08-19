@@ -14,6 +14,8 @@ import {
   DollarSign,
   Smartphone,
   Sliders,
+  LogOut,
+  Shield,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -39,6 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
     selectedMonth = 8,
     selectedPeriod = 1,
     addToast,
+    logout,
   } = useApp();
 
   const safeUsers = users || [];
@@ -325,9 +328,34 @@ export const Header: React.FC<HeaderProps> = ({
                     );
                   })}
                 </div>
+
+                <div className="p-2 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    ID: {safeUser.id.substring(0, 14)}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowRoleMenu(false);
+                      logout();
+                    }}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sair da Conta</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
+
+          {/* Quick Logout Button on Header */}
+          <button
+            onClick={logout}
+            title="Encerrar Sessão"
+            className="hidden sm:flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors border border-transparent hover:border-red-100 cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>

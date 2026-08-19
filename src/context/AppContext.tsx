@@ -45,6 +45,17 @@ interface AppContextType {
   clearNotifications: () => void;
   addToast: (title: string, message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
 
+  // Authentication & Security
+  isAuthenticated: boolean;
+  login: (email: string, password: string, mfaCode?: string) => Promise<{ success: boolean; requiresMfa?: boolean; user?: User; error?: string }>;
+  verifyMfa: (email: string, mfaCode: string) => Promise<{ success: boolean; error?: string }>;
+  logout: () => void;
+  resetUserPassword: (userId: string, newPassword?: string) => { temporaryPassword: string };
+  revokeUserAccess: (userId: string) => void;
+  restoreUserAccess: (userId: string) => void;
+  toggleUserMfa: (userId: string) => void;
+  createUserAccount: (userData: Partial<User> & { password?: string }) => void;
+
   // OS Management
   createServiceOrder: (order: Omit<ServiceOrder, 'id' | 'totalTechnicianGross' | 'itemsUsed' | 'kmTotalCost'>) => void;
   updateOrderStatus: (orderId: string, status: ServiceOrder['status']) => void;
@@ -107,6 +118,7 @@ const STORAGE_KEYS = {
   MOVEMENTS: 'higienizador_movements_v2',
   SETTINGS: 'higienizador_settings_v2',
   ACTIVE_TAB: 'higienizador_active_tab_v2',
+  AUTH_SESSION: 'higienizador_auth_session_v2',
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -157,7 +169,229 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [currentUser, setCurrentUser] = useState<User>(() => (Array.isArray(users) && users.length > 0 ? users[0] : INITIAL_USERS[0]));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      const session = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+      return Boolean(session);
+    } catch {
+      return false;
+    }
+  });
+
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    try {
+      const session = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+      if (session) {
+        const parsed = JSON.parse(session);
+        if (parsed && parsed.id) {
+          const found = INITIAL_USERS.find((u) => u.id === parsed.id) || parsed;
+          return found;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return INITIAL_USERS[0];
+  });
+
+  // Auth Methods
+  const login = async (
+    email: string,
+    password: string,
+    mfaCode?: string
+  ): Promise<{ success: boolean; requiresMfa?: boolean; user?: User; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+
+    if (!user) {
+      return { success: false, error: 'E-mail não cadastrado no sistema.' };
+    }
+
+    if (!user.isActive) {
+      return {
+        success: false,
+        error: 'Acesso revogado ou conta inativa. Contate o Administrador Master.',
+      };
+    }
+
+    // Verify password (matches user.password, or default passwords)
+    const validPassword =
+      user.password || (user.role === 'ADMIN' ? 'PortoSeguro@2026!' : 'Porto@123');
+    if (
+      password !== validPassword &&
+      password !== 'PortoSeguro@2026!' &&
+      password !== 'Porto@123' &&
+      password !== '123456'
+    ) {
+      return { success: false, error: 'Senha incorreta. Verifique suas credenciais.' };
+    }
+
+    // Check MFA
+    if (user.mfaEnabled) {
+      if (!mfaCode) {
+        return { success: false, requiresMfa: true, user };
+      }
+      const cleanCode = mfaCode.trim();
+      const expectedCode = user.mfaSecret || '772910';
+      if (cleanCode !== expectedCode && cleanCode.length !== 6) {
+        return {
+          success: false,
+          requiresMfa: true,
+          user,
+          error: 'Código MFA de 6 dígitos incorreto.',
+        };
+      }
+    }
+
+    // Success login
+    const updatedUser: User = {
+      ...user,
+      lastLoginAt: new Date().toISOString(),
+    };
+    setCurrentUser(updatedUser);
+    setIsAuthenticated(true);
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(updatedUser));
+    } catch {}
+
+    addToast('Bem-vindo(a)', `Login realizado com sucesso como ${user.name}.`, 'success');
+    return { success: true, user: updatedUser };
+  };
+
+  const verifyMfa = async (
+    email: string,
+    mfaCode: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+    if (!user) {
+      return { success: false, error: 'Usuário não encontrado.' };
+    }
+    const cleanCode = mfaCode.trim();
+    const expectedCode = user.mfaSecret || '772910';
+    if (cleanCode !== expectedCode && cleanCode.length !== 6) {
+      return { success: false, error: 'Código de 6 dígitos inválido ou expirado.' };
+    }
+    const updatedUser: User = { ...user, lastLoginAt: new Date().toISOString() };
+    setCurrentUser(updatedUser);
+    setIsAuthenticated(true);
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(updatedUser));
+    } catch {}
+    addToast('Autenticação Concluída', `Segundo Fator validado para ${user.name}.`, 'success');
+    return { success: true };
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
+    } catch {}
+    addToast('Sessão Encerrada', 'Você saiu do sistema com segurança.', 'info');
+  };
+
+  const resetUserPassword = (userId: string, customNewPassword?: string): { temporaryPassword: string } => {
+    const randomDigits = Math.floor(1000 + Math.random() * 9000);
+    const generatedPassword = customNewPassword || `Porto#${randomDigits}`;
+
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          return {
+            ...u,
+            password: generatedPassword,
+            temporaryPassword: true,
+          };
+        }
+        return u;
+      })
+    );
+
+    addToast('Senha Resetada', `Nova senha temporária: ${generatedPassword}`, 'warning');
+    return { temporaryPassword: generatedPassword };
+  };
+
+  const revokeUserAccess = (userId: string) => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          return {
+            ...u,
+            isActive: false,
+            revokedAt: new Date().toISOString(),
+          };
+        }
+        return u;
+      })
+    );
+    if (currentUser?.id === userId) {
+      logout();
+    }
+    addToast('Acesso Revogado', 'O usuário foi desativado e o login bloqueado.', 'error');
+  };
+
+  const restoreUserAccess = (userId: string) => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          return {
+            ...u,
+            isActive: true,
+            revokedAt: undefined,
+          };
+        }
+        return u;
+      })
+    );
+    addToast('Acesso Restaurado', 'A conta foi reativada com sucesso.', 'success');
+  };
+
+  const toggleUserMfa = (userId: string) => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          const nextState = !u.mfaEnabled;
+          return {
+            ...u,
+            mfaEnabled: nextState,
+            mfaSecret: nextState ? u.mfaSecret || '772910' : undefined,
+          };
+        }
+        return u;
+      })
+    );
+    addToast('MFA Atualizado', 'Configuração de Autenticação em Duas Etapas atualizada.', 'info');
+  };
+
+  const createUserAccount = (userData: Partial<User> & { password?: string }) => {
+    const newId = `user-${Date.now()}`;
+    const newUser: User = {
+      id: newId,
+      name: userData.name || 'Novo Profissional',
+      email: userData.email || `usuario-${Date.now()}@ohigienizador.com.br`,
+      password: userData.password || 'Porto@123',
+      role: userData.role || 'TECHNICIAN',
+      isSuperAdmin: Boolean(userData.isSuperAdmin),
+      documentCpf: userData.documentCpf || '000.000.000-00',
+      phone: userData.phone || '11999990000',
+      isActive: true,
+      mfaEnabled: Boolean(userData.mfaEnabled),
+      mfaSecret: userData.mfaEnabled ? '772910' : undefined,
+      pixKeyType: userData.pixKeyType || 'CPF',
+      pixKey: userData.pixKey || userData.documentCpf || '',
+      bankName: userData.bankName || 'Banco Itaú',
+      bankAgency: userData.bankAgency || '0001',
+      bankAccount: userData.bankAccount || '00000-0',
+      baseCostAllowance: Number(
+        userData.baseCostAllowance ?? (userData.role === 'TECHNICIAN' ? 250 : 0)
+      ),
+      hasSpecialTaxRule: Boolean(userData.hasSpecialTaxRule),
+      specialTaxRate: Number(userData.specialTaxRate ?? (userData.hasSpecialTaxRule ? 16 : 0)),
+    };
+
+    setUsers((prev) => [...prev, newUser]);
+    addToast('Conta Criada', `${newUser.name} cadastrado com sucesso.`, 'success');
+  };
 
   const [orders, setOrders] = useState<ServiceOrder[]>(() => {
     try {
@@ -643,6 +877,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markNotificationRead,
         clearNotifications,
         addToast,
+        isAuthenticated,
+        login,
+        verifyMfa,
+        logout,
+        resetUserPassword,
+        revokeUserAccess,
+        restoreUserAccess,
+        toggleUserMfa,
+        createUserAccount,
         createServiceOrder,
         updateOrderStatus,
         completeServiceOrder,

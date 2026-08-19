@@ -25,11 +25,20 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  password?: string;
   role: Role;
+  isSuperAdmin?: boolean;
   documentCpf: string;
   phone: string; // DDD + Celular (e.g. "11987654321")
   avatarUrl?: string;
   isActive: boolean;
+  
+  // Security & MFA
+  mfaEnabled?: boolean;
+  mfaSecret?: string;
+  lastLoginAt?: string;
+  temporaryPassword?: boolean;
+  revokedAt?: string;
   
   // Banking & PIX
   pixKeyType?: PixKeyType;
@@ -43,7 +52,7 @@ export interface User {
   
   // REGRA DE EXCEÇÃO: Flag para os 2 técnicos específicos na base com cálculo de impostos separado
   hasSpecialTaxRule: boolean;
-  specialTaxRate: number; // Porcentagem de dedução independente (ex: 6%)
+  specialTaxRate: number; // Porcentagem de dedução independente (ex: 16%)
 }
 
 export interface OSStockItemUsage {

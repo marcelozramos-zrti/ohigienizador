@@ -1,0 +1,18 @@
+{
+  "name": "O Higienizador - Gestão de Campo Porto Seguro",
+  "short_name": "O Higienizador",
+  "description": "Aplicativo de campo e gestão de ordens de serviço Porto Seguro",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#003366",
+  "theme_color": "#003366",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

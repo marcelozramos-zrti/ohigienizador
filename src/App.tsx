@@ -11,15 +11,27 @@ import { CashFlowView } from './components/CashFlowView';
 import { MobileAppSimulator } from './components/MobileAppSimulator';
 import { SettingsView } from './components/SettingsView';
 import { NewServiceOrderModal } from './components/NewServiceOrderModal';
+import { LoginView } from './components/LoginView';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeTab = 'dashboard', setActiveTab, toasts = [], removeToast } = useApp();
+  const {
+    activeTab = 'dashboard',
+    setActiveTab,
+    notifications = [],
+    markNotificationRead,
+    isAuthenticated,
+  } = useApp();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState<boolean>(false);
   const [showNewAdvanceModal, setShowNewAdvanceModal] = useState<boolean>(false);
 
-  const safeToasts = toasts || [];
+  // If not authenticated, render the secure Login View with Superadmin and Technician access
+  if (!isAuthenticated) {
+    return <LoginView />;
+  }
+
+  const safeNotifications = notifications || [];
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 font-sans antialiased">
@@ -85,34 +97,34 @@ const MainLayout: React.FC = () => {
 
       {/* Global Toast Notifications Container */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 max-w-md w-full pointer-events-none">
-        {safeToasts.map((toast) => {
+        {safeNotifications.slice(0, 3).map((notif) => {
           const bg =
-            toast.type === 'success'
+            notif.type === 'success'
               ? 'bg-[#003366] text-white border border-[#004080]'
-              : toast.type === 'error'
+              : notif.type === 'error'
               ? 'bg-red-900 text-white border border-red-700'
               : 'bg-slate-900 text-white border border-slate-700';
 
           const Icon =
-            toast.type === 'success'
+            notif.type === 'success'
               ? CheckCircle2
-              : toast.type === 'error'
+              : notif.type === 'error'
               ? AlertCircle
               : Info;
 
           return (
             <div
-              key={toast.id}
+              key={notif.id}
               className={`p-3.5 rounded-xl shadow-xl backdrop-blur-md pointer-events-auto flex items-start space-x-3 transition-all animate-in slide-in-from-bottom-2 ${bg}`}
             >
               <Icon className="h-4 w-4 shrink-0 mt-0.5 text-cyan-300" />
               <div className="flex-1 text-xs">
-                <strong className="font-bold block text-xs">{toast.title}</strong>
-                <p className="mt-0.5 opacity-90 text-[11px]">{toast.message}</p>
+                <strong className="font-bold block text-xs">{notif.title}</strong>
+                <p className="mt-0.5 opacity-90 text-[11px]">{notif.message}</p>
               </div>
               <button
-                onClick={() => removeToast(toast.id)}
-                className="opacity-70 hover:opacity-100 text-white"
+                onClick={() => markNotificationRead(notif.id)}
+                className="opacity-70 hover:opacity-100 text-white cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

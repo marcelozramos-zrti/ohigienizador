@@ -16,53 +16,291 @@ import {
   Sliders,
   Check,
   X,
+  Lock,
+  RefreshCw,
+  UserX,
+  UserCheck,
+  Fingerprint,
+  Send,
+  Copy,
+  Smartphone,
+  Search,
+  Building,
+  KeyRound,
+  ShieldAlert,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { User } from '../types';
+import { User, PixKeyType } from '../types';
 
 export const TechniciansView: React.FC = () => {
-  const { users = [], toggleSpecialTaxRule, updateUser, addToast } = useApp();
+  const {
+    users = [],
+    toggleSpecialTaxRule,
+    updateTechnician,
+    createUserAccount,
+    resetUserPassword,
+    revokeUserAccess,
+    restoreUserAccess,
+    toggleUserMfa,
+    addToast,
+    currentUser,
+  } = useApp();
 
+  // Search & Filter
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'REVOKED' | 'SPECIAL_TAX' | 'MFA'>('ALL');
+
+  // Modals
+  const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [editingTech, setEditingTech] = useState<User | null>(null);
-  const [editAllowance, setEditAllowance] = useState<number>(250);
-  const [editTaxRate, setEditTaxRate] = useState<number>(16);
+  const [resetModalTech, setResetModalTech] = useState<User | null>(null);
+  const [generatedNewPass, setGeneratedNewPass] = useState<string>('');
+  const [customPassInput, setCustomPassInput] = useState<string>('');
+
+  // Form State for New Technician
+  const [newFormData, setNewFormData] = useState({
+    name: '',
+    email: '',
+    password: 'Porto@' + Math.floor(100 + Math.random() * 900),
+    documentCpf: '',
+    phone: '',
+    role: 'TECHNICIAN' as User['role'],
+    pixKeyType: 'CPF' as PixKeyType,
+    pixKey: '',
+    bankName: 'Banco Itaú',
+    bankAgency: '0450',
+    bankAccount: '',
+    baseCostAllowance: 250,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 16,
+    mfaEnabled: false,
+  });
+
+  // Edit Form State
+  const [editFormData, setEditFormData] = useState<{
+    name: string;
+    email: string;
+    phone: string;
+    documentCpf: string;
+    pixKeyType: PixKeyType;
+    pixKey: string;
+    bankName: string;
+    bankAgency: string;
+    bankAccount: string;
+    baseCostAllowance: number;
+    hasSpecialTaxRule: boolean;
+    specialTaxRate: number;
+    mfaEnabled: boolean;
+  }>({
+    name: '',
+    email: '',
+    phone: '',
+    documentCpf: '',
+    pixKeyType: 'CPF',
+    pixKey: '',
+    bankName: '',
+    bankAgency: '',
+    bankAccount: '',
+    baseCostAllowance: 250,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 16,
+    mfaEnabled: false,
+  });
 
   const safeUsers = users || [];
   const technicians = safeUsers.filter((u) => u && u.role === 'TECHNICIAN');
   const specialRuleCount = technicians.filter((t) => t && t.hasSpecialTaxRule).length;
+  const activeCount = technicians.filter((t) => t && t.isActive).length;
+  const mfaCount = technicians.filter((t) => t && t.mfaEnabled).length;
 
+  // Filtered List
+  const filteredTechnicians = technicians.filter((tech) => {
+    const term = searchTerm.toLowerCase().trim();
+    const matchesSearch =
+      !term ||
+      tech.name.toLowerCase().includes(term) ||
+      tech.email.toLowerCase().includes(term) ||
+      tech.documentCpf.toLowerCase().includes(term) ||
+      (tech.pixKey && tech.pixKey.toLowerCase().includes(term)) ||
+      tech.phone.includes(term);
+
+    if (!matchesSearch) return false;
+
+    if (filterStatus === 'ACTIVE') return tech.isActive;
+    if (filterStatus === 'REVOKED') return !tech.isActive;
+    if (filterStatus === 'SPECIAL_TAX') return tech.hasSpecialTaxRule;
+    if (filterStatus === 'MFA') return tech.mfaEnabled;
+
+    return true;
+  });
+
+  // Open Edit Modal
   const handleOpenEdit = (tech: User) => {
     setEditingTech(tech);
-    setEditAllowance(tech.baseCostAllowance ?? 250);
-    setEditTaxRate(tech.specialTaxRate ?? 16);
+    setEditFormData({
+      name: tech.name || '',
+      email: tech.email || '',
+      phone: tech.phone || '',
+      documentCpf: tech.documentCpf || '',
+      pixKeyType: tech.pixKeyType || 'CPF',
+      pixKey: tech.pixKey || '',
+      bankName: tech.bankName || 'Banco Itaú',
+      bankAgency: tech.bankAgency || '',
+      bankAccount: tech.bankAccount || '',
+      baseCostAllowance: tech.baseCostAllowance ?? 250,
+      hasSpecialTaxRule: Boolean(tech.hasSpecialTaxRule),
+      specialTaxRate: tech.specialTaxRate ?? 16,
+      mfaEnabled: Boolean(tech.mfaEnabled),
+    });
   };
 
-  const handleSaveEdit = () => {
+  // Save Edit
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!editingTech) return;
-    updateUser(editingTech.id, {
-      baseCostAllowance: Number(editAllowance),
-      specialTaxRate: Number(editTaxRate),
+
+    updateTechnician(editingTech.id, {
+      name: editFormData.name,
+      email: editFormData.email,
+      phone: editFormData.phone,
+      documentCpf: editFormData.documentCpf,
+      pixKeyType: editFormData.pixKeyType,
+      pixKey: editFormData.pixKey,
+      bankName: editFormData.bankName,
+      bankAgency: editFormData.bankAgency,
+      bankAccount: editFormData.bankAccount,
+      baseCostAllowance: Number(editFormData.baseCostAllowance),
+      hasSpecialTaxRule: editFormData.hasSpecialTaxRule,
+      specialTaxRate: Number(editFormData.specialTaxRate),
+      mfaEnabled: editFormData.mfaEnabled,
     });
+
     addToast(
-      'Parâmetros Atualizados',
-      `Configurações financeiras de ${editingTech.name} salvas com sucesso (Ajuda de Custo: R$ ${editAllowance.toFixed(2)}, Taxa: ${editTaxRate}%).`,
+      'Cadastro Atualizado',
+      `Dados do técnico ${editFormData.name} foram salvos com sucesso.`,
       'success'
     );
     setEditingTech(null);
   };
 
+  // Create New Technician
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFormData.name || !newFormData.email) {
+      addToast('Campos Obrigatórios', 'Preencha nome e e-mail do técnico.', 'error');
+      return;
+    }
+
+    createUserAccount({
+      name: newFormData.name,
+      email: newFormData.email,
+      password: newFormData.password,
+      documentCpf: newFormData.documentCpf || '000.000.000-00',
+      phone: newFormData.phone || '11999990000',
+      role: 'TECHNICIAN',
+      pixKeyType: newFormData.pixKeyType,
+      pixKey: newFormData.pixKey || newFormData.documentCpf,
+      bankName: newFormData.bankName,
+      bankAgency: newFormData.bankAgency,
+      bankAccount: newFormData.bankAccount,
+      baseCostAllowance: Number(newFormData.baseCostAllowance),
+      hasSpecialTaxRule: newFormData.hasSpecialTaxRule,
+      specialTaxRate: Number(newFormData.specialTaxRate),
+      mfaEnabled: newFormData.mfaEnabled,
+    });
+
+    setShowCreateModal(false);
+    // Reset form
+    setNewFormData({
+      name: '',
+      email: '',
+      password: 'Porto@' + Math.floor(100 + Math.random() * 900),
+      documentCpf: '',
+      phone: '',
+      role: 'TECHNICIAN',
+      pixKeyType: 'CPF',
+      pixKey: '',
+      bankName: 'Banco Itaú',
+      bankAgency: '0450',
+      bankAccount: '',
+      baseCostAllowance: 250,
+      hasSpecialTaxRule: false,
+      specialTaxRate: 16,
+      mfaEnabled: false,
+    });
+  };
+
+  // Open Password Reset Modal
+  const handleOpenResetModal = (tech: User) => {
+    setResetModalTech(tech);
+    const result = resetUserPassword(tech.id);
+    setGeneratedNewPass(result.temporaryPassword);
+    setCustomPassInput(result.temporaryPassword);
+  };
+
+  // Dispatch Password via WhatsApp
+  const handleSendPasswordWhatsApp = (tech: User, pass: string) => {
+    const cleanPhone = tech.phone.replace(/\D/g, '');
+    const phoneWithDDI = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
+    const text = encodeURIComponent(
+      `Olá ${tech.name}! Sua senha de acesso ao portal do *O Higienizador (Porto Seguro)* foi redefinida.\n\n*E-mail:* ${tech.email}\n*Nova Senha:* ${pass}\n*Link de Acesso:* https://ohigienizador.zrti.tech\n\nPor favor, efetue login e altere sua senha no primeiro acesso.`
+    );
+    window.open(`https://wa.me/${phoneWithDDI}?text=${text}`, '_blank');
+  };
+
+  const handleCopyPassword = (pass: string) => {
+    navigator.clipboard.writeText(pass);
+    addToast('Senha Copiada', 'Senha provisória copiada para a área de transferência.', 'info');
+  };
+
   return (
     <div className="space-y-6">
-      
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-[#003366] tracking-tight">
-            Gestão de Técnicos & Parâmetros Financeiros
+            Gestão de Técnicos & Contas de Acesso
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Cadastro de profissionais parceiros, dados PIX, ajuda de custo fixa (R$ 250,00) e parametrização de exceção fiscal (16%).
+            Cadastro de profissionais parceiros, credenciais de login, MFA, dados PIX e regras financeiras quinzenais.
           </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-[#003366] hover:bg-[#00264d] text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+          >
+            <PlusCircle className="w-4 h-4 text-cyan-300" />
+            <span>Cadastrar Novo Técnico</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Técnicos</span>
+          <div className="text-xl font-black text-slate-900 mt-0.5">{technicians.length}</div>
+          <span className="text-[10px] text-emerald-600 font-semibold">{activeCount} ativos em campo</span>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Ajuda de Custo Fixa</span>
+          <div className="text-xl font-black text-[#003366] mt-0.5">R$ 250,00</div>
+          <span className="text-[10px] text-slate-500">Por quinzena fechada</span>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Exceção Fiscal (16%)</span>
+          <div className="text-xl font-black text-amber-600 mt-0.5">{specialRuleCount}</div>
+          <span className="text-[10px] text-amber-700 font-semibold">Técnico(s) com retenção</span>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Segurança 2FA / MFA</span>
+          <div className="text-xl font-black text-cyan-700 mt-0.5">{mfaCount}</div>
+          <span className="text-[10px] text-cyan-600 font-semibold">Autenticação em 2 etapas</span>
         </div>
       </div>
 
@@ -71,11 +309,68 @@ export const TechniciansView: React.FC = () => {
         <Layers className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
         <div className="flex-1">
           <strong className="font-bold block text-sm">
-            Regra de Exceção Fiscal das Planilhas ({specialRuleCount} Técnico(s) com Retenção Ativa)
+            Regra de Exceção Fiscal das Planilhas ({specialRuleCount} Técnico com Retenção Ativa)
           </strong>
           <p className="mt-0.5 text-amber-800 leading-relaxed">
-            Conforme a engenharia reversa das planilhas, técnicos como <strong>Robertinho</strong> possuem a flag de exceção fiscal com retenção de <strong>16%</strong> sobre o valor bruto (Ex: R$ 3.940,00 bruto - 16% [R$ 630,40] = R$ 3.309,60 líquido). Demais técnicos operam sem retenção fiscal. Todos recebem a <strong>Ajuda de Custo de R$ 250,00</strong> somada ao final.
+            Conforme a parametrização das planilhas Porto Seguro, técnicos com exceção fiscal (como <strong>Robertinho</strong>) possuem retenção de <strong>16%</strong> sobre a comissão bruta. Os demais técnicos operam sem retenção fiscal. Todos recebem a <strong>Ajuda de Custo de R$ 250,00</strong> somada ao final.
           </p>
+        </div>
+      </div>
+
+      {/* Search & Filter Bar */}
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="relative w-full sm:w-80">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por nome, e-mail, CPF, PIX..."
+            className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          />
+        </div>
+
+        <div className="flex items-center space-x-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+          <button
+            onClick={() => setFilterStatus('ALL')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              filterStatus === 'ALL'
+                ? 'bg-[#003366] text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Todos ({technicians.length})
+          </button>
+          <button
+            onClick={() => setFilterStatus('ACTIVE')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              filterStatus === 'ACTIVE'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Ativos ({activeCount})
+          </button>
+          <button
+            onClick={() => setFilterStatus('SPECIAL_TAX')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              filterStatus === 'SPECIAL_TAX'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            16% Fiscal ({specialRuleCount})
+          </button>
+          <button
+            onClick={() => setFilterStatus('MFA')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              filterStatus === 'MFA'
+                ? 'bg-cyan-700 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Com MFA ({mfaCount})
+          </button>
         </div>
       </div>
 
@@ -87,32 +382,46 @@ export const TechniciansView: React.FC = () => {
               <tr>
                 <th className="py-3 px-4">Técnico / Parceiro</th>
                 <th className="py-3 px-4">Contato / WhatsApp</th>
-                <th className="py-3 px-4">Chave PIX Cadastrada</th>
-                <th className="py-3 px-4">Ajuda de Custo Fixa</th>
-                <th className="py-3 px-4 text-center">Regra Fiscal Especial</th>
-                <th className="py-3 px-4">Status de Campo</th>
-                <th className="py-3 px-4 text-right">Parâmetros</th>
+                <th className="py-3 px-4">Chave PIX & Banco</th>
+                <th className="py-3 px-4">Ajuda Custo</th>
+                <th className="py-3 px-4 text-center">Regra Fiscal</th>
+                <th className="py-3 px-4 text-center">Segurança & MFA</th>
+                <th className="py-3 px-4 text-center">Status</th>
+                <th className="py-3 px-4 text-right">Ações da Conta</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {technicians.map((tech) => (
-                <tr key={tech.id} className="hover:bg-slate-50/70 transition-colors">
-                  
+              {filteredTechnicians.map((tech) => (
+                <tr
+                  key={tech.id}
+                  className={`hover:bg-slate-50/70 transition-colors ${
+                    !tech.isActive ? 'bg-red-50/30 opacity-75' : ''
+                  }`}
+                >
                   {/* Name and email */}
                   <td className="py-3.5 px-4">
                     <div className="font-bold text-slate-900 flex items-center space-x-2">
                       <div className="w-7 h-7 rounded-full bg-[#003366] text-white flex items-center justify-center font-bold text-xs">
                         {tech.name.charAt(0)}
                       </div>
-                      <span className="font-bold">{tech.name}</span>
+                      <div>
+                        <span className="font-bold">{tech.name}</span>
+                        {tech.temporaryPassword && (
+                          <span className="ml-1.5 px-1.5 py-0.2 bg-amber-100 text-amber-800 text-[9px] rounded font-bold">
+                            Senha Provisória
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">{tech.email}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      {tech.email} • CPF: {tech.documentCpf}
+                    </div>
                   </td>
 
                   {/* Phone */}
                   <td className="py-3.5 px-4">
                     <div className="font-semibold text-slate-700 flex items-center space-x-1">
-                      <Phone className="h-3 w-3 text-slate-400" />
+                      <Phone className="h-3 w-3 text-emerald-500" />
                       <span>{tech.phone}</span>
                     </div>
                   </td>
@@ -123,7 +432,7 @@ export const TechniciansView: React.FC = () => {
                       {tech.pixKey || 'Não informada'}
                     </div>
                     <div className="text-[10px] text-slate-400 mt-0.5">
-                      Tipo: {tech.pixKeyType || 'CPF'} {tech.bankName ? `(${tech.bankName})` : ''}
+                      {tech.pixKeyType || 'CPF'} {tech.bankName ? `• ${tech.bankName}` : ''}
                     </div>
                   </td>
 
@@ -138,38 +447,89 @@ export const TechniciansView: React.FC = () => {
                   <td className="py-3.5 px-4 text-center">
                     <button
                       onClick={() => toggleSpecialTaxRule(tech.id)}
-                      className={`px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
                         tech.hasSpecialTaxRule
                           ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 shadow-xs'
                           : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
                       }`}
-                      title="Clique para alternar a flag de exceção fiscal"
+                      title="Alternar retenção fiscal de 16%"
                     >
                       {tech.hasSpecialTaxRule
-                        ? `Ativa (${tech.specialTaxRate || 16}% Retenção)`
-                        : 'Padrão (Isento)'}
+                        ? `Ativa (${tech.specialTaxRate || 16}%)`
+                        : 'Isento'}
+                    </button>
+                  </td>
+
+                  {/* MFA Status & Toggle */}
+                  <td className="py-3.5 px-4 text-center">
+                    <button
+                      onClick={() => toggleUserMfa(tech.id)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all inline-flex items-center space-x-1 cursor-pointer ${
+                        tech.mfaEnabled
+                          ? 'bg-cyan-100 text-cyan-900 border border-cyan-300 hover:bg-cyan-200'
+                          : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                      }`}
+                      title="Clique para ativar/desativar MFA para este técnico"
+                    >
+                      <Fingerprint className="w-3 h-3" />
+                      <span>{tech.mfaEnabled ? 'MFA Ativo' : 'Desativado'}</span>
                     </button>
                   </td>
 
                   {/* Status */}
-                  <td className="py-3.5 px-4">
-                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[9px] uppercase tracking-wider">
-                      ATIVO EM CAMPO
-                    </span>
+                  <td className="py-3.5 px-4 text-center">
+                    {tech.isActive ? (
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[9px] uppercase tracking-wider">
+                        ATIVO
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded-full font-bold text-[9px] uppercase tracking-wider">
+                        REVOGADO
+                      </span>
+                    )}
                   </td>
 
                   {/* Actions */}
                   <td className="py-3.5 px-4 text-right">
-                    <button
-                      onClick={() => handleOpenEdit(tech)}
-                      className="p-1.5 rounded-lg text-slate-600 hover:text-cyan-700 hover:bg-cyan-50 border border-slate-200 transition-colors inline-flex items-center space-x-1 cursor-pointer"
-                      title="Editar parâmetros individuais do técnico"
-                    >
-                      <Sliders className="h-3.5 w-3.5 text-[#003366]" />
-                      <span className="text-[11px] font-bold">Editar</span>
-                    </button>
-                  </td>
+                    <div className="flex items-center justify-end space-x-1">
+                      {/* Reset Password Button */}
+                      <button
+                        onClick={() => handleOpenResetModal(tech)}
+                        className="p-1.5 rounded-lg text-amber-700 hover:bg-amber-50 border border-amber-200 transition-colors cursor-pointer"
+                        title="Resetar Senha de Acesso"
+                      >
+                        <Key className="h-3.5 w-3.5" />
+                      </button>
 
+                      {/* Edit Details */}
+                      <button
+                        onClick={() => handleOpenEdit(tech)}
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-cyan-700 hover:bg-cyan-50 border border-slate-200 transition-colors cursor-pointer"
+                        title="Editar Dados, PIX e Parâmetros"
+                      >
+                        <Sliders className="h-3.5 w-3.5 text-[#003366]" />
+                      </button>
+
+                      {/* Revoke / Restore Access */}
+                      {tech.isActive ? (
+                        <button
+                          onClick={() => revokeUserAccess(tech.id)}
+                          className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 border border-red-200 transition-colors cursor-pointer"
+                          title="Revogar Acesso / Desativar Conta"
+                        >
+                          <UserX className="h-3.5 w-3.5" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => restoreUserAccess(tech.id)}
+                          className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 border border-emerald-200 transition-colors cursor-pointer"
+                          title="Reativar Acesso do Técnico"
+                        >
+                          <UserCheck className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -177,17 +537,246 @@ export const TechniciansView: React.FC = () => {
         </div>
       </div>
 
-      {/* Modal de Edição de Parâmetros do Técnico */}
+      {/* Modal: Cadastrar Novo Técnico */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-[#003366] text-white flex items-center justify-center">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-[#003366]">Cadastrar Novo Técnico</h3>
+                  <p className="text-xs text-slate-500">Criação de credenciais de login, PIX e parâmetros</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit} className="space-y-4">
+              {/* Row 1: Name & CPF */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Nome Completo *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newFormData.name}
+                    onChange={(e) => setNewFormData({ ...newFormData, name: e.target.value })}
+                    placeholder="Ex: Lucas Ferreira"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    CPF *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newFormData.documentCpf}
+                    onChange={(e) => setNewFormData({ ...newFormData, documentCpf: e.target.value })}
+                    placeholder="000.000.000-00"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Email, Phone & Password */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    E-mail de Login *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={newFormData.email}
+                    onChange={(e) => setNewFormData({ ...newFormData, email: e.target.value })}
+                    placeholder="lucas@ohigienizador.com.br"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    WhatsApp / Celular *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={newFormData.phone}
+                    onChange={(e) => setNewFormData({ ...newFormData, phone: e.target.value })}
+                    placeholder="11988887777"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Senha Provisória *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newFormData.password}
+                    onChange={(e) => setNewFormData({ ...newFormData, password: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Row 3: PIX & Banking */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <span className="text-xs font-bold text-[#003366] uppercase tracking-wider block">
+                  Dados Financeiros & Chave PIX
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Tipo de Chave PIX
+                    </label>
+                    <select
+                      value={newFormData.pixKeyType}
+                      onChange={(e) => setNewFormData({ ...newFormData, pixKeyType: e.target.value as PixKeyType })}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800"
+                    >
+                      <option value="CPF">CPF</option>
+                      <option value="PHONE">Telefone</option>
+                      <option value="EMAIL">E-mail</option>
+                      <option value="CNPJ">CNPJ</option>
+                      <option value="RANDOM">Chave Aleatória</option>
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Chave PIX
+                    </label>
+                    <input
+                      type="text"
+                      value={newFormData.pixKey}
+                      onChange={(e) => setNewFormData({ ...newFormData, pixKey: e.target.value })}
+                      placeholder="Chave PIX para transferência"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Banco
+                    </label>
+                    <input
+                      type="text"
+                      value={newFormData.bankName}
+                      onChange={(e) => setNewFormData({ ...newFormData, bankName: e.target.value })}
+                      placeholder="Ex: Itaú, Nubank..."
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Agência
+                    </label>
+                    <input
+                      type="text"
+                      value={newFormData.bankAgency}
+                      onChange={(e) => setNewFormData({ ...newFormData, bankAgency: e.target.value })}
+                      placeholder="0001"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Conta
+                    </label>
+                    <input
+                      type="text"
+                      value={newFormData.bankAccount}
+                      onChange={(e) => setNewFormData({ ...newFormData, bankAccount: e.target.value })}
+                      placeholder="12345-6"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 4: Remuneration & Rules */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Ajuda de Custo (R$)
+                  </label>
+                  <input
+                    type="number"
+                    value={newFormData.baseCostAllowance}
+                    onChange={(e) => setNewFormData({ ...newFormData, baseCostAllowance: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                  />
+                  <span className="text-[10px] text-slate-400">Padrão: R$ 250,00</span>
+                </div>
+
+                <div className="sm:col-span-2 flex items-center space-x-4 pt-4">
+                  <label className="flex items-center space-x-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newFormData.hasSpecialTaxRule}
+                      onChange={(e) => setNewFormData({ ...newFormData, hasSpecialTaxRule: e.target.checked })}
+                      className="rounded text-cyan-600 focus:ring-cyan-500 w-4 h-4"
+                    />
+                    <span>Regra de Exceção Fiscal (16% Retenção)</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newFormData.mfaEnabled}
+                      onChange={(e) => setNewFormData({ ...newFormData, mfaEnabled: e.target.checked })}
+                      className="rounded text-cyan-600 focus:ring-cyan-500 w-4 h-4"
+                    />
+                    <span>Ativar MFA (2FA)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold shadow-md cursor-pointer"
+                >
+                  Salvar e Criar Conta
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Editar Técnico Completo */}
       {editingTech && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-black text-[#003366]">
-                  Parâmetros de {editingTech.name}
+                  Editar Cadastro: {editingTech.name}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Ajuste a ajuda de custo quinzenal e a alíquota fiscal.
+                  Atualização cadastral, PIX, ajuda de custo e alíquota fiscal.
                 </p>
               </div>
               <button
@@ -198,60 +787,280 @@ export const TechniciansView: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                  Ajuda de Custo Fixa Quinzenal (R$)
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">R$</span>
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Nome Completo
+                  </label>
                   <input
-                    type="number"
-                    step="10"
-                    value={editAllowance}
-                    onChange={(e) => setEditAllowance(Number(e.target.value))}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                    type="text"
+                    required
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900"
                   />
                 </div>
-                <span className="text-[10px] text-slate-400">Padrão das planilhas: R$ 250,00</span>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    CPF
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFormData.documentCpf}
+                    onChange={(e) => setEditFormData({ ...editFormData, documentCpf: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    E-mail
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    WhatsApp / Telefone
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={editFormData.phone}
+                    onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900"
+                  />
+                </div>
+              </div>
+
+              {/* PIX Details */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <span className="text-xs font-bold text-[#003366] uppercase tracking-wider block">
+                  Dados PIX e Bancários
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Tipo de Chave
+                    </label>
+                    <select
+                      value={editFormData.pixKeyType}
+                      onChange={(e) => setEditFormData({ ...editFormData, pixKeyType: e.target.value as PixKeyType })}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
+                    >
+                      <option value="CPF">CPF</option>
+                      <option value="PHONE">Telefone</option>
+                      <option value="EMAIL">E-mail</option>
+                      <option value="CNPJ">CNPJ</option>
+                      <option value="RANDOM">Chave Aleatória</option>
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Chave PIX
+                    </label>
+                    <input
+                      type="text"
+                      value={editFormData.pixKey}
+                      onChange={(e) => setEditFormData({ ...editFormData, pixKey: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Banco
+                    </label>
+                    <input
+                      type="text"
+                      value={editFormData.bankName}
+                      onChange={(e) => setEditFormData({ ...editFormData, bankName: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Agência
+                    </label>
+                    <input
+                      type="text"
+                      value={editFormData.bankAgency}
+                      onChange={(e) => setEditFormData({ ...editFormData, bankAgency: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Conta
+                    </label>
+                    <input
+                      type="text"
+                      value={editFormData.bankAccount}
+                      onChange={(e) => setEditFormData({ ...editFormData, bankAccount: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Financial Params */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Ajuda de Custo (R$)
+                  </label>
+                  <input
+                    type="number"
+                    value={editFormData.baseCostAllowance}
+                    onChange={(e) => setEditFormData({ ...editFormData, baseCostAllowance: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Alíquota Fiscal Especial (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={editFormData.specialTaxRate}
+                    onChange={(e) => setEditFormData({ ...editFormData, specialTaxRate: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                  />
+                </div>
+                <div className="flex flex-col justify-end space-y-1">
+                  <label className="flex items-center space-x-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editFormData.hasSpecialTaxRule}
+                      onChange={(e) => setEditFormData({ ...editFormData, hasSpecialTaxRule: e.target.checked })}
+                      className="rounded text-cyan-600 focus:ring-cyan-500 w-4 h-4"
+                    />
+                    <span>Retenção 16% Ativa</span>
+                  </label>
+                  <label className="flex items-center space-x-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editFormData.mfaEnabled}
+                      onChange={(e) => setEditFormData({ ...editFormData, mfaEnabled: e.target.checked })}
+                      className="rounded text-cyan-600 focus:ring-cyan-500 w-4 h-4"
+                    />
+                    <span>MFA (2FA) Ativo</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingTech(null)}
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold shadow-md cursor-pointer"
+                >
+                  Salvar Alterações
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Resetar Senha & Disparar WhatsApp */}
+      {resetModalTech && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Reset de Senha</h3>
+                  <p className="text-xs text-slate-500">Técnico: {resetModalTech.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setResetModalTech(null)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                <span className="font-bold block">Nova Senha Provisória Gerada:</span>
+                <div className="mt-2 flex items-center justify-between bg-white p-2.5 rounded-lg border border-amber-300 font-mono font-black text-base text-amber-900">
+                  <span>{customPassInput}</span>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyPassword(customPassInput)}
+                      className="p-1 rounded hover:bg-slate-100 text-slate-600"
+                      title="Copiar Senha"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                  Alíquota da Regra Fiscal Especial (%)
+                  Ou digite uma senha personalizada:
                 </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="1"
-                    value={editTaxRate}
-                    onChange={(e) => setEditTaxRate(Number(e.target.value))}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  />
-                  <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">%</span>
-                </div>
-                <span className="text-[10px] text-slate-400">Padrão da exceção: 16,0% (ex: Robertinho)</span>
+                <input
+                  type="text"
+                  value={customPassInput}
+                  onChange={(e) => setCustomPassInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900"
+                />
               </div>
             </div>
 
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+            <div className="space-y-2 pt-2 border-t border-slate-100">
               <button
-                onClick={() => setEditingTech(null)}
-                className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100"
+                type="button"
+                onClick={() => {
+                  resetUserPassword(resetModalTech.id, customPassInput);
+                  handleSendPasswordWhatsApp(resetModalTech, customPassInput);
+                  setResetModalTech(null);
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer transition-all"
               >
-                Cancelar
+                <Send className="w-3.5 h-3.5" />
+                <span>Salvar e Enviar no WhatsApp ({resetModalTech.phone})</span>
               </button>
+
               <button
-                onClick={handleSaveEdit}
-                className="px-4 py-2 rounded-lg bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold shadow-xs"
+                type="button"
+                onClick={() => {
+                  resetUserPassword(resetModalTech.id, customPassInput);
+                  setResetModalTech(null);
+                }}
+                className="w-full py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-all"
               >
-                Salvar Parâmetros
+                Apenas Salvar Senha
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 };
