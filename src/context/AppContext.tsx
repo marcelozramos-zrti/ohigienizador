@@ -394,16 +394,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteUserAccount = (userId: string) => {
     const targetUser = users.find((u) => u.id === userId);
     setUsers((prev) => prev.filter((u) => u.id !== userId));
-    ApiService.deleteUser(userId).then((success) => {
-      if (success) {
+    ApiService.deleteUser(userId).then((res) => {
+      if (res.success) {
         console.log(`[MariaDB] Usuário ID ${userId} excluído com sucesso do banco.`);
+      } else if (res.error) {
+        addToast('Erro MariaDB', `Não foi possível excluir no MariaDB: ${res.error}`, 'error');
       }
     }).catch(() => {});
 
     if (currentUser?.id === userId) {
       logout();
     }
-    addToast('Usuário Excluído', `${targetUser?.name || 'Usuário'} foi removido do sistema e do MariaDB.`, 'info');
+    addToast('Usuário Excluído', `${targetUser?.name || 'Usuário'} foi removido do sistema.`, 'info');
   };
 
   const toggleUserMfa = (userId: string) => {
@@ -425,7 +427,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createUserAccount = (userData: Partial<User> & { password?: string }) => {
     const cleanEmail = (userData.email || '').trim().toLowerCase();
-    const newId = `user-${Date.now()}`;
+    const newId = `u${Date.now()}`;
     const newUser: User = {
       id: newId,
       name: (userData.name || 'Novo Usuário').trim(),
@@ -468,13 +470,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Enviar imediatamente para o backend MariaDB
-    ApiService.saveUser(newUser).then((success) => {
-      if (success) {
-        console.log(`[MariaDB] Usuário ${newUser.name} gravado no banco de dados com sucesso.`);
+    ApiService.saveUser(newUser).then((res) => {
+      if (res.success) {
+        addToast('MariaDB Sincronizado', `Usuário ${newUser.name} gravado no banco MariaDB com sucesso!`, 'success');
+      } else {
+        addToast('Atenção: MariaDB', `Falha ao gravar no banco: ${res.error || 'Verifique /api/users e proxy Nginx'}.`, 'error');
       }
     });
 
-    addToast('Conta Cadastrada', `${newUser.name} cadastrado e sincronizado no MariaDB.`, 'success');
+    addToast('Conta Criada', `${newUser.name} cadastrado no sistema.`, 'info');
   };
 
   const [orders, setOrders] = useState<ServiceOrder[]>(() => {
@@ -968,9 +972,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
     if (updatedTarget) {
-      ApiService.saveUser(updatedTarget).catch(() => {});
+      ApiService.saveUser(updatedTarget).then((res) => {
+        if (res.success) {
+          addToast('MariaDB Sincronizado', `Alterações de ${updatedTarget?.name} salvas no MariaDB.`, 'success');
+        } else {
+          addToast('Atenção: MariaDB', `Falha ao sincronizar no banco: ${res.error || 'Verifique conexão'}`, 'error');
+        }
+      }).catch(() => {});
     }
-    addToast('Técnico Atualizado', 'Dados cadastrais e regras financeiras salvas no MariaDB.', 'success');
   };
 
   const createTechnician = (technicianData: Omit<User, 'id'>) => {

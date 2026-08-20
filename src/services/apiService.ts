@@ -13,7 +13,10 @@ export const ApiService = {
   }> {
     try {
       const res = await fetch('/api/db/status');
-      if (!res.ok) throw new Error('Status endpoint returned non-200');
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Endpoint retornou status ${res.status}: ${text.slice(0, 100)}`);
+      }
       return await res.json();
     } catch (err: any) {
       return {
@@ -21,6 +24,43 @@ export const ApiService = {
         host: '192.168.15.246',
         port: 3306,
         database: 'higienizador_db',
+        latencyMs: 0,
+        error: err.message,
+      };
+    }
+  },
+
+  async testDb(config?: {
+    host?: string;
+    port?: number;
+    database?: string;
+    user?: string;
+    password?: string;
+  }): Promise<{
+    connected: boolean;
+    host: string;
+    port: number;
+    database: string;
+    latencyMs: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/db/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config || {}),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Servidor retornou HTTP ${res.status}: ${text.slice(0, 150)}`);
+      }
+      return await res.json();
+    } catch (err: any) {
+      return {
+        connected: false,
+        host: config?.host || '192.168.15.246',
+        port: config?.port || 3306,
+        database: config?.database || 'higienizador_db',
         latencyMs: 0,
         error: err.message,
       };
@@ -42,28 +82,36 @@ export const ApiService = {
     }
   },
 
-  async saveUser(user: User): Promise<boolean> {
+  async saveUser(user: User): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(user),
       });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { success: false, error: `HTTP ${res.status}: ${text}` };
+      }
       const json = await res.json();
-      return Boolean(json.success);
-    } catch (err) {
+      return { success: Boolean(json.success), error: json.error };
+    } catch (err: any) {
       console.warn('[ApiService] Falha ao enviar usuário para o backend MariaDB:', err);
-      return false;
+      return { success: false, error: err.message };
     }
   },
 
-  async deleteUser(userId: string): Promise<boolean> {
+  async deleteUser(userId: string): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch(`/api/users/${userId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { success: false, error: `HTTP ${res.status}: ${text}` };
+      }
       const json = await res.json();
-      return Boolean(json.success);
-    } catch {
-      return false;
+      return { success: Boolean(json.success), error: json.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
   },
 

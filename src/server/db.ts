@@ -13,8 +13,8 @@ const parseDbConfig = (): DbConfig => {
   const host = process.env.MARIADB_HOST || process.env.DB_HOST || '192.168.15.246';
   const port = Number(process.env.MARIADB_PORT || process.env.DB_PORT || 3306);
   const database = process.env.MARIADB_DATABASE || process.env.DB_NAME || 'higienizador_db';
-  const user = process.env.MARIADB_USER || process.env.DB_USER || 'root';
-  const password = process.env.MARIADB_PASSWORD || process.env.DB_PASSWORD || '';
+  const user = process.env.MARIADB_USER || process.env.DB_USER || 'app_higienizador';
+  const password = process.env.MARIADB_PASSWORD || process.env.DB_PASSWORD || 'PortoSeguro@2026!';
   const ssl = process.env.MARIADB_SSL === 'true' || process.env.DB_SSL === 'true';
 
   if (process.env.DATABASE_URL) {
@@ -40,10 +40,33 @@ let pool: mysql.Pool | null = null;
 let isConnected = false;
 let lastError: string | null = null;
 
+let currentDbConfig: DbConfig | null = null;
+
+export const getDbConfig = (): DbConfig => {
+  if (!currentDbConfig) {
+    currentDbConfig = parseDbConfig();
+  }
+  return currentDbConfig;
+};
+
+export const updateDbConfig = async (newConfig: Partial<DbConfig>): Promise<void> => {
+  const base = getDbConfig();
+  currentDbConfig = {
+    ...base,
+    ...newConfig,
+  };
+  if (pool) {
+    try {
+      await pool.end();
+    } catch {}
+    pool = null;
+  }
+};
+
 export function getDbPool(): mysql.Pool {
   if (!pool) {
-    const config = parseDbConfig();
-    console.log(`[MariaDB] Inicializando Pool de Conexão para ${config.user}@${config.host}:${config.port}/${config.database}`);
+    const config = getDbConfig();
+    console.log(`[MariaDB] Inicializando Pool de Conexão para ${config.user}@${config.host}:${config.port}/${config.database} (SSL: ${config.ssl ? 'Ativo' : 'Desativado/Skip-SSL'})`);
     
     pool = mysql.createPool({
       host: config.host,
@@ -51,6 +74,7 @@ export function getDbPool(): mysql.Pool {
       user: config.user,
       password: config.password,
       database: config.database,
+      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -62,7 +86,7 @@ export function getDbPool(): mysql.Pool {
   return pool;
 }
 
-export async function testDbConnection(): Promise<{
+export async function testDbConnection(customConfig?: Partial<DbConfig>): Promise<{
   connected: boolean;
   host: string;
   port: number;
@@ -70,14 +94,25 @@ export async function testDbConnection(): Promise<{
   latencyMs: number;
   error?: string;
 }> {
-  const config = parseDbConfig();
+  const config = customConfig ? { ...getDbConfig(), ...customConfig } : getDbConfig();
   const startTime = Date.now();
+  let tempPool: mysql.Pool | null = null;
   try {
-    const db = getDbPool();
+    const db = customConfig ? (tempPool = mysql.createPool({
+      host: config.host,
+      port: config.port,
+      user: config.user,
+      password: config.password,
+      database: config.database,
+      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+      connectTimeout: 3000,
+    })) : getDbPool();
+
     const [rows] = await db.query('SELECT 1 as ping');
     const latencyMs = Date.now() - startTime;
     isConnected = true;
     lastError = null;
+    if (tempPool) await tempPool.end().catch(() => {});
     return {
       connected: true,
       host: config.host,
@@ -86,10 +121,11 @@ export async function testDbConnection(): Promise<{
       latencyMs,
     };
   } catch (err: any) {
+    if (tempPool) await tempPool.end().catch(() => {});
     isConnected = false;
     lastError = err?.message || 'Erro desconhecido ao conectar no MariaDB';
     const latencyMs = Date.now() - startTime;
-    console.warn(`[MariaDB] Conexão direta com ${config.host}:${config.port} indisponível neste ambiente: ${lastError}`);
+    console.warn(`[MariaDB] Conexão direta com ${config.host}:${config.port} indisponível: ${lastError}`);
     return {
       connected: false,
       host: config.host,

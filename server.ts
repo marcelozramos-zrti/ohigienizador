@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
-import { getDbPool, testDbConnection, initializeDatabaseSchema } from './src/server/db';
+import { getDbPool, testDbConnection, initializeDatabaseSchema, updateDbConfig, getDbConfig } from './src/server/db';
 
 async function startServer() {
   const app = express();
@@ -53,6 +53,27 @@ async function startServer() {
       ...status,
       tableCounts,
     });
+  });
+
+  app.post('/api/db/test', async (req, res) => {
+    const { host, port, database, user, password } = req.body || {};
+    const testResult = await testDbConnection({
+      ...(host ? { host } : {}),
+      ...(port ? { port: Number(port) } : {}),
+      ...(database ? { database } : {}),
+      ...(user ? { user } : {}),
+      ...(password !== undefined ? { password } : {}),
+    });
+    if (testResult.connected) {
+      await updateDbConfig({
+        ...(host ? { host } : {}),
+        ...(port ? { port: Number(port) } : {}),
+        ...(database ? { database } : {}),
+        ...(user ? { user } : {}),
+        ...(password !== undefined ? { password } : {}),
+      });
+    }
+    res.json(testResult);
   });
 
   // 2. USERS & TECHNICIANS API (GET, POST, PUT, DELETE)

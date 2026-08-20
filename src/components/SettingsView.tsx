@@ -70,22 +70,22 @@ export const SettingsView: React.FC = () => {
     dbHost: '192.168.15.246',
     dbPort: 3306,
     dbName: 'higienizador_db',
-    dbUser: 'root',
-    dbPassword: '',
+    dbUser: 'app_higienizador',
+    dbPassword: 'PortoSeguro@2026!',
     dbSsl: false,
     dbPoolMin: 2,
     dbPoolMax: 10,
-    connectionStringMasked: 'mysql://root:***@192.168.15.246:3306/higienizador_db',
+    connectionStringMasked: 'mysql://app_higienizador:***@192.168.15.246:3306/higienizador_db',
     syncStatus: 'CONNECTED',
     lastPingMs: 3,
     lastSyncTimestamp: new Date().toISOString(),
   };
 
-  const [dbHost, setDbHost] = useState(initialDb.dbHost || '192.168.15.246');
+  const [dbHost, setDbHost] = useState(initialDb.dbUser === 'root' && !initialDb.dbPassword ? '192.168.15.246' : (initialDb.dbHost || '192.168.15.246'));
   const [dbPort, setDbPort] = useState(initialDb.dbPort || 3306);
   const [dbName, setDbName] = useState(initialDb.dbName || 'higienizador_db');
-  const [dbUser, setDbUser] = useState(initialDb.dbUser || 'root');
-  const [dbPassword, setDbPassword] = useState(initialDb.dbPassword || '');
+  const [dbUser, setDbUser] = useState(initialDb.dbUser === 'root' && !initialDb.dbPassword ? 'app_higienizador' : (initialDb.dbUser || 'app_higienizador'));
+  const [dbPassword, setDbPassword] = useState(initialDb.dbUser === 'root' && !initialDb.dbPassword ? 'PortoSeguro@2026!' : (initialDb.dbPassword || 'PortoSeguro@2026!'));
   const [showPassword, setShowPassword] = useState(false);
   const [dbSsl, setDbSsl] = useState(Boolean(initialDb.dbSsl));
   const [dbPoolMin, setDbPoolMin] = useState(initialDb.dbPoolMin || 2);
@@ -102,13 +102,19 @@ export const SettingsView: React.FC = () => {
   const handleTestDatabase = async () => {
     setIsTestingDb(true);
     try {
-      const status = await ApiService.getDbStatus();
+      const status = await ApiService.testDb({
+        host: dbHost,
+        port: Number(dbPort),
+        database: dbName,
+        user: dbUser,
+        password: dbPassword,
+      });
       setIsTestingDb(false);
       if (status.connected) {
         setDbPingResult({
           success: true,
           pingMs: status.latencyMs || 2,
-          message: `Conexão ativa com MariaDB na VM ${dbHost}:${dbPort}/${dbName}! Tabelas mapeadas: Usuários (${status.tableCounts?.users ?? 0}), OS (${status.tableCounts?.service_orders ?? 0}), Estoque (${status.tableCounts?.stock_items ?? 0}).`,
+          message: `Conexão bem-sucedida com MariaDB na VM ${dbHost}:${dbPort}/${dbName}! Latência: ${status.latencyMs}ms.`,
         });
         addToast(
           'MariaDB Conectado (192.168.15.246)',
@@ -117,23 +123,24 @@ export const SettingsView: React.FC = () => {
         );
       } else {
         setDbPingResult({
-          success: true,
-          pingMs: 3,
-          message: `Configuração MariaDB parametrizada para VM brsaolxdb01 (${dbHost}:${dbPort}/${dbName}). No ambiente de produção com PM2, a gravação é direta via pool TCP.`,
+          success: false,
+          pingMs: 0,
+          message: `Erro ao conectar no MariaDB: ${status.error || 'Falha de comunicação TCP/Rede'}. Verifique IP, Porta, Usuário, Senha e se o Nginx está redirecionando /api para o Node.js.`,
         });
         addToast(
-          'MariaDB Configurado (192.168.15.246)',
-          `Pool de conexão configurado para MariaDB na VM brsaolxdb01.`,
-          'info'
+          'Falha de Conexão MariaDB',
+          status.error || 'Não foi possível conectar ao MariaDB.',
+          'error'
         );
       }
-    } catch {
+    } catch (err: any) {
       setIsTestingDb(false);
       setDbPingResult({
-        success: true,
-        pingMs: 3,
-        message: `Parâmetros do MariaDB ativos para ${dbHost}:${dbPort}/${dbName}.`,
+        success: false,
+        pingMs: 0,
+        message: `Exceção ao testar banco: ${err.message}`,
       });
+      addToast('Erro no Teste', err.message, 'error');
     }
   };
 
