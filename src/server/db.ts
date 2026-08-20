@@ -147,13 +147,13 @@ export async function initializeDatabaseSchema(): Promise<void> {
         id VARCHAR(36) NOT NULL PRIMARY KEY,
         name VARCHAR(120) NOT NULL,
         email VARCHAR(150) NOT NULL UNIQUE,
-        passwordHash VARCHAR(255) NOT NULL,
+        passwordHash VARCHAR(255) NULL,
         role ENUM('ADMIN', 'OPERATIONAL', 'TECHNICIAN') NOT NULL DEFAULT 'TECHNICIAN',
-        documentCpf VARCHAR(18) NOT NULL,
-        phone VARCHAR(25) NOT NULL,
+        documentCpf VARCHAR(18) NULL,
+        phone VARCHAR(25) NULL,
         avatarUrl VARCHAR(255) NULL,
         isActive TINYINT(1) NOT NULL DEFAULT 1,
-        pixKeyType ENUM('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM') DEFAULT 'CPF',
+        pixKeyType VARCHAR(20) DEFAULT 'CPF',
         pixKey VARCHAR(100) NULL,
         bankName VARCHAR(80) NULL,
         bankAgency VARCHAR(20) NULL,
@@ -166,6 +166,33 @@ export async function initializeDatabaseSchema(): Promise<void> {
         INDEX idx_users_role (role)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    // Ensure all missing columns exist in existing 'users' table (MariaDB 10.2+)
+    const userAlterStatements = [
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(150) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS passwordHash VARCHAR(255) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(30) NOT NULL DEFAULT 'TECHNICIAN'",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS documentCpf VARCHAR(18) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(25) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatarUrl VARCHAR(255) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS isActive TINYINT(1) NOT NULL DEFAULT 1",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS pixKeyType VARCHAR(20) DEFAULT 'CPF'",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS pixKey VARCHAR(100) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS bankName VARCHAR(80) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS bankAgency VARCHAR(20) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS bankAccount VARCHAR(30) NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS baseCostAllowance DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS hasSpecialTaxRule TINYINT(1) NOT NULL DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialTaxRate DECIMAL(5, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS createdAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3)",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS updatedAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    ];
+
+    for (const stmt of userAlterStatements) {
+      await db.query(stmt).catch((err: any) => {
+        console.warn(`[MariaDB Migration Notice] ${stmt}: ${err.message}`);
+      });
+    }
 
     // 2. service_orders table
     await db.query(`
@@ -246,7 +273,7 @@ export async function initializeDatabaseSchema(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    console.log('[MariaDB] Tabelas verificadas/criadas com sucesso no banco `higienizador_db`.');
+    console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db`.');
   } catch (err: any) {
     console.warn(`[MariaDB] Inicialização de schema adiada: ${err.message}`);
   }

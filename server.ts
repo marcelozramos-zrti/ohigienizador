@@ -6,7 +6,7 @@ import { getDbPool, testDbConnection, initializeDatabaseSchema, updateDbConfig, 
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
@@ -76,6 +76,21 @@ async function startServer() {
     res.json(testResult);
   });
 
+  // Helper to get all column names of a table (lowercase)
+  async function getTableColumnsMap(tableName: string): Promise<Map<string, string>> {
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query(`SHOW COLUMNS FROM \`${tableName}\``);
+      const colMap = new Map<string, string>(); // lowercase -> exact case in DB
+      for (const r of rows) {
+        colMap.set(r.Field.toLowerCase(), r.Field);
+      }
+      return colMap;
+    } catch {
+      return new Map<string, string>();
+    }
+  }
+
   // 2. USERS & TECHNICIANS API (GET, POST, PUT, DELETE)
   app.get('/api/users', async (req, res) => {
     try {
@@ -84,10 +99,16 @@ async function startServer() {
       // Format numeric/boolean fields
       const formatted = rows.map((u: any) => ({
         ...u,
-        isActive: Boolean(u.isActive),
-        hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule),
-        baseCostAllowance: Number(u.baseCostAllowance || 0),
-        specialTaxRate: Number(u.specialTaxRate || 0),
+        isActive: Boolean(u.isActive ?? u.is_active ?? true),
+        hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule ?? u.has_special_tax_rule ?? false),
+        baseCostAllowance: Number(u.baseCostAllowance ?? u.base_cost_allowance ?? 0),
+        specialTaxRate: Number(u.specialTaxRate ?? u.special_tax_rate ?? 0),
+        documentCpf: u.documentCpf ?? u.document_cpf ?? u.cpf ?? '',
+        pixKey: u.pixKey ?? u.pix_key ?? '',
+        pixKeyType: u.pixKeyType ?? u.pix_key_type ?? 'CPF',
+        bankName: u.bankName ?? u.bank_name ?? '',
+        bankAgency: u.bankAgency ?? u.bank_agency ?? '',
+        bankAccount: u.bankAccount ?? u.bank_account ?? '',
       }));
       res.json({ success: true, data: formatted });
     } catch (err: any) {
@@ -97,63 +118,84 @@ async function startServer() {
 
   app.post('/api/users', async (req, res) => {
     const u = req.body;
-    if (!u.id || !u.email || !u.name) {
-      return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes (id, name, email).' });
+    if (!u.id || !u.name) {
+      return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes (id, name).' });
     }
 
     try {
       const db = getDbPool();
-      const query = `
-        INSERT INTO users (
-          id, name, email, passwordHash, role, documentCpf, phone, avatarUrl,
-          isActive, pixKeyType, pixKey, bankName, bankAgency, bankAccount,
-          baseCostAllowance, hasSpecialTaxRule, specialTaxRate, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-          name = VALUES(name),
-          email = VALUES(email),
-          passwordHash = VALUES(passwordHash),
-          role = VALUES(role),
-          documentCpf = VALUES(documentCpf),
-          phone = VALUES(phone),
-          avatarUrl = VALUES(avatarUrl),
-          isActive = VALUES(isActive),
-          pixKeyType = VALUES(pixKeyType),
-          pixKey = VALUES(pixKey),
-          bankName = VALUES(bankName),
-          bankAgency = VALUES(bankAgency),
-          bankAccount = VALUES(bankAccount),
-          baseCostAllowance = VALUES(baseCostAllowance),
-          hasSpecialTaxRule = VALUES(hasSpecialTaxRule),
-          specialTaxRate = VALUES(specialTaxRate),
-          updatedAt = NOW();
-      `;
+      const colMap = await getTableColumnsMap('users');
 
-      const values = [
-        u.id,
-        u.name,
-        u.email,
-        u.password || u.passwordHash || 'Porto@2026',
-        u.role || 'TECHNICIAN',
-        u.documentCpf || '',
-        u.phone || '',
-        u.avatarUrl || null,
-        u.isActive !== false ? 1 : 0,
-        u.pixKeyType || 'CPF',
-        u.pixKey || u.documentCpf || '',
-        u.bankName || 'Banco Itaú',
-        u.bankAgency || '0001',
-        u.bankAccount || '00000-0',
-        Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
-        u.hasSpecialTaxRule ? 1 : 0,
-        Number(u.specialTaxRate || 0),
+      // Possíveis mapeamentos de campos (campo lógico -> valor a inserir)
+      const candidates: Array<{ keys: string[]; value: any }> = [
+        { keys: ['id'], value: u.id },
+        { keys: ['name', 'nome'], value: u.name },
+        { keys: ['email'], value: u.email || `${u.id}@higienizador.com.br` },
+        { keys: ['passwordhash', 'password_hash', 'password', 'senha'], value: u.password || u.passwordHash || 'Porto@2026' },
+        { keys: ['role', 'cargo', 'perfil'], value: u.role || 'TECHNICIAN' },
+        { keys: ['documentcpf', 'document_cpf', 'cpf'], value: u.documentCpf || '' },
+        { keys: ['phone', 'telefone', 'whatsapp'], value: u.phone || '' },
+        { keys: ['avatarurl', 'avatar_url', 'avatar'], value: u.avatarUrl || null },
+        { keys: ['isactive', 'is_active', 'ativo'], value: u.isActive !== false ? 1 : 0 },
+        { keys: ['pixkeytype', 'pix_key_type', 'tipo_pix'], value: u.pixKeyType || 'CPF' },
+        { keys: ['pixkey', 'pix_key', 'chave_pix'], value: u.pixKey || u.documentCpf || '' },
+        { keys: ['bankname', 'bank_name', 'banco'], value: u.bankName || 'Banco Itaú' },
+        { keys: ['bankagency', 'bank_agency', 'agencia'], value: u.bankAgency || '0001' },
+        { keys: ['bankaccount', 'bank_account', 'conta'], value: u.bankAccount || '00000-0' },
+        { keys: ['basecostallowance', 'base_cost_allowance', 'ajuda_custo'], value: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)) },
+        { keys: ['hasspecialtaxrule', 'has_special_tax_rule', 'regra_fiscal'], value: u.hasSpecialTaxRule ? 1 : 0 },
+        { keys: ['specialtaxrate', 'special_tax_rate', 'taxa_retencao'], value: Number(u.specialTaxRate || 0) },
       ];
 
-      await db.execute(query, values);
-      console.log(`[MariaDB] Usuário gravado com sucesso: ${u.name} (${u.email})`);
-      res.json({ success: true, message: `Usuário ${u.name} salvo no MariaDB.`, user: u });
+      const insertCols: string[] = [];
+      const insertPlaceholders: string[] = [];
+      const insertValues: any[] = [];
+      const updateClauses: string[] = [];
+
+      for (const item of candidates) {
+        // Encontra o nome exato da coluna existente no banco
+        let matchedCol: string | undefined;
+        for (const k of item.keys) {
+          if (colMap.has(k.toLowerCase())) {
+            matchedCol = colMap.get(k.toLowerCase());
+            break;
+          }
+        }
+
+        if (matchedCol) {
+          insertCols.push(`\`${matchedCol}\``);
+          insertPlaceholders.push('?');
+          insertValues.push(item.value);
+          if (matchedCol.toLowerCase() !== 'id') {
+            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          }
+        }
+      }
+
+      if (colMap.has('updatedat')) {
+        const uCol = colMap.get('updatedat')!;
+        updateClauses.push(`\`${uCol}\` = NOW()`);
+      } else if (colMap.has('updated_at')) {
+        const uCol = colMap.get('updated_at')!;
+        updateClauses.push(`\`${uCol}\` = NOW()`);
+      }
+
+      if (insertCols.length === 0) {
+        throw new Error('Nenhuma coluna correspondente encontrada na tabela users.');
+      }
+
+      const query = `
+        INSERT INTO \`users\` (${insertCols.join(', ')})
+        VALUES (${insertPlaceholders.join(', ')})
+        ON DUPLICATE KEY UPDATE
+        ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
+      `;
+
+      await db.execute(query, insertValues);
+      console.log(`[MariaDB] Usuário sincronizado: ${u.name} (ID: ${u.id})`);
+      res.json({ success: true, message: `Usuário ${u.name} gravado no MariaDB.`, user: u });
     } catch (err: any) {
-      console.error(`[MariaDB] Erro ao gravar usuário ${u.name}:`, err);
+      console.error(`[MariaDB] Erro ao sincronizar usuário ${u.name}:`, err);
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -164,35 +206,56 @@ async function startServer() {
 
     try {
       const db = getDbPool();
+      const colMap = await getTableColumnsMap('users');
       const fields: string[] = [];
       const values: any[] = [];
 
-      if (u.name !== undefined) { fields.push('name = ?'); values.push(u.name); }
-      if (u.email !== undefined) { fields.push('email = ?'); values.push(u.email); }
-      if (u.role !== undefined) { fields.push('role = ?'); values.push(u.role); }
-      if (u.documentCpf !== undefined) { fields.push('documentCpf = ?'); values.push(u.documentCpf); }
-      if (u.phone !== undefined) { fields.push('phone = ?'); values.push(u.phone); }
-      if (u.isActive !== undefined) { fields.push('isActive = ?'); values.push(u.isActive ? 1 : 0); }
-      if (u.pixKeyType !== undefined) { fields.push('pixKeyType = ?'); values.push(u.pixKeyType); }
-      if (u.pixKey !== undefined) { fields.push('pixKey = ?'); values.push(u.pixKey); }
-      if (u.bankName !== undefined) { fields.push('bankName = ?'); values.push(u.bankName); }
-      if (u.bankAgency !== undefined) { fields.push('bankAgency = ?'); values.push(u.bankAgency); }
-      if (u.bankAccount !== undefined) { fields.push('bankAccount = ?'); values.push(u.bankAccount); }
-      if (u.baseCostAllowance !== undefined) { fields.push('baseCostAllowance = ?'); values.push(Number(u.baseCostAllowance)); }
-      if (u.hasSpecialTaxRule !== undefined) { fields.push('hasSpecialTaxRule = ?'); values.push(u.hasSpecialTaxRule ? 1 : 0); }
-      if (u.specialTaxRate !== undefined) { fields.push('specialTaxRate = ?'); values.push(Number(u.specialTaxRate)); }
-      if (u.password !== undefined) { fields.push('passwordHash = ?'); values.push(u.password); }
+      const candidateUpdates: Array<{ keys: string[]; value: any }> = [
+        { keys: ['name', 'nome'], value: u.name },
+        { keys: ['email'], value: u.email },
+        { keys: ['role', 'cargo', 'perfil'], value: u.role },
+        { keys: ['documentcpf', 'document_cpf', 'cpf'], value: u.documentCpf },
+        { keys: ['phone', 'telefone', 'whatsapp'], value: u.phone },
+        { keys: ['avatarurl', 'avatar_url'], value: u.avatarUrl },
+        { keys: ['isactive', 'is_active'], value: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined },
+        { keys: ['pixkeytype', 'pix_key_type'], value: u.pixKeyType },
+        { keys: ['pixkey', 'pix_key'], value: u.pixKey },
+        { keys: ['bankname', 'bank_name'], value: u.bankName },
+        { keys: ['bankagency', 'bank_agency'], value: u.bankAgency },
+        { keys: ['bankaccount', 'bank_account'], value: u.bankAccount },
+        { keys: ['basecostallowance', 'base_cost_allowance'], value: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined },
+        { keys: ['hasspecialtaxrule', 'has_special_tax_rule'], value: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined },
+        { keys: ['specialtaxrate', 'special_tax_rate'], value: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined },
+        { keys: ['passwordhash', 'password_hash', 'password'], value: u.password },
+      ];
+
+      for (const item of candidateUpdates) {
+        if (item.value !== undefined) {
+          for (const k of item.keys) {
+            if (colMap.has(k.toLowerCase())) {
+              const matchedCol = colMap.get(k.toLowerCase())!;
+              fields.push(`\`${matchedCol}\` = ?`);
+              values.push(item.value);
+              break;
+            }
+          }
+        }
+      }
 
       if (fields.length === 0) {
         return res.json({ success: true, message: 'Nenhum campo para atualizar.' });
       }
 
-      fields.push('updatedAt = NOW()');
-      values.push(id);
+      if (colMap.has('updatedat')) {
+        fields.push(`\`${colMap.get('updatedat')}\` = NOW()`);
+      } else if (colMap.has('updated_at')) {
+        fields.push(`\`${colMap.get('updated_at')}\` = NOW()`);
+      }
 
-      const query = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
+      values.push(id);
+      const query = `UPDATE \`users\` SET ${fields.join(', ')} WHERE \`id\` = ?`;
       await db.execute(query, values);
-      res.json({ success: true, message: `Usuário ${id} atualizado.` });
+      res.json({ success: true, message: `Usuário ${id} atualizado no MariaDB.` });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -216,14 +279,14 @@ async function startServer() {
       const [rows]: any = await db.query('SELECT * FROM service_orders ORDER BY scheduledDate DESC');
       const formatted = rows.map((o: any) => ({
         ...o,
-        baseServiceFee: Number(o.baseServiceFee || 0),
-        kmTraveled: Number(o.kmTraveled || 0),
-        kmRateApplied: Number(o.kmRateApplied || 0),
-        kmTotalCost: Number(o.kmTotalCost || 0),
-        tollCost: Number(o.tollCost || 0),
-        supportCost: Number(o.supportCost || 0),
-        totalTechnicianGross: Number(o.totalTechnicianGross || 0),
-        faturamentoPorto: Number(o.faturamentoPorto || 0),
+        baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
+        kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
+        kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0),
+        kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
+        tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
+        supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
+        totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
+        faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
         itemsUsed: [],
       }));
       res.json({ success: true, data: formatted });
@@ -236,61 +299,81 @@ async function startServer() {
     const o = req.body;
     try {
       const db = getDbPool();
-      const query = `
-        INSERT INTO service_orders (
-          id, callNumber, portoSeguroProtocol, serviceCategory, baseServiceFee,
-          customerName, customerCpf, customerPhone, city, uf, neighborhood,
-          addressStreet, addressNumber, addressComplement, postalCode,
-          technicianId, status, scheduledDate, kmTraveled, kmRateApplied,
-          kmTotalCost, tollCost, supportCost, totalTechnicianGross, faturamentoPorto,
-          customerSignature, executionNotes, tollReceiptUrl, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-          status = VALUES(status),
-          technicianId = VALUES(technicianId),
-          kmTraveled = VALUES(kmTraveled),
-          kmTotalCost = VALUES(kmTotalCost),
-          tollCost = VALUES(tollCost),
-          supportCost = VALUES(supportCost),
-          totalTechnicianGross = VALUES(totalTechnicianGross),
-          customerSignature = VALUES(customerSignature),
-          executionNotes = VALUES(executionNotes),
-          completedAt = IF(VALUES(status) = 'COMPLETED', NOW(), completedAt),
-          updatedAt = NOW();
-      `;
+      const colMap = await getTableColumnsMap('service_orders');
 
-      const values = [
-        o.id,
-        o.callNumber,
-        o.portoSeguroProtocol || null,
-        o.serviceCategory,
-        Number(o.baseServiceFee || 0),
-        o.customerName,
-        o.customerCpf,
-        o.customerPhone || null,
-        o.city,
-        o.uf,
-        o.neighborhood,
-        o.addressStreet,
-        o.addressNumber,
-        o.addressComplement || null,
-        o.postalCode,
-        o.technicianId || null,
-        o.status || 'PENDING',
-        new Date(o.scheduledDate),
-        Number(o.kmTraveled || 0),
-        Number(o.kmRateApplied || 0.5),
-        Number(o.kmTotalCost || 0),
-        Number(o.tollCost || 0),
-        Number(o.supportCost || 0),
-        Number(o.totalTechnicianGross || 0),
-        Number(o.faturamentoPorto || 0),
-        o.customerSignature || null,
-        o.executionNotes || null,
-        o.tollReceiptUrl || null,
+      const candidates: Array<{ keys: string[]; value: any }> = [
+        { keys: ['id'], value: o.id },
+        { keys: ['callnumber', 'call_number', 'numero_chamado'], value: o.callNumber },
+        { keys: ['portoseguroprotocol', 'porto_seguro_protocol', 'protocolo_porto'], value: o.portoSeguroProtocol || null },
+        { keys: ['servicecategory', 'service_category', 'categoria'], value: o.serviceCategory || 'Higienização Padrão' },
+        { keys: ['baseservicefee', 'base_service_fee', 'valor_base'], value: Number(o.baseServiceFee || 0) },
+        { keys: ['customername', 'customer_name', 'cliente_nome'], value: o.customerName || '' },
+        { keys: ['customercpf', 'customer_cpf', 'cliente_cpf'], value: o.customerCpf || '' },
+        { keys: ['customerphone', 'customer_phone', 'cliente_telefone'], value: o.customerPhone || null },
+        { keys: ['city', 'cidade'], value: o.city || 'São Paulo' },
+        { keys: ['uf', 'estado'], value: o.uf || 'SP' },
+        { keys: ['neighborhood', 'bairro'], value: o.neighborhood || '' },
+        { keys: ['addressstreet', 'address_street', 'endereco'], value: o.addressStreet || '' },
+        { keys: ['addressnumber', 'address_number', 'numero'], value: o.addressNumber || '' },
+        { keys: ['addresscomplement', 'address_complement', 'complemento'], value: o.addressComplement || null },
+        { keys: ['postalcode', 'postal_code', 'cep'], value: o.postalCode || '' },
+        { keys: ['technicianid', 'technician_id', 'tecnico_id'], value: o.technicianId || null },
+        { keys: ['status'], value: o.status || 'PENDING' },
+        { keys: ['scheduleddate', 'scheduled_date', 'data_agendada'], value: o.scheduledDate ? new Date(o.scheduledDate) : new Date() },
+        { keys: ['kmtraveled', 'km_traveled', 'km_rodado'], value: Number(o.kmTraveled || 0) },
+        { keys: ['kmrateapplied', 'km_rate_applied', 'valor_km'], value: Number(o.kmRateApplied || 0.5) },
+        { keys: ['kmtotalcost', 'km_total_cost', 'total_km'], value: Number(o.kmTotalCost || 0) },
+        { keys: ['tollcost', 'toll_cost', 'pedagio'], value: Number(o.tollCost || 0) },
+        { keys: ['supportcost', 'support_cost', 'ajuda_custo_adicional'], value: Number(o.supportCost || 0) },
+        { keys: ['totaltechniciangross', 'total_technician_gross', 'total_bruto_tecnico'], value: Number(o.totalTechnicianGross || 0) },
+        { keys: ['faturamentoporto', 'faturamento_porto', 'valor_porto'], value: Number(o.faturamentoPorto || 0) },
+        { keys: ['customersignature', 'customer_signature', 'assinatura'], value: o.customerSignature || null },
+        { keys: ['executionnotes', 'execution_notes', 'observacoes'], value: o.executionNotes || null },
+        { keys: ['tollreceipturl', 'toll_receipt_url', 'comprovante_pedagio'], value: o.tollReceiptUrl || null },
       ];
 
-      await db.execute(query, values);
+      const insertCols: string[] = [];
+      const insertPlaceholders: string[] = [];
+      const insertValues: any[] = [];
+      const updateClauses: string[] = [];
+
+      for (const item of candidates) {
+        let matchedCol: string | undefined;
+        for (const k of item.keys) {
+          if (colMap.has(k.toLowerCase())) {
+            matchedCol = colMap.get(k.toLowerCase());
+            break;
+          }
+        }
+
+        if (matchedCol) {
+          insertCols.push(`\`${matchedCol}\``);
+          insertPlaceholders.push('?');
+          insertValues.push(item.value);
+          if (matchedCol.toLowerCase() !== 'id') {
+            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          }
+        }
+      }
+
+      if (colMap.has('updatedat')) {
+        updateClauses.push(`\`${colMap.get('updatedat')}\` = NOW()`);
+      } else if (colMap.has('updated_at')) {
+        updateClauses.push(`\`${colMap.get('updated_at')}\` = NOW()`);
+      }
+
+      if (insertCols.length === 0) {
+        throw new Error('Nenhuma coluna correspondente na tabela service_orders.');
+      }
+
+      const query = `
+        INSERT INTO \`service_orders\` (${insertCols.join(', ')})
+        VALUES (${insertPlaceholders.join(', ')})
+        ON DUPLICATE KEY UPDATE
+        ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
+      `;
+
+      await db.execute(query, insertValues);
       res.json({ success: true, message: `OS ${o.callNumber} gravada no MariaDB.` });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -304,10 +387,10 @@ async function startServer() {
       const [rows]: any = await db.query('SELECT * FROM stock_items ORDER BY name ASC');
       const formatted = rows.map((s: any) => ({
         ...s,
-        quantityInStock: Number(s.quantityInStock || 0),
-        minimumThreshold: Number(s.minimumThreshold || 0),
-        unitCost: Number(s.unitCost || 0),
-        isSupportSupply: Boolean(s.isSupportSupply),
+        quantityInStock: Number(s.quantityInStock ?? s.quantity_in_stock ?? s.quantity ?? 0),
+        minimumThreshold: Number(s.minimumThreshold ?? s.minimum_threshold ?? 0),
+        unitCost: Number(s.unitCost ?? s.unit_cost ?? 0),
+        isSupportSupply: Boolean(s.isSupportSupply ?? s.is_support_supply ?? true),
       }));
       res.json({ success: true, data: formatted });
     } catch (err: any) {
@@ -319,30 +402,63 @@ async function startServer() {
     const s = req.body;
     try {
       const db = getDbPool();
+      const colMap = await getTableColumnsMap('stock_items');
+
+      const candidates: Array<{ keys: string[]; value: any }> = [
+        { keys: ['id'], value: s.id },
+        { keys: ['code', 'codigo'], value: s.code },
+        { keys: ['name', 'nome'], value: s.name },
+        { keys: ['description', 'descricao'], value: s.description || null },
+        { keys: ['category', 'categoria'], value: s.category || 'Geral' },
+        { keys: ['unit', 'unidade'], value: s.unit || 'UN' },
+        { keys: ['quantityinstock', 'quantity_in_stock', 'quantity', 'quantidade'], value: Number(s.quantityInStock || 0) },
+        { keys: ['minimumthreshold', 'minimum_threshold', 'minimo'], value: Number(s.minimumThreshold || 5) },
+        { keys: ['unitcost', 'unit_cost', 'custo_unitario'], value: Number(s.unitCost || 0) },
+        { keys: ['issupportsupply', 'is_support_supply'], value: s.isSupportSupply ? 1 : 0 },
+      ];
+
+      const insertCols: string[] = [];
+      const insertPlaceholders: string[] = [];
+      const insertValues: any[] = [];
+      const updateClauses: string[] = [];
+
+      for (const item of candidates) {
+        let matchedCol: string | undefined;
+        for (const k of item.keys) {
+          if (colMap.has(k.toLowerCase())) {
+            matchedCol = colMap.get(k.toLowerCase());
+            break;
+          }
+        }
+
+        if (matchedCol) {
+          insertCols.push(`\`${matchedCol}\``);
+          insertPlaceholders.push('?');
+          insertValues.push(item.value);
+          if (matchedCol.toLowerCase() !== 'id') {
+            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          }
+        }
+      }
+
+      if (colMap.has('updatedat')) {
+        updateClauses.push(`\`${colMap.get('updatedat')}\` = NOW()`);
+      } else if (colMap.has('updated_at')) {
+        updateClauses.push(`\`${colMap.get('updated_at')}\` = NOW()`);
+      }
+
+      if (insertCols.length === 0) {
+        throw new Error('Nenhuma coluna correspondente na tabela stock_items.');
+      }
+
       const query = `
-        INSERT INTO stock_items (
-          id, code, name, description, category, unit,
-          quantityInStock, minimumThreshold, unitCost, isSupportSupply, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        INSERT INTO \`stock_items\` (${insertCols.join(', ')})
+        VALUES (${insertPlaceholders.join(', ')})
         ON DUPLICATE KEY UPDATE
-          name = VALUES(name),
-          quantityInStock = VALUES(quantityInStock),
-          minimumThreshold = VALUES(minimumThreshold),
-          unitCost = VALUES(unitCost),
-          updatedAt = NOW();
+        ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
       `;
-      await db.execute(query, [
-        s.id,
-        s.code,
-        s.name,
-        s.description || null,
-        s.category,
-        s.unit,
-        Number(s.quantityInStock || 0),
-        Number(s.minimumThreshold || 5),
-        Number(s.unitCost || 0),
-        s.isSupportSupply ? 1 : 0,
-      ]);
+
+      await db.execute(query, insertValues);
       res.json({ success: true, message: `Item ${s.name} salvo no estoque.` });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -368,25 +484,60 @@ async function startServer() {
     const m = req.body;
     try {
       const db = getDbPool();
+      const colMap = await getTableColumnsMap('financial_movements');
+
+      const candidates: Array<{ keys: string[]; value: any }> = [
+        { keys: ['id'], value: m.id },
+        { keys: ['type', 'tipo'], value: m.type },
+        { keys: ['category', 'categoria'], value: m.category },
+        { keys: ['description', 'descricao'], value: m.description },
+        { keys: ['amount', 'valor'], value: Number(m.amount || 0) },
+        { keys: ['status'], value: m.status || 'CONFIRMED' },
+        { keys: ['technicianid', 'technician_id', 'tecnico_id'], value: m.technicianId || null },
+        { keys: ['serviceorderid', 'service_order_id', 'os_id'], value: m.serviceOrderId || null },
+        { keys: ['biweeklyclosingid', 'biweekly_closing_id', 'fechamento_id'], value: m.biweeklyClosingId || null },
+        { keys: ['paymentmethod', 'payment_method', 'forma_pagamento'], value: m.paymentMethod || null },
+      ];
+
+      const insertCols: string[] = [];
+      const insertPlaceholders: string[] = [];
+      const insertValues: any[] = [];
+
+      for (const item of candidates) {
+        let matchedCol: string | undefined;
+        for (const k of item.keys) {
+          if (colMap.has(k.toLowerCase())) {
+            matchedCol = colMap.get(k.toLowerCase());
+            break;
+          }
+        }
+
+        if (matchedCol) {
+          insertCols.push(`\`${matchedCol}\``);
+          insertPlaceholders.push('?');
+          insertValues.push(item.value);
+        }
+      }
+
+      if (colMap.has('createdat')) {
+        insertCols.push(`\`${colMap.get('createdat')}\``);
+        insertPlaceholders.push('NOW()');
+      } else if (colMap.has('created_at')) {
+        insertCols.push(`\`${colMap.get('created_at')}\``);
+        insertPlaceholders.push('NOW()');
+      }
+
+      if (insertCols.length === 0) {
+        throw new Error('Nenhuma coluna correspondente na tabela financial_movements.');
+      }
+
       const query = `
-        INSERT INTO financial_movements (
-          id, type, category, description, amount, status,
-          technicianId, serviceOrderId, biweeklyClosingId, paymentMethod, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
+        INSERT INTO \`financial_movements\` (${insertCols.join(', ')})
+        VALUES (${insertPlaceholders.join(', ')})
       `;
-      await db.execute(query, [
-        m.id,
-        m.type,
-        m.category,
-        m.description,
-        Number(m.amount || 0),
-        m.status || 'CONFIRMED',
-        m.technicianId || null,
-        m.serviceOrderId || null,
-        m.biweeklyClosingId || null,
-        m.paymentMethod || 'PIX',
-      ]);
-      res.json({ success: true, message: 'Movimentação registrada no MariaDB.' });
+
+      await db.execute(query, insertValues);
+      res.json({ success: true, message: 'Movimento financeiro gravado no MariaDB.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
