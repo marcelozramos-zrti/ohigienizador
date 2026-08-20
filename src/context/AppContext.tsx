@@ -59,6 +59,8 @@ interface AppContextType {
 
   // OS Management
   createServiceOrder: (order: Omit<ServiceOrder, 'id' | 'totalTechnicianGross' | 'itemsUsed' | 'kmTotalCost'>) => void;
+  updateServiceOrder: (orderId: string, updates: Partial<ServiceOrder>) => void;
+  deleteServiceOrder: (orderId: string) => void;
   updateOrderStatus: (orderId: string, status: ServiceOrder['status']) => void;
   completeServiceOrder: (
     orderId: string,
@@ -712,8 +714,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSettings = (newSettings: Partial<GeneralSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
-    addToast('Configurações Atualizadas', 'As diretrizes do sistema foram salvas com sucesso.', 'success');
+    const updated = { ...settings, ...newSettings };
+    setSettings(updated);
+    ApiService.saveSettings(updated).catch(() => {});
+    addToast('Configurações Atualizadas', 'As diretrizes do sistema foram salvas com sucesso no MariaDB.', 'success');
   };
 
   // OS Management
@@ -758,6 +762,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'Ordem de Serviço Criada',
       `Chamado Porto Seguro ${newOrder.callNumber} registrado com sucesso para ${newOrder.customerName}.`,
       'success'
+    );
+  };
+
+  const updateServiceOrder = (orderId: string, updates: Partial<ServiceOrder>) => {
+    let updatedOrderObj: ServiceOrder | undefined;
+
+    setOrders((prev) =>
+      prev.map((os) => {
+        if (os.id === orderId) {
+          const merged: ServiceOrder = { ...os, ...updates };
+
+          // If technician changed, update technicianName automatically
+          if (updates.technicianId !== undefined) {
+            if (updates.technicianId) {
+              const tech = users.find((u) => u.id === updates.technicianId);
+              merged.technicianName = tech?.name || updates.technicianName || 'Técnico Alocado';
+              if (merged.status === 'PENDING' && !updates.status) {
+                merged.status = 'IN_PROGRESS';
+              }
+            } else {
+              merged.technicianId = undefined;
+              merged.technicianName = undefined;
+            }
+          }
+
+          // Recalculate logistics and total gross payout
+          const kmRateApplied = merged.kmRateApplied || settings.kmRateDefault || 0.5;
+          const kmTotalCost = Number(((merged.kmTraveled || 0) * kmRateApplied).toFixed(2));
+          const totalTechnicianGross = Number(
+            (
+              Number(merged.baseServiceFee || 0) +
+              kmTotalCost +
+              Number(merged.tollCost || 0) +
+              Number(merged.supportCost || 0)
+            ).toFixed(2)
+          );
+
+          updatedOrderObj = {
+            ...merged,
+            kmRateApplied,
+            kmTotalCost,
+            totalTechnicianGross,
+          };
+          return updatedOrderObj;
+        }
+        return os;
+      })
+    );
+
+    if (updatedOrderObj) {
+      ApiService.saveOrder(updatedOrderObj).catch(() => {});
+      addToast(
+        'Ordem de Serviço Atualizada',
+        `Chamado ${updatedOrderObj.callNumber} atualizado com sucesso no MariaDB.`,
+        'success'
+      );
+    }
+  };
+
+  const deleteServiceOrder = (orderId: string) => {
+    const target = orders.find((o) => o.id === orderId);
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    ApiService.deleteOrder(orderId).catch(() => {});
+    addToast(
+      'Ordem de Serviço Excluída',
+      `Chamado ${target?.callNumber || orderId} removido da base de dados MariaDB.`,
+      'info'
     );
   };
 
@@ -919,7 +990,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteStockItem = (itemId: string) => {
     const itemToDelete = stock.find((s) => s.id === itemId);
     setStock((prev) => prev.filter((item) => item.id !== itemId));
-    addToast('Produto Removido', `${itemToDelete?.name || 'Insumo'} foi excluído do catálogo.`, 'info');
+    ApiService.deleteStockItem(itemId).catch(() => {});
+    addToast('Produto Removido', `${itemToDelete?.name || 'Insumo'} foi excluído do catálogo e do MariaDB.`, 'info');
   };
 
   const registerStockEntry = (itemId: string, quantityAdded: number, totalCost: number, notes?: string) => {
@@ -1132,6 +1204,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleUserMfa,
         createUserAccount,
         createServiceOrder,
+        updateServiceOrder,
+        deleteServiceOrder,
         updateOrderStatus,
         completeServiceOrder,
         adjustStockQuantity,

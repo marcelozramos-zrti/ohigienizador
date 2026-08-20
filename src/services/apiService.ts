@@ -144,6 +144,16 @@ export const ApiService = {
     }
   },
 
+  async deleteOrder(orderId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, { method: 'DELETE' });
+      const json = await res.json();
+      return Boolean(json.success);
+    } catch {
+      return false;
+    }
+  },
+
   // STOCK ITEMS
   async fetchStock(): Promise<StockItem[] | null> {
     try {
@@ -173,6 +183,16 @@ export const ApiService = {
     }
   },
 
+  async deleteStockItem(itemId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/stock/${itemId}`, { method: 'DELETE' });
+      const json = await res.json();
+      return Boolean(json.success);
+    } catch {
+      return false;
+    }
+  },
+
   // FINANCIAL MOVEMENTS
   async fetchMovements(): Promise<FinancialMovement[] | null> {
     try {
@@ -194,6 +214,42 @@ export const ApiService = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(movement),
+      });
+      const json = await res.json();
+      return Boolean(json.success);
+    } catch {
+      return false;
+    }
+  },
+
+  async deleteMovement(movementId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/movements/${movementId}`, { method: 'DELETE' });
+      const json = await res.json();
+      return Boolean(json.success);
+    } catch {
+      return false;
+    }
+  },
+
+  // GENERAL SETTINGS
+  async fetchSettings(): Promise<any | null> {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.success ? json.data : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async saveSettings(settings: any): Promise<boolean> {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
       });
       const json = await res.json();
       return Boolean(json.success);

@@ -78,7 +78,7 @@ export function getDbPool(): mysql.Pool {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
-      connectTimeout: 4000, // 4s timeout
+      connectTimeout: 2000, // 2s timeout for fast failover
       enableKeepAlive: true,
       keepAliveInitialDelay: 10000,
     });

@@ -9,12 +9,16 @@ import {
   CheckCircle2,
   Clock,
   Eye,
+  Edit,
+  Pencil,
   X,
   Shield,
   Layers,
+  UserCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ServiceOrder } from '../types';
+import { EditServiceOrderModal } from './EditServiceOrderModal';
 
 interface ServiceOrdersViewProps {
   onOpenNewOrder: () => void;
@@ -25,6 +29,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
+  const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
 
   const safeOrders = orders || [];
 
@@ -241,13 +246,26 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
                     {/* Actions */}
                     <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => setSelectedOrder(os)}
-                        className="p-1.5 rounded text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 transition-colors"
-                        title="Ver Detalhes da OS"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center justify-end space-x-1.5">
+                        <button
+                          onClick={() => setSelectedOrder(os)}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 transition-colors"
+                          title="Visualizar Detalhes da OS"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                        
+                        {currentUser.role !== 'TECHNICIAN' && (
+                          <button
+                            onClick={() => setEditingOrder(os)}
+                            className="flex items-center space-x-1 px-2 py-1 rounded-lg text-[#003366] bg-cyan-50 hover:bg-cyan-100 hover:text-[#00264d] border border-cyan-200 text-[11px] font-bold transition-all"
+                            title="Editar Ordem de Serviço & Trocar Técnico"
+                          >
+                            <Pencil className="h-3.5 w-3.5 text-cyan-700" />
+                            <span className="hidden sm:inline">Editar</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                   </tr>
@@ -309,6 +327,18 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                       {selectedOrder.addressStreet}, {selectedOrder.addressNumber} {selectedOrder.addressComplement} - {selectedOrder.neighborhood}, {selectedOrder.city}/{selectedOrder.uf} (CEP: {selectedOrder.postalCode})
                     </span>
                   </div>
+                  {selectedOrder.customerPhone && (
+                    <div>
+                      <span className="text-slate-500 font-medium">Telefone:</span>{' '}
+                      <span className="text-slate-800 font-semibold">{selectedOrder.customerPhone}</span>
+                    </div>
+                  )}
+                  {selectedOrder.technicianName && (
+                    <div className="pt-1 border-t border-slate-200/60 flex items-center space-x-1.5 text-cyan-800 font-bold">
+                      <UserCheck className="h-3.5 w-3.5 text-cyan-600" />
+                      <span>Técnico Designado: {selectedOrder.technicianName}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -367,7 +397,21 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              {currentUser.role !== 'TECHNICIAN' ? (
+                <button
+                  onClick={() => {
+                    const target = selectedOrder;
+                    setSelectedOrder(null);
+                    setEditingOrder(target);
+                  }}
+                  className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg text-xs transition-colors"
+                >
+                  <Pencil className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Editar OS / Trocar Técnico</span>
+                </button>
+              ) : <div />}
+
               <button
                 onClick={() => setSelectedOrder(null)}
                 className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs"
@@ -378,6 +422,14 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
           </div>
         </div>
+      )}
+
+      {/* Edit OS Modal */}
+      {editingOrder && (
+        <EditServiceOrderModal
+          order={editingOrder}
+          onClose={() => setEditingOrder(null)}
+        />
       )}
 
     </div>
