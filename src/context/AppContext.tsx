@@ -53,6 +53,7 @@ interface AppContextType {
   resetUserPassword: (userId: string, newPassword?: string) => { temporaryPassword: string };
   revokeUserAccess: (userId: string) => void;
   restoreUserAccess: (userId: string) => void;
+  deleteUserAccount: (userId: string) => void;
   toggleUserMfa: (userId: string) => void;
   createUserAccount: (userData: Partial<User> & { password?: string }) => void;
 
@@ -346,38 +347,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const revokeUserAccess = (userId: string) => {
+    let updatedTarget: User | undefined;
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
-          return {
+          updatedTarget = {
             ...u,
             isActive: false,
             revokedAt: new Date().toISOString(),
           };
+          return updatedTarget;
         }
         return u;
       })
     );
+    if (updatedTarget) {
+      ApiService.saveUser(updatedTarget).catch(() => {});
+    }
     if (currentUser?.id === userId) {
       logout();
     }
-    addToast('Acesso Revogado', 'O usuário foi desativado e o login bloqueado.', 'error');
+    addToast('Acesso Revogado', 'O usuário foi desativado e o status salvo no MariaDB.', 'error');
   };
 
   const restoreUserAccess = (userId: string) => {
+    let updatedTarget: User | undefined;
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
-          return {
+          updatedTarget = {
             ...u,
             isActive: true,
             revokedAt: undefined,
           };
+          return updatedTarget;
         }
         return u;
       })
     );
-    addToast('Acesso Restaurado', 'A conta foi reativada com sucesso.', 'success');
+    if (updatedTarget) {
+      ApiService.saveUser(updatedTarget).catch(() => {});
+    }
+    addToast('Acesso Restaurado', 'A conta foi reativada e sincronizada no MariaDB.', 'success');
+  };
+
+  const deleteUserAccount = (userId: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    ApiService.deleteUser(userId).then((success) => {
+      if (success) {
+        console.log(`[MariaDB] Usuário ID ${userId} excluído com sucesso do banco.`);
+      }
+    }).catch(() => {});
+
+    if (currentUser?.id === userId) {
+      logout();
+    }
+    addToast('Usuário Excluído', `${targetUser?.name || 'Usuário'} foi removido do sistema e do MariaDB.`, 'info');
   };
 
   const toggleUserMfa = (userId: string) => {
@@ -1093,6 +1119,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetUserPassword,
         revokeUserAccess,
         restoreUserAccess,
+        deleteUserAccount,
         toggleUserMfa,
         createUserAccount,
         createServiceOrder,

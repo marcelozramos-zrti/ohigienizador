@@ -28,6 +28,8 @@ import {
   Building,
   KeyRound,
   ShieldAlert,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { User, PixKeyType } from '../types';
@@ -41,6 +43,7 @@ export const TechniciansView: React.FC = () => {
     resetUserPassword,
     revokeUserAccess,
     restoreUserAccess,
+    deleteUserAccount,
     toggleUserMfa,
     addToast,
     currentUser,
@@ -55,6 +58,7 @@ export const TechniciansView: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [editingTech, setEditingTech] = useState<User | null>(null);
   const [resetModalTech, setResetModalTech] = useState<User | null>(null);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [generatedNewPass, setGeneratedNewPass] = useState<string>('');
   const [customPassInput, setCustomPassInput] = useState<string>('');
 
@@ -561,8 +565,8 @@ export const TechniciansView: React.FC = () => {
                       {tech.isActive ? (
                         <button
                           onClick={() => revokeUserAccess(tech.id)}
-                          className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 border border-red-200 transition-colors cursor-pointer"
-                          title="Revogar Acesso / Desativar Conta"
+                          className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 border border-amber-200 transition-colors cursor-pointer"
+                          title="Revogar Acesso / Desativar Temporariamente"
                         >
                           <UserX className="h-3.5 w-3.5" />
                         </button>
@@ -575,6 +579,15 @@ export const TechniciansView: React.FC = () => {
                           <UserCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
+
+                      {/* Delete User Account Permanently */}
+                      <button
+                        onClick={() => setUserToDelete(tech)}
+                        className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 border border-red-200 transition-colors cursor-pointer"
+                        title="Excluir Permanentemente do Sistema e MariaDB"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -1142,6 +1155,53 @@ export const TechniciansView: React.FC = () => {
                 className="w-full py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-all"
               >
                 Apenas Salvar Senha
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmar Exclusão Definitiva */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-red-200 space-y-4">
+            <div className="flex items-center space-x-3 text-red-600">
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Excluir Usuário</h3>
+                <p className="text-xs text-red-600 font-medium">Exclusão permanente do MariaDB</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-red-50 rounded-xl border border-red-200 text-xs text-red-900 space-y-2">
+              <p>
+                Tem certeza que deseja excluir permanentemente o cadastro de <strong className="font-bold text-red-950">{userToDelete.name}</strong> (<span className="font-mono">{userToDelete.email}</span>)?
+              </p>
+              <p className="text-[11px] text-red-700">
+                Esta ação executará o comando SQL <code className="bg-white/80 px-1 py-0.5 rounded font-mono text-[10px]">DELETE FROM users WHERE id = '{userToDelete.id}'</code> no banco de dados MariaDB da produção.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteUserAccount(userToDelete.id);
+                  setUserToDelete(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center space-x-1.5 shadow-md cursor-pointer transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Sim, Excluir do Banco</span>
               </button>
             </div>
           </div>
