@@ -114,13 +114,13 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  USERS: 'higienizador_users_v2',
-  ORDERS: 'higienizador_orders_v2',
-  STOCK: 'higienizador_stock_v2',
-  MOVEMENTS: 'higienizador_movements_v2',
-  SETTINGS: 'higienizador_settings_v2',
-  ACTIVE_TAB: 'higienizador_active_tab_v2',
-  AUTH_SESSION: 'higienizador_auth_session_v2',
+  USERS: 'higienizador_users_mariadb_v4',
+  ORDERS: 'higienizador_orders_mariadb_v4',
+  STOCK: 'higienizador_stock_mariadb_v4',
+  MOVEMENTS: 'higienizador_movements_mariadb_v4',
+  SETTINGS: 'higienizador_settings_mariadb_v4',
+  ACTIVE_TAB: 'higienizador_active_tab_mariadb_v4',
+  AUTH_SESSION: 'higienizador_auth_session_mariadb_v4',
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -160,19 +160,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load from local storage or initial
   const [users, setUsers] = useState<User[]>(() => {
     try {
+      // Purge old legacy keys if present
+      localStorage.removeItem('higienizador_users');
+      localStorage.removeItem('higienizador_users_v2');
+
       const saved = localStorage.getItem(STORAGE_KEYS.USERS);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Merge initial system users (such as Marcelo Zanin, M. Ramos, Superadmin, etc.)
-          // so newly seeded admin/tech accounts are never lost even with old localStorage
-          const existingEmails = new Set(
-            parsed.map((u: User) => (u.email ? u.email.trim().toLowerCase() : ''))
+          // Filter out any obsolete legacy mock user IDs that start with tech- or user-
+          const validUsers = parsed.filter(
+            (u: User) => u.id && !u.id.startsWith('tech-') && !u.id.startsWith('user-')
           );
-          const missingInitials = INITIAL_USERS.filter(
-            (u) => !existingEmails.has(u.email.trim().toLowerCase())
-          );
-          return [...parsed, ...missingInitials];
+          if (validUsers.length > 0) {
+            const existingEmails = new Set(
+              validUsers.map((u: User) => (u.email ? u.email.trim().toLowerCase() : ''))
+            );
+            const missingInitials = INITIAL_USERS.filter(
+              (u) => !existingEmails.has(u.email.trim().toLowerCase())
+            );
+            return [...validUsers, ...missingInitials];
+          }
         }
       }
       return INITIAL_USERS;

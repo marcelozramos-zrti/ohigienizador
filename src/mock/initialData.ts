@@ -1,106 +1,7 @@
 import { User, ServiceOrder, StockItem, FinancialMovement, GeneralSettings } from '../types';
 
 export const INITIAL_USERS: User[] = [
-  {
-    id: 'user-superadmin',
-    name: 'Superadmin (Acesso Master)',
-    email: 'admin@ohigienizador.com.br',
-    password: 'PortoSeguro@2026!',
-    role: 'ADMIN',
-    isSuperAdmin: true,
-    documentCpf: '000.111.222-33',
-    phone: '11999998888',
-    isActive: true,
-    mfaEnabled: true,
-    mfaSecret: '772910',
-    pixKeyType: 'EMAIL',
-    pixKey: 'financeiro@ohigienizador.com.br',
-    bankName: 'Banco Itaú',
-    bankAgency: '0450',
-    bankAccount: '19842-1',
-    baseCostAllowance: 0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  {
-    id: 'user-superadmin-mramos',
-    name: 'M. Ramos (Superadmin ZRTI)',
-    email: 'mramos.zrti@gmail.com',
-    password: 'PortoSeguro@2026!',
-    role: 'ADMIN',
-    isSuperAdmin: true,
-    documentCpf: '000.111.222-44',
-    phone: '11999997777',
-    isActive: true,
-    mfaEnabled: true,
-    mfaSecret: '772910',
-    pixKeyType: 'EMAIL',
-    pixKey: 'mramos.zrti@gmail.com',
-    bankName: 'Banco Itaú',
-    bankAgency: '0450',
-    bankAccount: '19842-1',
-    baseCostAllowance: 0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  {
-    id: 'user-marcelo-zanin',
-    name: 'Marcelo Zanin (Diretoria ZRTI)',
-    email: 'marcelo.zanin@zrti.com.br',
-    password: 'PortoSeguro@2026!',
-    role: 'ADMIN',
-    isSuperAdmin: true,
-    documentCpf: '000.111.222-55',
-    phone: '11999996666',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'EMAIL',
-    pixKey: 'marcelo.zanin@zrti.com.br',
-    bankName: 'Banco Itaú',
-    bankAgency: '0450',
-    bankAccount: '19842-1',
-    baseCostAllowance: 0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  {
-    id: 'user-henrique-admin',
-    name: 'Henrique (Diretoria / Gestão)',
-    email: 'henrique@ohigienizador.com.br',
-    password: 'PortoSeguro@2026!',
-    role: 'ADMIN',
-    isSuperAdmin: true,
-    documentCpf: '112.334.556-78',
-    phone: '11999887766',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'CPF',
-    pixKey: '112.334.556-78',
-    bankName: 'Banco Itaú',
-    bankAgency: '0450',
-    bankAccount: '19842-1',
-    baseCostAllowance: 250.0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  {
-    id: 'user-camila-ops',
-    name: 'Camila (Gestão Operacional)',
-    email: 'operacional@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'OPERATIONAL',
-    isSuperAdmin: false,
-    documentCpf: '223.445.667-89',
-    phone: '11988776655',
-    isActive: true,
-    mfaEnabled: false,
-    baseCostAllowance: 0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // ==========================================
-  // USUÁRIOS MARIADB (Servidor 192.168.15.246 / higienizador_db)
-  // ==========================================
+  // 1. Master Gestor Admin
   {
     id: 'admin1',
     name: 'Gestor Master Porto',
@@ -121,6 +22,7 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
   },
+  // 2. Técnico 1: Carlos Henrique Silva
   {
     id: 'u1',
     name: 'Carlos Henrique Silva',
@@ -140,6 +42,7 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
   },
+  // 3. Técnico 2: Lucas Eduardo Rocha
   {
     id: 'u2',
     name: 'Lucas Eduardo Rocha',
@@ -159,6 +62,7 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
   },
+  // 4. Técnico 3: Marcos Vinícius Santos
   {
     id: 'u3',
     name: 'Marcos Vinícius Santos',
@@ -178,6 +82,7 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
   },
+  // 5. Técnico 4: Rafael Albuquerque (Regra Fiscal 16%)
   {
     id: 'u4',
     name: 'Rafael Albuquerque',
@@ -197,6 +102,7 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: true,
     specialTaxRate: 16.0,
   },
+  // 6. Técnico 5: Marcelo Ramos
   {
     id: 'u5',
     name: 'Marcelo Ramos',
@@ -212,126 +118,6 @@ export const INITIAL_USERS: User[] = [
     bankName: 'Banco Itaú',
     bankAgency: '0001',
     bankAccount: '00000-0',
-    baseCostAllowance: 250.0,
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // TÉCNICO 1: Henrique (Técnico de Campo)
-  {
-    id: 'tech-henrique',
-    name: 'Henrique',
-    email: 'henrique.campo@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '112.334.556-78',
-    phone: '11999887766',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'CPF',
-    pixKey: '112.334.556-78',
-    bankName: 'Banco Itaú',
-    bankAgency: '0450',
-    bankAccount: '19842-1',
-    baseCostAllowance: 250.0, // Ajuda de custo padrão R$ 250,00
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // TÉCNICO 2: Robertinho (EXCEÇÃO FISCAL: 16% de retenção de imposto)
-  {
-    id: 'tech-robertinho',
-    name: 'Robertinho (Regra Fiscal 16%)',
-    email: 'robertinho@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '556.778.990-12',
-    phone: '11955443322',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'EMAIL',
-    pixKey: 'robertinho.pix@gmail.com',
-    bankName: 'Nubank (0260)',
-    bankAgency: '0001',
-    bankAccount: '4589211-0',
-    baseCostAllowance: 250.0, // Ajuda de custo R$ 250,00
-    hasSpecialTaxRule: true, // REGRA DE EXCEÇÃO FISCAL DAS PLANILHAS
-    specialTaxRate: 16.0, // 16% de retenção de imposto
-  },
-  // TÉCNICO 3: Priscila (Com desconto de vale de R$ 200,00)
-  {
-    id: 'tech-priscila',
-    name: 'Priscila',
-    email: 'priscila@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '778.990.112-34',
-    phone: '11977889900',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'PHONE',
-    pixKey: '11977889900',
-    bankName: 'Banco Bradesco',
-    bankAgency: '1820',
-    bankAccount: '33410-2',
-    baseCostAllowance: 250.0, // Ajuda de custo R$ 250,00
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // TÉCNICO 4: Felipe
-  {
-    id: 'tech-felipe',
-    name: 'Felipe',
-    email: 'felipe@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '445.667.889-01',
-    phone: '11966554433',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'CPF',
-    pixKey: '445.667.889-01',
-    bankName: 'Banco Santander',
-    bankAgency: '2109',
-    bankAccount: '13009841-8',
-    baseCostAllowance: 250.0, // Ajuda de custo R$ 250,00
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // TÉCNICO 5: Diego
-  {
-    id: 'tech-diego',
-    name: 'Diego',
-    email: 'diego@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '334.556.778-90',
-    phone: '11977665544',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'CPF',
-    pixKey: '334.556.778-90',
-    bankName: 'Banco do Brasil',
-    bankAgency: '3821',
-    bankAccount: '98452-1',
-    baseCostAllowance: 250.0, // Ajuda de custo R$ 250,00
-    hasSpecialTaxRule: false,
-    specialTaxRate: 0,
-  },
-  // TÉCNICO 6: Carlos Silva
-  {
-    id: 'tech-carlos-silva',
-    name: 'Carlos Silva',
-    email: 'carlos.silva@ohigienizador.com.br',
-    password: 'Porto@123',
-    role: 'TECHNICIAN',
-    documentCpf: '889.001.223-45',
-    phone: '11944332211',
-    isActive: true,
-    mfaEnabled: false,
-    pixKeyType: 'CPF',
-    pixKey: '889.001.223-45',
-    bankName: 'Caixa Econômica',
-    bankAgency: '1205',
-    bankAccount: '88741-0',
     baseCostAllowance: 250.0,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
@@ -407,8 +193,7 @@ export const INITIAL_STOCK: StockItem[] = [
 ];
 
 export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
-  // OS 1: Exemplo Exato da Planilha do Henrique
-  // Instalação TV 44 a 70 + Suporte Fixo: Base R$ 60,00 + 32 KM * R$ 0,50 (R$ 16,00) = R$ 76,00
+  // OS 1: Instalação TV 44 a 70 + Suporte Fixo (Carlos Henrique Silva - u1)
   {
     id: 'os-ps-2026-0801',
     callNumber: 'PS-2026-0801',
@@ -424,24 +209,24 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Av. Ibirapuera',
     addressNumber: '2120',
     postalCode: '04028-001',
-    technicianId: 'tech-henrique',
-    technicianName: 'Henrique',
+    technicianId: 'u1',
+    technicianName: 'Carlos Henrique Silva',
     status: 'COMPLETED',
     scheduledDate: '2026-08-04T10:00:00Z',
     startedAt: '2026-08-04T10:15:00Z',
     completedAt: '2026-08-04T11:45:00Z',
-    kmTraveled: 32, // 32 KM * 0.50 = R$ 16,00
+    kmTraveled: 32,
     kmRateApplied: 0.50,
     kmTotalCost: 16.0,
     tollCost: 0,
     supportCost: 0,
-    totalTechnicianGross: 76.0, // R$ 60 + R$ 16 = R$ 76,00
+    totalTechnicianGross: 76.0,
     faturamentoPorto: 240.0,
     executionNotes: 'Instalação de suporte fixo e TV de 65 polegadas concluída com sucesso.',
     itemsUsed: [],
   },
 
-  // OS 2: Instalação Lava e Seca (Henrique)
+  // OS 2: Instalação Lava e Seca (Carlos Henrique Silva - u1)
   {
     id: 'os-ps-2026-0802',
     callNumber: 'PS-2026-0802',
@@ -457,13 +242,13 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Rua das Figueiras',
     addressNumber: '890',
     postalCode: '09080-300',
-    technicianId: 'tech-henrique',
-    technicianName: 'Henrique',
+    technicianId: 'u1',
+    technicianName: 'Carlos Henrique Silva',
     status: 'COMPLETED',
     scheduledDate: '2026-08-06T14:00:00Z',
     startedAt: '2026-08-06T14:10:00Z',
     completedAt: '2026-08-06T15:30:00Z',
-    kmTraveled: 24, // 24 KM * 0.50 = R$ 12,00
+    kmTraveled: 24,
     kmRateApplied: 0.50,
     kmTotalCost: 12.0,
     tollCost: 0,
@@ -474,7 +259,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 3: Robertinho - Higienização de Sofá 3 Lugares
+  // OS 3: Rafael Albuquerque (u4) - Higienização de Sofá 3 Lugares
   {
     id: 'os-ps-2026-0803',
     callNumber: 'PS-2026-0803',
@@ -490,13 +275,13 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Rua Treze de Maio',
     addressNumber: '1100',
     postalCode: '01327-000',
-    technicianId: 'tech-robertinho',
-    technicianName: 'Robertinho (Regra Fiscal 16%)',
+    technicianId: 'u4',
+    technicianName: 'Rafael Albuquerque',
     status: 'COMPLETED',
     scheduledDate: '2026-08-08T09:00:00Z',
     startedAt: '2026-08-08T09:15:00Z',
     completedAt: '2026-08-08T11:30:00Z',
-    kmTraveled: 40, // 40 KM * 0.50 = R$ 20,00
+    kmTraveled: 40,
     kmRateApplied: 0.50,
     kmTotalCost: 20.0,
     tollCost: 10.0,
@@ -507,7 +292,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 4: Robertinho - Impermeabilização de Estofado
+  // OS 4: Rafael Albuquerque (u4) - Impermeabilização de Estofado
   {
     id: 'os-ps-2026-0804',
     callNumber: 'PS-2026-0804',
@@ -523,13 +308,13 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Alameda Rio Negro',
     addressNumber: '500',
     postalCode: '06454-000',
-    technicianId: 'tech-robertinho',
-    technicianName: 'Robertinho (Regra Fiscal 16%)',
+    technicianId: 'u4',
+    technicianName: 'Rafael Albuquerque',
     status: 'COMPLETED',
     scheduledDate: '2026-08-10T13:30:00Z',
     startedAt: '2026-08-10T13:45:00Z',
     completedAt: '2026-08-10T16:00:00Z',
-    kmTraveled: 60, // 60 KM * 0.50 = R$ 30,00
+    kmTraveled: 60,
     kmRateApplied: 0.50,
     kmTotalCost: 30.0,
     tollCost: 15.0,
@@ -540,7 +325,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 5: Priscila - Instalação TV 44 a 70 + Suporte Fixo
+  // OS 5: Lucas Eduardo Rocha (u2) - Instalação TV 44 a 70 + Suporte Fixo
   {
     id: 'os-ps-2026-0805',
     callNumber: 'PS-2026-0805',
@@ -556,8 +341,8 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Rua dos Pinheiros',
     addressNumber: '650',
     postalCode: '05422-001',
-    technicianId: 'tech-priscila',
-    technicianName: 'Priscila',
+    technicianId: 'u2',
+    technicianName: 'Lucas Eduardo Rocha',
     status: 'COMPLETED',
     scheduledDate: '2026-08-11T10:00:00Z',
     startedAt: '2026-08-11T10:20:00Z',
@@ -573,7 +358,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 6: Felipe - Instalação Purificador de Água
+  // OS 6: Marcos Vinícius Santos (u3) - Instalação Purificador de Água
   {
     id: 'os-ps-2026-0806',
     callNumber: 'PS-2026-0806',
@@ -589,8 +374,8 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Rua Tuiuti',
     addressNumber: '1420',
     postalCode: '03081-000',
-    technicianId: 'tech-felipe',
-    technicianName: 'Felipe',
+    technicianId: 'u3',
+    technicianName: 'Marcos Vinícius Santos',
     status: 'COMPLETED',
     scheduledDate: '2026-08-12T14:30:00Z',
     startedAt: '2026-08-12T14:40:00Z',
@@ -606,7 +391,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 7: Diego - Visita Perdida
+  // OS 7: Marcelo Ramos (u5) - Visita Perdida
   {
     id: 'os-ps-2026-0807',
     callNumber: 'PS-2026-0807',
@@ -622,8 +407,8 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Rua Voluntários da Pátria',
     addressNumber: '2500',
     postalCode: '02010-400',
-    technicianId: 'tech-diego',
-    technicianName: 'Diego',
+    technicianId: 'u5',
+    technicianName: 'Marcelo Ramos',
     status: 'COMPLETED',
     scheduledDate: '2026-08-13T09:00:00Z',
     startedAt: '2026-08-13T09:15:00Z',
@@ -639,7 +424,7 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     itemsUsed: [],
   },
 
-  // OS 8: Carlos Silva - Higienização Automotiva Completa
+  // OS 8: Marcelo Ramos (u5) - Higienização Automotiva Completa
   {
     id: 'os-ps-2026-0808',
     callNumber: 'PS-2026-0808',
@@ -655,8 +440,8 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
     addressStreet: 'Av. Coronel Silva Telles',
     addressNumber: '700',
     postalCode: '13024-000',
-    technicianId: 'tech-carlos-silva',
-    technicianName: 'Carlos Silva',
+    technicianId: 'u5',
+    technicianName: 'Marcelo Ramos',
     status: 'IN_PROGRESS',
     scheduledDate: '2026-08-15T10:00:00Z',
     startedAt: '2026-08-15T10:15:00Z',
@@ -674,29 +459,29 @@ export const INITIAL_SERVICE_ORDERS: ServiceOrder[] = [
 export const INITIAL_ORDERS: ServiceOrder[] = INITIAL_SERVICE_ORDERS;
 
 export const INITIAL_MOVEMENTS: FinancialMovement[] = [
-  // Exemplo da Priscila das Planilhas: Desconto / Vale de R$ 200,00
+  // Desconto / Vale de R$ 200,00 (Rafael Albuquerque - u4)
   {
-    id: 'mov-vale-priscila-01',
+    id: 'mov-vale-u4-01',
     type: 'ADVANCE_VALE',
     category: 'Adiantamento / Vale Quinzenal',
     description: 'Adiantamento de Vale quinzenal solicitado via WhatsApp',
-    amount: 200.0, // R$ 200,00 de desconto
+    amount: 200.0,
     status: 'CONFIRMED',
-    technicianId: 'tech-priscila',
-    technicianName: 'Priscila',
+    technicianId: 'u4',
+    technicianName: 'Rafael Albuquerque',
     paymentMethod: 'PIX',
     date: '2026-08-08T11:00:00Z',
   },
-  // Vale Carlos Silva
+  // Vale Carlos Henrique Silva (u1)
   {
-    id: 'mov-vale-carlos-01',
+    id: 'mov-vale-u1-01',
     type: 'ADVANCE_VALE',
     category: 'Adiantamento / Vale Quinzenal',
     description: 'Vale combustível emergencial',
     amount: 150.0,
     status: 'CONFIRMED',
-    technicianId: 'tech-carlos-silva',
-    technicianName: 'Carlos Silva',
+    technicianId: 'u1',
+    technicianName: 'Carlos Henrique Silva',
     paymentMethod: 'PIX',
     date: '2026-08-07T15:30:00Z',
   },
