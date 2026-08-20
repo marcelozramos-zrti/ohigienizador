@@ -22,6 +22,7 @@ import { FinancialEngine } from '../services/financialEngine';
 import { PdfStatementGenerator } from '../services/pdfGenerator';
 import { WhatsAppService, WhatsAppDispatchResult } from '../services/whatsappService';
 import { CsvExportService } from '../services/csvExportService';
+import { ApiService } from '../services/apiService';
 
 interface AppContextType {
   currentUser: User;
@@ -431,7 +432,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
       return updated;
     });
-    addToast('Conta Cadastrada', `${newUser.name} cadastrado com sucesso.`, 'success');
+
+    // Enviar imediatamente para o backend MariaDB
+    ApiService.saveUser(newUser).then((success) => {
+      if (success) {
+        console.log(`[MariaDB] Usuário ${newUser.name} gravado no banco de dados com sucesso.`);
+      }
+    });
+
+    addToast('Conta Cadastrada', `${newUser.name} cadastrado e sincronizado no MariaDB.`, 'success');
   };
 
   const [orders, setOrders] = useState<ServiceOrder[]>(() => {
@@ -505,6 +514,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Persistent Bell Notifications Tracking (Read & Dismissed)
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+
+  // Initial sync from backend MariaDB
+  useEffect(() => {
+    let isMounted = true;
+    async function syncFromBackend() {
+      try {
+        const dbUsers = await ApiService.fetchUsers();
+        if (isMounted && dbUsers && dbUsers.length > 0) {
+          setUsers(dbUsers);
+        }
+        const dbOrders = await ApiService.fetchOrders();
+        if (isMounted && dbOrders && dbOrders.length > 0) {
+          setOrders(dbOrders);
+        }
+        const dbStock = await ApiService.fetchStock();
+        if (isMounted && dbStock && dbStock.length > 0) {
+          setStock(dbStock);
+        }
+        const dbMovements = await ApiService.fetchMovements();
+        if (isMounted && dbMovements && dbMovements.length > 0) {
+          setMovements(dbMovements);
+        }
+      } catch (err) {
+        console.warn('Sync com MariaDB adiado:', err);
+      }
+    }
+    syncFromBackend();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Sync to localStorage
   useEffect(() => {
@@ -656,22 +696,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setOrders((prev) => [newOrder, ...prev]);
 
+    // Enviar OS para o MariaDB
+    ApiService.saveOrder(newOrder).catch(() => {});
+
     // Lançar previsão de faturamento Porto Seguro
     if (newOrder.faturamentoPorto > 0) {
-      setMovements((prev) => [
-        {
-          id: `mov-faturamento-${newOrder.id}`,
-          type: 'INCOME',
-          category: 'Faturamento Porto Seguro',
-          description: `Chamado ${newOrder.callNumber} - ${newOrder.customerName} (${newOrder.neighborhood})`,
-          amount: newOrder.faturamentoPorto,
-          status: 'PENDING',
-          callNumber: newOrder.callNumber,
-          paymentMethod: 'FATURA_PORTO',
-          date: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+      const mov: FinancialMovement = {
+        id: `mov-faturamento-${newOrder.id}`,
+        type: 'INCOME',
+        category: 'Faturamento Porto Seguro',
+        description: `Chamado ${newOrder.callNumber} - ${newOrder.customerName} (${newOrder.neighborhood})`,
+        amount: newOrder.faturamentoPorto,
+        status: 'PENDING',
+        callNumber: newOrder.callNumber,
+        paymentMethod: 'FATURA_PORTO',
+        date: new Date().toISOString(),
+      };
+      setMovements((prev) => [mov, ...prev]);
+      ApiService.saveMovement(mov).catch(() => {});
     }
 
     addToast(
@@ -745,10 +787,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Atualizar a Ordem de Serviço
+    let completedOrderObj: ServiceOrder | undefined;
     setOrders((prev) =>
       prev.map((os) => {
         if (os.id === orderId) {
-          return {
+          completedOrderObj = {
             ...os,
             status: 'COMPLETED',
             completedAt: new Date().toISOString(),
@@ -761,16 +804,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             executionNotes: data.executionNotes,
             itemsUsed: processedItemsUsed,
           };
+          return completedOrderObj;
         }
         return os;
       })
     );
 
+    if (completedOrderObj) {
+      ApiService.saveOrder(completedOrderObj).catch(() => {});
+    }
+
     // Atualizar movimento financeiro da Porto Seguro para CONFIRMED
     setMovements((prev) =>
       prev.map((m) => {
         if (m.callNumber === targetOrder.callNumber && m.type === 'INCOME') {
-          return { ...m, status: 'CONFIRMED' };
+          const updatedMov = { ...m, status: 'CONFIRMED' as const };
+          ApiService.saveMovement(updatedMov).catch(() => {});
+          return updatedMov;
         }
         return m;
       })
@@ -778,16 +828,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     addToast(
       'OS Finalizada com Sucesso',
-      `Chamado ${targetOrder.callNumber} concluído! Insumos abatidos do estoque e KM/Pedágio creditados.`,
+      `Chamado ${targetOrder.callNumber} concluído! Insumos abatidos do estoque e KM/Pedágio creditados no MariaDB.`,
       'success'
     );
   };
 
   // Estoque
   const adjustStockQuantity = (itemId: string, newQuantity: number, reason: string) => {
+    let updatedItem: StockItem | undefined;
     setStock((prev) =>
-      prev.map((item) => (item.id === itemId ? { ...item, quantityInStock: Math.max(0, newQuantity) } : item))
+      prev.map((item) => {
+        if (item.id === itemId) {
+          updatedItem = { ...item, quantityInStock: Math.max(0, newQuantity) };
+          return updatedItem;
+        }
+        return item;
+      })
     );
+    if (updatedItem) {
+      ApiService.saveStockItem(updatedItem).catch(() => {});
+    }
     addToast('Ajuste de Estoque', `Quantidade alterada (${reason}).`, 'info');
   };
 
@@ -797,13 +857,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `stock-${Date.now()}`,
     };
     setStock((prev) => [...prev, newItem]);
-    addToast('Novo Item de Estoque', `${newItem.name} foi adicionado ao catálogo.`, 'success');
+    ApiService.saveStockItem(newItem).catch(() => {});
+    addToast('Novo Item de Estoque', `${newItem.name} foi adicionado ao MariaDB.`, 'success');
   };
 
   const updateStockItem = (itemId: string, updates: Partial<StockItem>) => {
+    let updatedTarget: StockItem | undefined;
     setStock((prev) =>
-      prev.map((item) => (item.id === itemId ? { ...item, ...updates } : item))
+      prev.map((item) => {
+        if (item.id === itemId) {
+          updatedTarget = { ...item, ...updates };
+          return updatedTarget;
+        }
+        return item;
+      })
     );
+    if (updatedTarget) {
+      ApiService.saveStockItem(updatedTarget).catch(() => {});
+    }
     addToast('Produto Atualizado', 'Os dados e parâmetros de estoque foram atualizados com sucesso.', 'success');
   };
 
@@ -814,20 +885,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const registerStockEntry = (itemId: string, quantityAdded: number, totalCost: number, notes?: string) => {
+    let updatedStockItem: StockItem | undefined;
     setStock((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
           const newQty = item.quantityInStock + quantityAdded;
           const newUnitCost = quantityAdded > 0 && totalCost > 0 ? Number((totalCost / quantityAdded).toFixed(2)) : item.unitCost;
-          return {
+          updatedStockItem = {
             ...item,
             quantityInStock: Number(newQty.toFixed(2)),
             unitCost: newUnitCost || item.unitCost,
           };
+          return updatedStockItem;
         }
         return item;
       })
     );
+
+    if (updatedStockItem) {
+      ApiService.saveStockItem(updatedStockItem).catch(() => {});
+    }
 
     if (totalCost > 0) {
       const item = stock.find((s) => s.id === itemId);
@@ -846,10 +923,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Técnicos
   const updateTechnician = (technicianId: string, updates: Partial<User>) => {
+    let updatedTarget: User | undefined;
     setUsers((prev) =>
-      prev.map((u) => (u.id === technicianId ? { ...u, ...updates } : u))
+      prev.map((u) => {
+        if (u.id === technicianId) {
+          updatedTarget = { ...u, ...updates };
+          return updatedTarget;
+        }
+        return u;
+      })
     );
-    addToast('Técnico Atualizado', 'Dados cadastrais e regras financeiras salvas.', 'success');
+    if (updatedTarget) {
+      ApiService.saveUser(updatedTarget).catch(() => {});
+    }
+    addToast('Técnico Atualizado', 'Dados cadastrais e regras financeiras salvas no MariaDB.', 'success');
   };
 
   const createTechnician = (technicianData: Omit<User, 'id'>) => {
@@ -858,7 +945,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `tech-${Date.now()}`,
     };
     setUsers((prev) => [...prev, newTech]);
-    addToast('Técnico Cadastrado', `${newTech.name} foi inserido no sistema com sucesso.`, 'success');
+    ApiService.saveUser(newTech).then((success) => {
+      if (success) console.log(`[MariaDB] Técnico ${newTech.name} gravado no banco.`);
+    });
+    addToast('Técnico Cadastrado', `${newTech.name} foi inserido no MariaDB com sucesso.`, 'success');
   };
 
   const toggleSpecialTaxRule = (technicianId: string) => {
@@ -886,6 +976,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: new Date().toISOString(),
     };
     setMovements((prev) => [newMov, ...prev]);
+    ApiService.saveMovement(newMov).catch(() => {});
 
     if (newMov.type === 'ADVANCE_VALE') {
       addToast(

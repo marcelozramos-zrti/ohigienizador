@@ -205,3 +205,27 @@ CREATE TABLE IF NOT EXISTS `general_settings` (
     `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================================
+-- CARGA INICIAL DE USUÁRIOS E TÉCNICOS NO MARIADB
+-- =========================================================================
+INSERT INTO `users` (
+    `id`, `name`, `email`, `passwordHash`, `role`, `documentCpf`, `phone`,
+    `isActive`, `pixKeyType`, `pixKey`, `bankName`, `bankAgency`, `bankAccount`,
+    `baseCostAllowance`, `hasSpecialTaxRule`, `specialTaxRate`
+) VALUES
+('admin1', 'Gestor Master Porto', 'gestor@ohigienizador.com.br', 'Porto@2026', 'ADMIN', '123.456.789-00', '11988887777', 1, 'EMAIL', 'gestor@ohigienizador.com.br', 'Banco Itaú', '0450', '19842-1', 0.00, 0, 0.00),
+('u1', 'Carlos Henrique Silva', 'carlos.silva@ohigienizador.com.br', 'Porto@2026', 'TECHNICIAN', '234.567.890-11', '11977776666', 1, 'CPF', '234.567.890-11', 'Banco Bradesco', '1820', '33410-2', 250.00, 0, 0.00),
+('u2', 'Lucas Eduardo Rocha', 'lucas.rocha@ohigienizador.com.br', 'Porto@2026', 'TECHNICIAN', '345.678.901-22', '11966665555', 1, 'EMAIL', 'lucas.rocha@ohigienizador.com.br', 'Nubank (0260)', '0001', '4589211-0', 250.00, 0, 0.00),
+('u3', 'Marcos Vinícius Santos', 'marcos.santos@ohigienizador.com.br', 'Porto@2026', 'TECHNICIAN', '456.789.012-33', '11955554444', 1, 'PHONE', '11955554444', 'Banco Santander', '2109', '55401-9', 250.00, 0, 0.00),
+('u4', 'Rafael Albuquerque', 'rafael.albuquerque@ohigienizador.com.br', 'Porto@2026', 'TECHNICIAN', '567.890.123-44', '11944443333', 1, 'CPF', '567.890.123-44', 'Caixa Econômica', '0231', '11200-8', 250.00, 1, 16.00),
+('u5', 'Marcelo Ramos', 'zrticonsultoria@gmail.com', 'Porto@2026', 'TECHNICIAN', '16157696842', '11942080165', 1, 'CPF', '16157696842', 'Banco Itaú', '0001', '00000-0', 250.00, 0, 0.00)
+ON DUPLICATE KEY UPDATE
+    `name` = VALUES(`name`),
+    `phone` = VALUES(`phone`),
+    `pixKey` = VALUES(`pixKey`),
+    `bankName` = VALUES(`bankName`),
+    `baseCostAllowance` = VALUES(`baseCostAllowance`),
+    `hasSpecialTaxRule` = VALUES(`hasSpecialTaxRule`),
+    `specialTaxRate` = VALUES(`specialTaxRate`);
+
