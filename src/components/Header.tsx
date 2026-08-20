@@ -28,6 +28,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
+  onNavigateTab,
   onToggleMobileMenu,
   onOpenNewOrder,
 }) => {
@@ -226,39 +227,75 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showNotifs && (
-              <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in">
+              <div className="absolute right-0 mt-2 w-88 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
-                  <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                    Notificações
-                  </span>
-                  <button
-                    onClick={clearNotifications}
-                    className="text-[10px] text-cyan-600 hover:underline font-bold cursor-pointer"
-                  >
-                    Limpar todas
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      Notificações Pendentes
+                    </span>
+                    {safeNotifications.length > 0 && (
+                      <span className="px-1.5 py-0.5 bg-[#003366] text-white text-[10px] font-bold rounded-full">
+                        {safeNotifications.length}
+                      </span>
+                    )}
+                  </div>
+                  {safeNotifications.length > 0 && (
+                    <button
+                      onClick={clearNotifications}
+                      className="text-[10px] text-slate-500 hover:text-cyan-600 hover:underline font-bold cursor-pointer"
+                    >
+                      Limpar visualização
+                    </button>
+                  )}
                 </div>
-                <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+                <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
                   {safeNotifications.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-xs text-slate-400">
-                      Nenhuma notificação no momento.
+                    <div className="px-4 py-8 text-center text-xs text-slate-400">
+                      <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto mb-1.5 opacity-80" />
+                      Tudo em ordem! Nenhuma pendência de estoque ou fechamento.
                     </div>
                   ) : (
-                    safeNotifications.map((n) => (
-                      <div
-                        key={n.id}
-                        onClick={() => markNotificationRead(n.id)}
-                        className={`px-4 py-3 hover:bg-slate-50 cursor-pointer transition-colors ${
-                          !n.read ? 'bg-cyan-50/40' : ''
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <h4 className="text-xs font-bold text-slate-900">{n.title}</h4>
-                          <span className="text-[10px] text-slate-400">{n.timestamp}</span>
+                    safeNotifications.map((n) => {
+                      const isCrit = n.type === 'error' || n.category === 'STOCK_CRITICAL';
+                      const isWarn = n.type === 'warning' || n.category === 'STOCK_WARNING';
+                      const isClose = n.category === 'CLOSING';
+
+                      return (
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            markNotificationRead(n.id);
+                            if (n.targetTab && onNavigateTab) {
+                              onNavigateTab(n.targetTab);
+                              setShowNotifs(false);
+                            }
+                          }}
+                          className={`px-4 py-3 hover:bg-slate-50 cursor-pointer transition-colors ${
+                            !n.read ? (isCrit ? 'bg-red-50/50' : isWarn ? 'bg-amber-50/50' : 'bg-cyan-50/40') : ''
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isCrit ? 'bg-red-500' : isWarn ? 'bg-amber-500' : 'bg-cyan-500'
+                                }`}
+                              />
+                              <h4 className="text-xs font-bold text-slate-900 leading-snug">{n.title}</h4>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-medium shrink-0">{n.timestamp}</span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1 pl-3.5 leading-relaxed">{n.message}</p>
+                          {n.targetTab && (
+                            <div className="mt-1.5 pl-3.5 flex items-center text-[10px] text-cyan-700 font-bold hover:underline">
+                              <span>
+                                {n.targetTab === 'stock' ? '→ Abrir Estoque & Editar Insumo' : '→ Acessar Fechamento Financeiro'}
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        <p className="text-xs text-slate-600 mt-0.5">{n.message}</p>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

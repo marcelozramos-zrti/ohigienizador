@@ -18,8 +18,8 @@ const MainLayout: React.FC = () => {
   const {
     activeTab = 'dashboard',
     setActiveTab,
-    notifications = [],
-    markNotificationRead,
+    toasts = [],
+    removeToast,
     isAuthenticated,
   } = useApp();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
@@ -31,7 +31,7 @@ const MainLayout: React.FC = () => {
     return <LoginView />;
   }
 
-  const safeNotifications = notifications || [];
+  const safeToasts = toasts || [];
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 font-sans antialiased">
@@ -95,36 +95,43 @@ const MainLayout: React.FC = () => {
         <NewServiceOrderModal onClose={() => setShowNewOrderModal(false)} />
       )}
 
-      {/* Global Toast Notifications Container */}
+      {/* Global Toast Notifications Container (Floating dismissable alerts) */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 max-w-md w-full pointer-events-none">
-        {safeNotifications.slice(0, 3).map((notif) => {
+        {safeToasts.slice(-3).map((toast) => {
           const bg =
-            notif.type === 'success'
+            toast.type === 'success'
               ? 'bg-[#003366] text-white border border-[#004080]'
-              : notif.type === 'error'
+              : toast.type === 'error'
               ? 'bg-red-900 text-white border border-red-700'
+              : toast.type === 'warning'
+              ? 'bg-amber-900 text-white border border-amber-700'
               : 'bg-slate-900 text-white border border-slate-700';
 
           const Icon =
-            notif.type === 'success'
+            toast.type === 'success'
               ? CheckCircle2
-              : notif.type === 'error'
+              : toast.type === 'error'
               ? AlertCircle
               : Info;
 
           return (
             <div
-              key={notif.id}
+              key={toast.id}
               className={`p-3.5 rounded-xl shadow-xl backdrop-blur-md pointer-events-auto flex items-start space-x-3 transition-all animate-in slide-in-from-bottom-2 ${bg}`}
             >
               <Icon className="h-4 w-4 shrink-0 mt-0.5 text-cyan-300" />
               <div className="flex-1 text-xs">
-                <strong className="font-bold block text-xs">{notif.title}</strong>
-                <p className="mt-0.5 opacity-90 text-[11px]">{notif.message}</p>
+                <strong className="font-bold block text-xs">{toast.title}</strong>
+                <p className="mt-0.5 opacity-90 text-[11px]">{toast.message}</p>
               </div>
               <button
-                onClick={() => markNotificationRead(notif.id)}
-                className="opacity-70 hover:opacity-100 text-white cursor-pointer"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeToast(toast.id);
+                }}
+                className="opacity-70 hover:opacity-100 text-white cursor-pointer p-0.5 rounded hover:bg-white/10 transition-colors"
+                title="Fechar notificação"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

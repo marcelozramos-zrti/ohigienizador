@@ -211,6 +211,22 @@ export interface BiweeklyClosing {
   technicianSummaries: TechnicianClosingSummary[];
 }
 
+export interface DatabaseSettings {
+  dbEngine: 'MARIADB' | 'MYSQL';
+  dbHost: string;
+  dbPort: number;
+  dbName: string;
+  dbUser: string;
+  dbPassword?: string;
+  dbSsl: boolean;
+  dbPoolMin: number;
+  dbPoolMax: number;
+  connectionStringMasked: string;
+  syncStatus: 'CONNECTED' | 'DISCONNECTED' | 'SYNCHRONIZING' | 'LOCAL_FALLBACK';
+  lastPingMs?: number;
+  lastSyncTimestamp?: string;
+}
+
 export interface GeneralSettings {
   companyName: string;
   companyCnpj: string;
@@ -228,4 +244,24 @@ export interface GeneralSettings {
   whatsappTemplateMessage: string;
   autoStockDeduction: boolean;
   serviceCategoriesRates: Record<string, number>;
+  databaseSettings?: DatabaseSettings;
+}
+
+export interface ToastItem {
+  id: string;
+  title: string;
+  message: string;
+  type: 'success' | 'info' | 'warning' | 'error';
+}
+
+export interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  type: 'success' | 'info' | 'warning' | 'error';
+  timestamp: string;
+  read: boolean;
+  targetTab?: string;
+  category?: 'STOCK_CRITICAL' | 'STOCK_WARNING' | 'CLOSING' | 'ORDERS' | 'SYSTEM';
+  itemId?: string;
 }

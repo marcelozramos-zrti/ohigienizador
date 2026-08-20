@@ -10,24 +10,58 @@ import {
   Layers,
   CheckCircle2,
   X,
+  Edit2,
+  Plus,
+  Trash2,
+  AlertCircle,
+  Sliders,
+  DollarSign,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { StockItem } from '../types';
 
 export const InventoryView: React.FC = () => {
-  const { stock = [], registerStockEntry, currentUser, addToast } = useApp();
+  const {
+    stock = [],
+    registerStockEntry,
+    updateStockItem,
+    createStockItem,
+    deleteStockItem,
+    currentUser,
+    addToast,
+  } = useApp();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
 
   const safeStock = stock || [];
   const safeUser = currentUser || { role: 'ADMIN', name: 'Admin' };
 
+  // Modals state
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedStockItem, setSelectedStockItem] = useState<StockItem | null>(null);
+
+  // Form states for Edit / Create
+  const [formData, setFormData] = useState({
+    code: '',
+    sku: '',
+    name: '',
+    category: 'Químicos / Limpeza',
+    unit: 'Litros',
+    quantityInStock: 0,
+    minimumThreshold: 5,
+    unitCost: 0,
+    isSupportSupply: true,
+    description: '',
+  });
+
+  // Restock form
   const [restockQty, setRestockQty] = useState<number>(10);
   const [restockCost, setRestockCost] = useState<number>(0);
   const [restockNotes, setRestockNotes] = useState<string>(
-    'Entrada de reposição mensal de insumos'
+    'Entrada de reposição de insumos operacionais'
   );
 
   const categories = Array.from(
@@ -44,14 +78,96 @@ export const InventoryView: React.FC = () => {
     return matchesSearch && matchesCat;
   });
 
+  // Open Edit Modal
+  const handleOpenEdit = (item: StockItem) => {
+    setSelectedStockItem(item);
+    setFormData({
+      code: item.code || item.sku || '',
+      sku: item.sku || item.code || '',
+      name: item.name || '',
+      category: item.category || 'Químicos / Limpeza',
+      unit: item.unit || 'Unidades',
+      quantityInStock: Number(item.quantityInStock || 0),
+      minimumThreshold: Number(item.minimumThreshold || 0),
+      unitCost: Number(item.unitCost || 0),
+      isSupportSupply: Boolean(item.isSupportSupply),
+      description: item.description || '',
+    });
+    setIsEditModalOpen(true);
+  };
+
+  // Open Create Modal
+  const handleOpenCreate = () => {
+    setSelectedStockItem(null);
+    setFormData({
+      code: `INS-${String(safeStock.length + 1).padStart(3, '0')}`,
+      sku: `INS-${String(safeStock.length + 1).padStart(3, '0')}`,
+      name: '',
+      category: 'Químicos / Limpeza',
+      unit: 'Unidades',
+      quantityInStock: 20,
+      minimumThreshold: 10,
+      unitCost: 35.0,
+      isSupportSupply: true,
+      description: '',
+    });
+    setIsCreateModalOpen(true);
+  };
+
+  // Save Edit
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedStockItem) return;
+
+    updateStockItem(selectedStockItem.id, {
+      code: formData.code.trim().toUpperCase(),
+      sku: formData.sku.trim().toUpperCase() || formData.code.trim().toUpperCase(),
+      name: formData.name.trim(),
+      category: formData.category,
+      unit: formData.unit.trim(),
+      quantityInStock: Number(formData.quantityInStock),
+      minimumThreshold: Number(formData.minimumThreshold),
+      unitCost: Number(formData.unitCost),
+      isSupportSupply: formData.isSupportSupply,
+      description: formData.description,
+    });
+
+    setIsEditModalOpen(false);
+    setSelectedStockItem(null);
+  };
+
+  // Save Create
+  const handleSaveCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) return;
+
+    createStockItem({
+      code: formData.code.trim().toUpperCase(),
+      sku: formData.sku.trim().toUpperCase() || formData.code.trim().toUpperCase(),
+      name: formData.name.trim(),
+      category: formData.category,
+      unit: formData.unit.trim(),
+      quantityInStock: Number(formData.quantityInStock),
+      minimumThreshold: Number(formData.minimumThreshold),
+      unitCost: Number(formData.unitCost),
+      isSupportSupply: formData.isSupportSupply,
+      description: formData.description,
+    });
+
+    setIsCreateModalOpen(false);
+  };
+
+  // Restock Open
   const handleOpenRestock = (item?: StockItem) => {
     const target = item || safeStock[0];
     if (!target) return;
     setSelectedStockItem(target);
     setRestockCost((target.unitCost || 25) * 10);
+    setRestockQty(10);
     setIsRestockModalOpen(true);
   };
 
+  // Restock Confirm
   const handleConfirmRestock = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedStockItem || restockQty <= 0) return;
@@ -67,8 +183,13 @@ export const InventoryView: React.FC = () => {
     setSelectedStockItem(null);
   };
 
-  const lowStockCount = safeStock.filter(
-    (s) => s && s.quantityInStock <= s.minimumThreshold
+  // Stats
+  const criticalCount = safeStock.filter(
+    (s) => s && s.quantityInStock < s.minimumThreshold
+  ).length;
+
+  const warningCount = safeStock.filter(
+    (s) => s && s.quantityInStock === s.minimumThreshold
   ).length;
 
   const totalStockValue = safeStock.reduce(
@@ -78,63 +199,98 @@ export const InventoryView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header with Title & Action Buttons */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-[#003366] tracking-tight">
-            Controle de Estoque & Baixa Automática
+            Estoque & Insumos Operacionais
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gerencie insumos químicos, bactericidas, escovas e suportes. A cada OS finalizada pelo técnico no app, os itens são baixados automaticamente.
+            Cadastre, edite produtos e parâmetros de reposição. Alterações de quantidade e estoque mínimo refletem em tempo real no sino de notificações.
           </p>
         </div>
 
         {safeUser.role !== 'TECHNICIAN' && (
-          <button
-            id="btn-register-restock"
-            onClick={() => handleOpenRestock(safeStock[0])}
-            className="flex items-center space-x-1.5 px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer"
-          >
-            <PlusCircle className="h-4 w-4 text-cyan-400" />
-            <span>Registrar Entrada / Reposição</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              id="btn-register-new-stock-item"
+              onClick={handleOpenCreate}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-[#003366] border border-slate-300 text-xs font-bold rounded-lg shadow-xs transition-all cursor-pointer"
+            >
+              <Plus className="h-4 w-4 text-cyan-600" />
+              <span>+ Cadastrar Novo Insumo</span>
+            </button>
+
+            <button
+              id="btn-register-restock"
+              onClick={() => handleOpenRestock(safeStock[0])}
+              className="flex items-center space-x-1.5 px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer"
+            >
+              <PlusCircle className="h-4 w-4 text-cyan-400" />
+              <span>Registrar Entrada / Reposição</span>
+            </button>
+          </div>
         )}
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Total de Itens Cadastrados
+            Total de Insumos
           </p>
           <div className="flex items-end justify-between mt-1">
             <span className="text-2xl font-bold text-[#003366]">
               {safeStock.length}
             </span>
             <span className="text-xs text-slate-400 font-medium uppercase">
-              SKUs
+              SKUs Ativos
             </span>
           </div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Itens Abaixo do Mínimo
+            Abaixo do Mínimo
           </p>
           <div className="flex items-end justify-between mt-1">
             <span
               className={`text-2xl font-bold ${
-                lowStockCount > 0 ? 'text-red-500' : 'text-[#003366]'
+                criticalCount > 0 ? 'text-red-600' : 'text-[#003366]'
               }`}
             >
-              {lowStockCount}
+              {criticalCount}
             </span>
-            {lowStockCount > 0 ? (
-              <span className="text-[10px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-bold border border-red-100">
-                ALERTA
+            {criticalCount > 0 ? (
+              <span className="text-[10px] text-red-700 bg-red-50 px-2 py-0.5 rounded font-bold border border-red-200 animate-pulse">
+                CRÍTICO
               </span>
             ) : (
               <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-100">
+                0 PENDÊNCIAS
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+            No Limite Mínimo
+          </p>
+          <div className="flex items-end justify-between mt-1">
+            <span
+              className={`text-2xl font-bold ${
+                warningCount > 0 ? 'text-amber-600' : 'text-[#003366]'
+              }`}
+            >
+              {warningCount}
+            </span>
+            {warningCount > 0 ? (
+              <span className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-bold border border-amber-200">
+                ATENÇÃO
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded font-bold">
                 REGULAR
               </span>
             )}
@@ -143,10 +299,10 @@ export const InventoryView: React.FC = () => {
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Valor Total em Estoque
+            Valor em Estoque
           </p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-bold text-[#003366]">
+            <span className="text-xl font-bold text-[#003366]">
               R${' '}
               {totalStockValue.toLocaleString('pt-BR', {
                 minimumFractionDigits: 2,
@@ -197,7 +353,7 @@ export const InventoryView: React.FC = () => {
         </div>
       </div>
 
-      {/* Stock High Density Table */}
+      {/* Stock Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -206,7 +362,7 @@ export const InventoryView: React.FC = () => {
                 <th className="py-3 px-4">SKU / Código</th>
                 <th className="py-3 px-4">Produto & Categoria</th>
                 <th className="py-3 px-4">Qtd Atual</th>
-                <th className="py-3 px-4">Nível de Reposição</th>
+                <th className="py-3 px-4">Estoque Mínimo</th>
                 <th className="py-3 px-4">Custo Unitário</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4 text-right">Ações</th>
@@ -221,28 +377,34 @@ export const InventoryView: React.FC = () => {
                 </tr>
               ) : (
                 filteredStock.map((item) => {
-                  const isCritical =
-                    item.quantityInStock <= item.minimumThreshold;
+                  const isCrit = item.quantityInStock < item.minimumThreshold;
+                  const isWarn = item.quantityInStock === item.minimumThreshold;
+                  const isNormal = item.quantityInStock > item.minimumThreshold;
+
                   const ratio = Math.min(
                     100,
                     Math.round(
-                      (item.quantityInStock / (item.minimumThreshold * 3 || 1)) *
-                        100
+                      (item.quantityInStock / (item.minimumThreshold * 2 || 1)) * 100
                     )
                   );
 
                   return (
                     <tr
                       key={item.id}
-                      className="hover:bg-slate-50/70 transition-colors"
+                      className="hover:bg-slate-50/80 transition-colors"
                     >
                       <td className="py-3.5 px-4 font-mono font-bold text-[#003366]">
                         {item.sku || item.code}
                       </td>
 
                       <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900">
-                          {item.name}
+                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <span>{item.name}</span>
+                          {item.isSupportSupply && (
+                            <span className="px-1.5 py-0.2 bg-cyan-50 text-cyan-700 text-[9px] font-bold rounded border border-cyan-100">
+                              OS
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">
                           {item.category}
@@ -256,29 +418,25 @@ export const InventoryView: React.FC = () => {
                             {item.unit}
                           </span>
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          Mínimo: {item.minimumThreshold} {item.unit}
+                        <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              isCrit
+                                ? 'bg-red-500'
+                                : isWarn
+                                ? 'bg-amber-500'
+                                : 'bg-emerald-500'
+                            }`}
+                            style={{ width: `${Math.max(10, ratio)}%` }}
+                          />
                         </div>
                       </td>
 
-                      {/* Reposition Level Bar */}
-                      <td className="py-3.5 px-4 min-w-[140px]">
-                        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 mb-1">
-                          <span>Nível</span>
-                          <span>{ratio}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${
-                              isCritical
-                                ? 'bg-red-500'
-                                : ratio > 60
-                                ? 'bg-emerald-500'
-                                : 'bg-cyan-500'
-                            }`}
-                            style={{ width: `${Math.max(8, ratio)}%` }}
-                          />
-                        </div>
+                      <td className="py-3.5 px-4">
+                        <span className="font-bold text-slate-700">
+                          {item.minimumThreshold}
+                        </span>{' '}
+                        <span className="text-slate-400">{item.unit}</span>
                       </td>
 
                       <td className="py-3.5 px-4 font-mono font-semibold text-slate-700">
@@ -289,27 +447,46 @@ export const InventoryView: React.FC = () => {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        {isCritical ? (
-                          <span className="inline-flex items-center px-2 py-0.5 bg-red-100 text-red-800 rounded-full font-bold text-[9px] uppercase tracking-wider">
+                        {isCrit ? (
+                          <span className="inline-flex items-center px-2 py-0.5 bg-red-100 text-red-800 rounded-full font-bold text-[9px] uppercase tracking-wider border border-red-200">
                             <AlertTriangle className="w-3 h-3 mr-1" />
-                            CRÍTICO
+                            CRÍTICO (&lt; MÍNIMO)
+                          </span>
+                        ) : isWarn ? (
+                          <span className="inline-flex items-center px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full font-bold text-[9px] uppercase tracking-wider border border-amber-200">
+                            <AlertCircle className="w-3 h-3 mr-1" />
+                            ATENÇÃO (= MÍNIMO)
                           </span>
                         ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[9px] uppercase tracking-wider">
+                          <span className="inline-flex items-center px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[9px] uppercase tracking-wider border border-emerald-200">
                             <CheckCircle2 className="w-3 h-3 mr-1" />
-                            NORMAL
+                            NORMAL (&gt; MÍNIMO)
                           </span>
                         )}
                       </td>
 
                       <td className="py-3.5 px-4 text-right">
                         {safeUser.role !== 'TECHNICIAN' && (
-                          <button
-                            onClick={() => handleOpenRestock(item)}
-                            className="px-2.5 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 text-[11px] font-bold rounded border border-cyan-200 transition-colors cursor-pointer"
-                          >
-                            + Repor
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              id={`btn-edit-stock-${item.id}`}
+                              onClick={() => handleOpenEdit(item)}
+                              title="Editar dados, código, quantidade e custos do produto"
+                              className="p-1.5 bg-slate-100 hover:bg-cyan-50 text-slate-600 hover:text-cyan-700 rounded-lg border border-slate-200 hover:border-cyan-200 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-bold"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Editar</span>
+                            </button>
+
+                            <button
+                              id={`btn-repor-stock-${item.id}`}
+                              onClick={() => handleOpenRestock(item)}
+                              title="Registrar entrada de reposição"
+                              className="px-2.5 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white text-[11px] font-bold rounded-lg shadow-xs transition-colors cursor-pointer"
+                            >
+                              + Repor
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -321,7 +498,388 @@ export const InventoryView: React.FC = () => {
         </div>
       </div>
 
-      {/* Restock Modal */}
+      {/* Edit Product Modal */}
+      {isEditModalOpen && selectedStockItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#003366] text-white flex items-center justify-center font-bold">
+                  <Edit2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Editar Insumo / Produto
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {selectedStockItem.name} ({selectedStockItem.sku || selectedStockItem.code})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsEditModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="mt-4 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Código / SKU:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.code}
+                    onChange={(e) => setFormData({ ...formData, code: e.target.value, sku: e.target.value })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Categoria:
+                  </label>
+                  <select
+                    value={formData.category}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium"
+                  >
+                    <option value="Químicos / Limpeza">Químicos / Limpeza</option>
+                    <option value="Impermeabilizantes">Impermeabilizantes</option>
+                    <option value="Suportes / Acessórios">Suportes / Acessórios</option>
+                    <option value="Equipamentos">Equipamentos & Máquinas</option>
+                    <option value="Outros Insumos">Outros Insumos</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                  Nome do Produto / Descrição:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Ex: Químico Flotador Alcalino 5L"
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Qtd em Estoque:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={formData.quantityInStock}
+                    onChange={(e) => setFormData({ ...formData, quantityInStock: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Estoque Mínimo:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={formData.minimumThreshold}
+                    onChange={(e) => setFormData({ ...formData, minimumThreshold: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-amber-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Unidade:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                    placeholder="Litros / un"
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Custo Unitário Médio (R$):
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    value={formData.unitCost}
+                    onChange={(e) => setFormData({ ...formData, unitCost: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <label className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-100">
+                    <input
+                      type="checkbox"
+                      checked={formData.isSupportSupply}
+                      onChange={(e) => setFormData({ ...formData, isSupportSupply: e.target.checked })}
+                      className="rounded text-[#003366] focus:ring-cyan-500 h-4 w-4"
+                    />
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Abater direto em OS
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Status Preview */}
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Impacto na Notificação:</span>
+                  <div className="text-xs font-bold text-slate-800 mt-0.5">
+                    {formData.quantityInStock < formData.minimumThreshold ? (
+                      <span className="text-red-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Gerará alerta de Estoque Crítico no Sino
+                      </span>
+                    ) : formData.quantityInStock === formData.minimumThreshold ? (
+                      <span className="text-amber-600 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        Gerará sinalização de Atenção (Limite Mínimo)
+                      </span>
+                    ) : (
+                      <span className="text-emerald-600 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Estoque Normal (Sem pendência no Sino)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Deseja realmente remover o produto ${selectedStockItem.name}?`)) {
+                      deleteStockItem(selectedStockItem.id);
+                      setIsEditModalOpen(false);
+                    }
+                  }}
+                  className="px-3 py-2 text-red-600 hover:bg-red-50 font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Excluir</span>
+                </button>
+
+                <div className="flex space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg shadow-sm cursor-pointer"
+                  >
+                    Salvar Alterações
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create New Product Modal */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold">
+                  <Plus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Cadastrar Novo Insumo / Produto
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Defina SKU, estoque mínimo e regras de baixa em OS
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCreateModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCreate} className="mt-4 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Código / SKU:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.code}
+                    onChange={(e) => setFormData({ ...formData, code: e.target.value, sku: e.target.value })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Categoria:
+                  </label>
+                  <select
+                    value={formData.category}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium"
+                  >
+                    <option value="Químicos / Limpeza">Químicos / Limpeza</option>
+                    <option value="Impermeabilizantes">Impermeabilizantes</option>
+                    <option value="Suportes / Acessórios">Suportes / Acessórios</option>
+                    <option value="Equipamentos">Equipamentos & Máquinas</option>
+                    <option value="Outros Insumos">Outros Insumos</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                  Nome do Produto:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Ex: Neutralizador de Odores 5L"
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Quantidade Inicial:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={formData.quantityInStock}
+                    onChange={(e) => setFormData({ ...formData, quantityInStock: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Estoque Mínimo:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={formData.minimumThreshold}
+                    onChange={(e) => setFormData({ ...formData, minimumThreshold: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-amber-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Unidade:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                    placeholder="Litros / un"
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Custo Unitário (R$):
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    value={formData.unitCost}
+                    onChange={(e) => setFormData({ ...formData, unitCost: Number(e.target.value) })}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <label className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-100">
+                    <input
+                      type="checkbox"
+                      checked={formData.isSupportSupply}
+                      onChange={(e) => setFormData({ ...formData, isSupportSupply: e.target.checked })}
+                      className="rounded text-[#003366] focus:ring-cyan-500 h-4 w-4"
+                    />
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Disponibilizar na OS móvel
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCreateModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg shadow-sm cursor-pointer"
+                >
+                  Cadastrar Produto
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Restock Entry Modal */}
       {isRestockModalOpen && selectedStockItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in zoom-in-95">
@@ -332,7 +890,7 @@ export const InventoryView: React.FC = () => {
               </h3>
               <button
                 onClick={() => setIsRestockModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -387,13 +945,13 @@ export const InventoryView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsRestockModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg shadow-sm"
+                  className="px-4 py-2 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg shadow-sm cursor-pointer"
                 >
                   Confirmar Entrada
                 </button>

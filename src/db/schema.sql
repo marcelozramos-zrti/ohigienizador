@@ -1,10 +1,11 @@
 -- =========================================================================
--- BANCO DE DADOS: MariaDB 10.11+ / MySQL 8.0+
--- PROJETO: Sistema Higienizador - Gestão SaaS de OS (Porto Seguro) e Finanças
+-- BANCO DE DADOS: MariaDB 10.11+ / MySQL 8.0+ (Servidor brsaolxdb01 / 192.168.15.246)
+-- BASE: higienizador_db
+-- PROJETO: Sistema Higienizador - Gestão de OS (Porto Seguro), Estoque e Repasses
 -- =========================================================================
 
-CREATE DATABASE IF NOT EXISTS `sistema_higienizador` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE `sistema_higienizador`;
+CREATE DATABASE IF NOT EXISTS `higienizador_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE `higienizador_db`;
 
 -- 1. TABELA DE USUÁRIOS E TÉCNICOS
 CREATE TABLE IF NOT EXISTS `users` (
@@ -91,8 +92,8 @@ CREATE TABLE IF NOT EXISTS `stock_items` (
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- TABELA ASSOCIATIVA OS / ESTOQUE (Baixa Automática)
-CREATE TABLE IF NOT EXISTS `os_stock_items` (
+-- 3.1 TABELA ASSOCIATIVA OS / ESTOQUE (Baixa Automática)
+CREATE TABLE IF NOT EXISTS `os_stock_usage` (
     `id` VARCHAR(36) NOT NULL,
     `serviceOrderId` VARCHAR(36) NOT NULL,
     `stockItemId` VARCHAR(36) NOT NULL,

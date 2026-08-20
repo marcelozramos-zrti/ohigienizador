@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   User,
   ServiceOrder,
@@ -8,6 +8,8 @@ import {
   GeneralSettings,
   OSStockItemUsage,
   TechnicianClosingSummary,
+  ToastItem,
+  NotificationItem,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -21,15 +23,6 @@ import { PdfStatementGenerator } from '../services/pdfGenerator';
 import { WhatsAppService, WhatsAppDispatchResult } from '../services/whatsappService';
 import { CsvExportService } from '../services/csvExportService';
 
-interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  type: 'success' | 'info' | 'warning' | 'error';
-  timestamp: string;
-  read: boolean;
-}
-
 interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
@@ -40,10 +33,16 @@ interface AppContextType {
   movements: FinancialMovement[];
   settings: GeneralSettings;
   updateSettings: (newSettings: Partial<GeneralSettings>) => void;
+  
+  // Floating Toast Notifications (dismissable)
+  toasts: ToastItem[];
+  addToast: (title: string, message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  removeToast: (id: string) => void;
+
+  // Persistent Smart Bell Notifications (real business alerts)
   notifications: NotificationItem[];
   markNotificationRead: (id: string) => void;
   clearNotifications: () => void;
-  addToast: (title: string, message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
 
   // Authentication & Security
   isAuthenticated: boolean;
@@ -74,6 +73,8 @@ interface AppContextType {
   // Stock Management
   adjustStockQuantity: (itemId: string, newQuantity: number, reason: string) => void;
   createStockItem: (item: Omit<StockItem, 'id'>) => void;
+  updateStockItem: (itemId: string, updates: Partial<StockItem>) => void;
+  deleteStockItem: (itemId: string) => void;
   registerStockEntry: (itemId: string, quantityAdded: number, totalCost: number, notes?: string) => void;
 
   // Technician Management
@@ -161,7 +162,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem(STORAGE_KEYS.USERS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Merge initial system users (such as Marcelo Zanin, M. Ramos, Superadmin, etc.)
+          // so newly seeded admin/tech accounts are never lost even with old localStorage
+          const existingEmails = new Set(
+            parsed.map((u: User) => (u.email ? u.email.trim().toLowerCase() : ''))
+          );
+          const missingInitials = INITIAL_USERS.filter(
+            (u) => !existingEmails.has(u.email.trim().toLowerCase())
+          );
+          return [...parsed, ...missingInitials];
+        }
       }
       return INITIAL_USERS;
     } catch {
@@ -200,8 +211,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     password: string,
     mfaCode?: string
   ): Promise<{ success: boolean; requiresMfa?: boolean; user?: User; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-    const user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+    const cleanEmail = (email || '').trim().toLowerCase();
+    let user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+
+    // Failsafe: if user is not in state yet (e.g. from an unmerged initial list), check INITIAL_USERS
+    if (!user) {
+      const fallbackUser = INITIAL_USERS.find(
+        (u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail
+      );
+      if (fallbackUser) {
+        user = fallbackUser;
+        setUsers((prev) => [...prev, fallbackUser]);
+      }
+    }
 
     if (!user) {
       return { success: false, error: 'E-mail não cadastrado no sistema.' };
@@ -262,8 +284,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     email: string,
     mfaCode: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-    const user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+    const cleanEmail = (email || '').trim().toLowerCase();
+    let user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+    if (!user) {
+      user = INITIAL_USERS.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
+    }
     if (!user) {
       return { success: false, error: 'Usuário não encontrado.' };
     }
@@ -364,14 +389,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const createUserAccount = (userData: Partial<User> & { password?: string }) => {
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
     const newId = `user-${Date.now()}`;
     const newUser: User = {
       id: newId,
-      name: userData.name || 'Novo Profissional',
-      email: userData.email || `usuario-${Date.now()}@ohigienizador.com.br`,
-      password: userData.password || 'Porto@123',
+      name: (userData.name || 'Novo Usuário').trim(),
+      email: cleanEmail || `usuario-${Date.now()}@ohigienizador.com.br`,
+      password: userData.password || (userData.role === 'ADMIN' ? 'PortoSeguro@2026!' : 'Porto@123'),
       role: userData.role || 'TECHNICIAN',
-      isSuperAdmin: Boolean(userData.isSuperAdmin),
+      isSuperAdmin: Boolean(userData.isSuperAdmin || userData.role === 'ADMIN'),
       documentCpf: userData.documentCpf || '000.000.000-00',
       phone: userData.phone || '11999990000',
       isActive: true,
@@ -389,8 +415,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       specialTaxRate: Number(userData.specialTaxRate ?? (userData.hasSpecialTaxRule ? 16 : 0)),
     };
 
-    setUsers((prev) => [...prev, newUser]);
-    addToast('Conta Criada', `${newUser.name} cadastrado com sucesso.`, 'success');
+    setUsers((prev) => {
+      const existingIdx = prev.findIndex(
+        (u) => u.email && u.email.trim().toLowerCase() === cleanEmail
+      );
+      let updated: User[];
+      if (existingIdx >= 0) {
+        updated = [...prev];
+        updated[existingIdx] = { ...prev[existingIdx], ...newUser, id: prev[existingIdx].id };
+      } else {
+        updated = [...prev, newUser];
+      }
+      try {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    addToast('Conta Cadastrada', `${newUser.name} cadastrado com sucesso.`, 'success');
   };
 
   const [orders, setOrders] = useState<ServiceOrder[]>(() => {
@@ -458,24 +499,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [selectedPeriod, setSelectedPeriod] = useState<1 | 2>(1); // 1ª Quinzena
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: 'notif-1',
-      title: 'Fechamento da 1ª Quinzena Disponível',
-      message: 'O cálculo preliminar de repasse aos técnicos de Agosto/2026 está pronto para homologação.',
-      type: 'info',
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      read: false,
-    },
-    {
-      id: 'notif-2',
-      title: 'Estoque Baixo: Suporte de Bico Extratora',
-      message: 'Restam apenas 8 unidades no estoque central. Considere efetuar pedido de reposição.',
-      type: 'warning',
-      timestamp: '14:30',
-      read: false,
-    },
-  ]);
+  // Floating Toasts (dismissable balloon alerts)
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  // Persistent Bell Notifications Tracking (Read & Dismissed)
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
 
   // Sync to localStorage
   useEffect(() => {
@@ -498,30 +527,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
   }, [settings]);
 
-  const addToast = (title: string, message: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
-    const newNotif: NotificationItem = {
-      id: `notif-${Date.now()}`,
-      title,
-      message,
-      type,
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      read: false,
-    };
-    setNotifications((prev) => [newNotif, ...prev]);
-  };
+  // Add floating toast with auto-dismiss
+  const addToast = useCallback((title: string, message: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newToast: ToastItem = { id, title, message, type };
+    
+    setToasts((prev) => [...prev, newToast]);
 
-  const markNotificationRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-  };
+    // Auto dismiss after 4.5 seconds
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  }, []);
 
-  const clearNotifications = () => {
-    setNotifications([]);
-  };
-
-  const updateSettings = (newSettings: Partial<GeneralSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
-    addToast('Configurações Atualizadas', 'As diretrizes do sistema foram salvas com sucesso.', 'success');
-  };
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Quinzenal calculation memo
   const currentClosing = useMemo(() => {
@@ -541,6 +562,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const recalculateClosing = () => {
     addToast('Recálculo Efetuado', `Valores atualizados para ${selectedPeriod}ª Quinzena de ${selectedMonth}/${selectedYear}.`, 'info');
+  };
+
+  // Dynamic Persistent Business Notifications (Computed automatically from real system state)
+  const notifications: NotificationItem[] = useMemo(() => {
+    const items: NotificationItem[] = [];
+    const nowTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+    // 1. Biweekly Closing Notification (if closing is not finalized/paid)
+    if (currentClosing.status !== 'PAID' && currentClosing.status !== 'CLOSED') {
+      const monthNames = [
+        'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+        'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+      ];
+      const mName = monthNames[selectedMonth - 1] || 'Agosto';
+      items.push({
+        id: `closing-${selectedYear}-${selectedMonth}-${selectedPeriod}`,
+        title: `Fechamento da ${selectedPeriod}ª Quinzena Disponível`,
+        message: `O cálculo preliminar de repasse aos técnicos de ${mName}/${selectedYear} está pronto para homologação.`,
+        type: 'info',
+        timestamp: nowTime,
+        read: readNotificationIds.includes(`closing-${selectedYear}-${selectedMonth}-${selectedPeriod}`),
+        targetTab: 'finance',
+        category: 'CLOSING',
+      });
+    }
+
+    // 2. Critical Stock Notifications (< Minimum Threshold)
+    stock.forEach((item) => {
+      if (item && item.quantityInStock < item.minimumThreshold) {
+        const id = `stock-crit-${item.id}`;
+        items.push({
+          id,
+          title: `Estoque Crítico: ${item.name}`,
+          message: `Restam apenas ${item.quantityInStock} ${item.unit} no estoque central (mínimo de segurança: ${item.minimumThreshold}). Reposição urgente recomendada.`,
+          type: 'error',
+          timestamp: 'Crítico',
+          read: readNotificationIds.includes(id),
+          targetTab: 'stock',
+          category: 'STOCK_CRITICAL',
+          itemId: item.id,
+        });
+      } else if (item && item.quantityInStock === item.minimumThreshold) {
+        // 3. Warning Stock Notifications (== Minimum Threshold)
+        const id = `stock-warn-${item.id}`;
+        items.push({
+          id,
+          title: `Atenção no Estoque: ${item.name}`,
+          message: `Quantidade atingiu o limite mínimo exato de ${item.quantityInStock} ${item.unit}. Sinalize reposição preventiva antes de esgotar.`,
+          type: 'warning',
+          timestamp: 'Atenção',
+          read: readNotificationIds.includes(id),
+          targetTab: 'stock',
+          category: 'STOCK_WARNING',
+          itemId: item.id,
+        });
+      }
+    });
+
+    // Filter out dismissed items
+    return items.filter((n) => !dismissedNotificationIds.includes(n.id));
+  }, [currentClosing.status, selectedPeriod, selectedMonth, selectedYear, stock, readNotificationIds, dismissedNotificationIds]);
+
+  const markNotificationRead = (id: string) => {
+    setReadNotificationIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const clearNotifications = () => {
+    setDismissedNotificationIds((prev) => [...prev, ...notifications.map((n) => n.id)]);
+    addToast('Notificações Limpas', 'Todas as notificações foram marcadas como lidas e recolhidas.', 'info');
+  };
+
+  const updateSettings = (newSettings: Partial<GeneralSettings>) => {
+    setSettings((prev) => ({ ...prev, ...newSettings }));
+    addToast('Configurações Atualizadas', 'As diretrizes do sistema foram salvas com sucesso.', 'success');
   };
 
   // OS Management
@@ -703,6 +798,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setStock((prev) => [...prev, newItem]);
     addToast('Novo Item de Estoque', `${newItem.name} foi adicionado ao catálogo.`, 'success');
+  };
+
+  const updateStockItem = (itemId: string, updates: Partial<StockItem>) => {
+    setStock((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, ...updates } : item))
+    );
+    addToast('Produto Atualizado', 'Os dados e parâmetros de estoque foram atualizados com sucesso.', 'success');
+  };
+
+  const deleteStockItem = (itemId: string) => {
+    const itemToDelete = stock.find((s) => s.id === itemId);
+    setStock((prev) => prev.filter((item) => item.id !== itemId));
+    addToast('Produto Removido', `${itemToDelete?.name || 'Insumo'} foi excluído do catálogo.`, 'info');
   };
 
   const registerStockEntry = (itemId: string, quantityAdded: number, totalCost: number, notes?: string) => {
@@ -873,10 +981,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         movements,
         settings,
         updateSettings,
+        toasts,
+        addToast,
+        removeToast,
         notifications,
         markNotificationRead,
         clearNotifications,
-        addToast,
         isAuthenticated,
         login,
         verifyMfa,
@@ -891,6 +1001,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         completeServiceOrder,
         adjustStockQuantity,
         createStockItem,
+        updateStockItem,
+        deleteStockItem,
         registerStockEntry,
         updateTechnician,
         createTechnician,
