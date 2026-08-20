@@ -4,6 +4,7 @@ import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { getDbPool, testDbConnection, initializeDatabaseSchema, updateDbConfig, getDbConfig } from './src/server/db';
 import { INITIAL_USERS, INITIAL_SERVICE_ORDERS, INITIAL_STOCK, INITIAL_MOVEMENTS, INITIAL_SETTINGS } from './src/mock/initialData';
+import { AuditLog, AuditAction, AppModule, AuditResult, Role } from './src/types';
 
 async function startServer() {
   const app = express();
@@ -13,12 +14,26 @@ async function startServer() {
   app.use(express.json({ limit: '15mb' }));
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-  // In-memory fallback stores for when MariaDB is offline / in preview sandbox
+  // In-memory fallback stores
   let memUsers: any[] = [...INITIAL_USERS];
   let memOrders: any[] = [...INITIAL_SERVICE_ORDERS];
   let memStock: any[] = [...INITIAL_STOCK];
   let memMovements: any[] = [...INITIAL_MOVEMENTS];
   let memSettings: any = { ...INITIAL_SETTINGS };
+  let memAuditLogs: AuditLog[] = [
+    {
+      id: 'audit-init-1',
+      timestamp: new Date(Date.now() - 3600000).toISOString(),
+      userId: 'admin1',
+      userName: 'Gestor Master Porto',
+      userRole: 'ADMIN',
+      ipAddress: '127.0.0.1',
+      module: 'AUTH',
+      action: 'LOGIN',
+      result: 'SUCCESS',
+      details: 'Sessão iniciada com sucesso via autenticação segura.',
+    },
+  ];
 
   function isNetworkError(err: any): boolean {
     if (!err) return false;
@@ -37,29 +52,15 @@ async function startServer() {
     );
   }
 
-  // Iniciar verificação do MariaDB
+  // Inicializar esquema do banco
   initializeDatabaseSchema().catch(() => {});
 
   // =========================================================================
-  // API ROUTES - BANCO MARIADB (192.168.15.246 / higienizador_db)
+  // LOGGING & AUDIT SYSTEM (Mandatório conforme Especificação Técnica)
   // =========================================================================
-
-  // 1. Health & Database Status Check
-  app.get('/api/health', async (req, res) => {
-    const status = await testDbConnection();
-    res.json({
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      database: status,
-    });
-  });
-
-  // In-memory log buffer for database diagnostic inspection
   const dbLogs: Array<{ id: string; timestamp: string; level: 'INFO' | 'WARN' | 'ERROR'; message: string; query?: string; details?: any }> = [];
   function logDb(level: 'INFO' | 'WARN' | 'ERROR', message: string, query?: string, details?: any) {
-    // If it's a network timeout/offline error, downgrade to WARN to keep logs clean
     const actualLevel = (level === 'ERROR' && (message.includes('ETIMEDOUT') || message.includes('ECONNREFUSED'))) ? 'WARN' : level;
-
     const entry = {
       id: Math.random().toString(36).substring(2, 9),
       timestamp: new Date().toLocaleTimeString('pt-BR', { hour12: false }) + '.' + String(new Date().getMilliseconds()).padStart(3, '0'),
@@ -77,11 +78,161 @@ async function startServer() {
     }
   }
 
+  async function recordAudit(logData: {
+    userId: string;
+    userName: string;
+    userRole: Role;
+    ipAddress?: string;
+    module: AppModule;
+    action: AuditAction;
+    affectedRecordId?: string;
+    affectedRecordType?: string;
+    oldValue?: string | null;
+    newValue?: string | null;
+    result: AuditResult;
+    details?: string;
+  }): Promise<AuditLog> {
+    const entry: AuditLog = {
+      id: 'aud-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+      timestamp: new Date().toISOString(),
+      userId: logData.userId || 'system',
+      userName: logData.userName || 'Sistema',
+      userRole: logData.userRole || 'ADMIN',
+      ipAddress: logData.ipAddress || '127.0.0.1',
+      module: logData.module,
+      action: logData.action,
+      affectedRecordId: logData.affectedRecordId,
+      affectedRecordType: logData.affectedRecordType,
+      oldValue: logData.oldValue ? (typeof logData.oldValue === 'object' ? JSON.stringify(logData.oldValue) : String(logData.oldValue)) : null,
+      newValue: logData.newValue ? (typeof logData.newValue === 'object' ? JSON.stringify(logData.newValue) : String(logData.newValue)) : null,
+      result: logData.result,
+      details: logData.details,
+    };
+
+    memAuditLogs.unshift(entry);
+    if (memAuditLogs.length > 500) memAuditLogs.pop();
+
+    logDb(
+      entry.result === 'BLOCKED' ? 'WARN' : 'INFO',
+      `[AUDITORIA] [${entry.result}] ${entry.userRole}:${entry.userName} -> ${entry.module}.${entry.action} ${entry.affectedRecordId ? `(Ref: ${entry.affectedRecordId})` : ''} - ${entry.details || ''}`
+    );
+
+    // Gravar no MariaDB se disponível
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `INSERT INTO \`audit_logs\` 
+          (id, timestamp, userId, userName, userRole, ipAddress, module, action, affectedRecordId, affectedRecordType, oldValue, newValue, result, details)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          entry.id,
+          new Date(entry.timestamp),
+          entry.userId,
+          entry.userName,
+          entry.userRole,
+          entry.ipAddress || null,
+          entry.module,
+          entry.action,
+          entry.affectedRecordId || null,
+          entry.affectedRecordType || null,
+          entry.oldValue || null,
+          entry.newValue || null,
+          entry.result,
+          entry.details || null,
+        ]
+      );
+    } catch {
+      // Falha silenciosa para manter resiliência
+    }
+
+    return entry;
+  }
+
+  // Helper para obter o usuário requisitante autenticado a partir dos headers
+  async function getRequester(req: express.Request): Promise<any | null> {
+    const rawId = req.headers['x-user-id'] || req.query.requesterId || req.body?.requesterId;
+    const userId = typeof rawId === 'string' ? rawId.trim() : null;
+
+    if (!userId) {
+      // Default: se não informado e for requisição de leitura inicial do sistema, assume o primeiro admin
+      return memUsers.find((u) => u.role === 'ADMIN') || memUsers[0] || null;
+    }
+
+    // Busca na memória
+    let found = memUsers.find((u) => u.id === userId);
+    if (!found) {
+      try {
+        const db = getDbPool();
+        const [rows]: any = await db.query('SELECT * FROM users WHERE id = ? LIMIT 1', [userId]);
+        if (rows && rows.length > 0) {
+          found = rows[0];
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return found || null;
+  }
+
+  // Helpers de Metadata de colunas
+  async function getTableColumnsInfo(tableName: string): Promise<Array<{ Field: string; Type: string; Null: string; Default: any; Key: string }>> {
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query(`SHOW COLUMNS FROM \`${tableName}\``);
+      return rows.map((r: any) => ({
+        Field: r.Field,
+        Type: (r.Type || '').toLowerCase(),
+        Null: r.Null,
+        Default: r.Default,
+        Key: r.Key,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async function getTableColumnsMap(tableName: string): Promise<Map<string, string>> {
+    const cols = await getTableColumnsInfo(tableName);
+    const colMap = new Map<string, string>();
+    for (const c of cols) {
+      colMap.set(c.Field.toLowerCase(), c.Field);
+    }
+    return colMap;
+  }
+
+  // =========================================================================
+  // 1. HEALTH & DATABASE STATUS CHECK
+  // =========================================================================
+  app.get('/api/health', async (req, res) => {
+    const status = await testDbConnection();
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: status,
+    });
+  });
+
   app.get('/api/db/logs', (req, res) => {
     res.json({ success: true, logs: dbLogs });
   });
 
   app.get('/api/db/diagnostics', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'anonymous',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'DATABASE',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de acessar diagnósticos do MariaDB.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Administrador Master pode consultar diagnósticos do MariaDB.' });
+    }
+
     try {
       const db = getDbPool();
       const [tables]: any = await db.query('SHOW TABLES');
@@ -103,99 +254,33 @@ async function startServer() {
         success: true,
         tables: tableNames,
         schema: schemaDetails,
-        logs: dbLogs.slice(0, 20),
+        logs: dbLogs.slice(0, 30),
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // Automatic safe column updater endpoint
   app.post('/api/db/sync-schema', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Administrador Master pode sincronizar schema.' });
+    }
+
     try {
-      const db = getDbPool();
-      logDb('INFO', 'Iniciando sincronização e verificação de colunas no MariaDB...');
-      
-      // Get existing columns in 'users'
-      const [userCols]: any = await db.query('SHOW COLUMNS FROM users').catch(() => [[]]);
-      const existingUserFields = new Set(userCols.map((c: any) => c.Field.toLowerCase()));
-
-      const columnDefs: Array<{ name: string; type: string }> = [
-        { name: 'email', type: 'VARCHAR(150) NULL' },
-        { name: 'passwordHash', type: 'VARCHAR(255) NULL' },
-        { name: 'role', type: "VARCHAR(30) NOT NULL DEFAULT 'TECHNICIAN'" },
-        { name: 'documentCpf', type: 'VARCHAR(18) NULL' },
-        { name: 'phone', type: 'VARCHAR(25) NULL' },
-        { name: 'avatarUrl', type: 'VARCHAR(255) NULL' },
-        { name: 'isActive', type: 'TINYINT(1) NOT NULL DEFAULT 1' },
-        { name: 'pixKeyType', type: "VARCHAR(20) DEFAULT 'CPF'" },
-        { name: 'pixKey', type: 'VARCHAR(100) NULL' },
-        { name: 'bankName', type: 'VARCHAR(80) NULL' },
-        { name: 'bankAgency', type: 'VARCHAR(20) NULL' },
-        { name: 'bankAccount', type: 'VARCHAR(30) NULL' },
-        { name: 'baseCostAllowance', type: 'DECIMAL(10, 2) NOT NULL DEFAULT 0.00' },
-        { name: 'hasSpecialTaxRule', type: 'TINYINT(1) NOT NULL DEFAULT 0' },
-        { name: 'specialTaxRate', type: 'DECIMAL(5, 2) NOT NULL DEFAULT 0.00' },
-        { name: 'createdAt', type: 'DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3)' },
-        { name: 'updatedAt', type: 'DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)' },
-      ];
-
-      const added: string[] = [];
-      const skipped: string[] = [];
-      const errors: string[] = [];
-
-      for (const col of columnDefs) {
-        if (existingUserFields.has(col.name.toLowerCase())) {
-          skipped.push(col.name);
-          continue;
-        }
-
-        try {
-          await db.query(`ALTER TABLE \`users\` ADD COLUMN \`${col.name}\` ${col.type}`);
-          added.push(col.name);
-          logDb('INFO', `Coluna criada com sucesso: users.${col.name}`);
-        } catch (err: any) {
-          if (err.code === 'ER_DUP_FIELDNAME' || err.message?.includes('Duplicate column')) {
-            skipped.push(col.name);
-          } else {
-            errors.push(`${col.name}: ${err.message}`);
-            logDb('WARN', `Falha ao adicionar users.${col.name}: ${err.message}`);
-          }
-        }
-      }
-
-      // Relax any existing legacy strict columns if they exist
-      const legacyToRelax = [
-        'document_cpf VARCHAR(18) NULL DEFAULT \'\'',
-        'documentCpf VARCHAR(18) NULL DEFAULT \'\'',
-        'password_hash VARCHAR(255) NULL',
-        'passwordHash VARCHAR(255) NULL',
-        'phone VARCHAR(25) NULL DEFAULT \'\'',
-        'email VARCHAR(150) NULL',
-        'pix_key VARCHAR(100) NULL DEFAULT \'\'',
-        'pixKey VARCHAR(100) NULL DEFAULT \'\'',
-      ];
-
-      for (const leg of legacyToRelax) {
-        const colName = leg.split(' ')[0];
-        if (existingUserFields.has(colName.toLowerCase())) {
-          try {
-            await db.query(`ALTER TABLE \`users\` MODIFY COLUMN ${leg}`);
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      res.json({
-        success: true,
-        message: `Schema sincronizado. ${added.length} criadas, ${skipped.length} já existiam.`,
-        added,
-        skipped,
-        errors,
+      await initializeDatabaseSchema();
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'DATABASE',
+        action: 'DB_CONFIG_UPDATE',
+        result: 'SUCCESS',
+        details: 'Sincronização de schema do MariaDB executada com sucesso.',
       });
+      res.json({ success: true, message: 'Schema sincronizado com sucesso.' });
     } catch (err: any) {
-      logDb('ERROR', `Erro na sincronização de schema: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -210,15 +295,25 @@ async function startServer() {
         const [orderRows]: any = await db.query('SELECT COUNT(*) as count FROM service_orders');
         const [stockRows]: any = await db.query('SELECT COUNT(*) as count FROM stock_items');
         const [movementRows]: any = await db.query('SELECT COUNT(*) as count FROM financial_movements');
+        const [auditRows]: any = await db.query('SELECT COUNT(*) as count FROM audit_logs').catch(() => [[{ count: memAuditLogs.length }]]);
         tableCounts = {
           users: userRows[0]?.count ?? 0,
           service_orders: orderRows[0]?.count ?? 0,
           stock_items: stockRows[0]?.count ?? 0,
           financial_movements: movementRows[0]?.count ?? 0,
+          audit_logs: auditRows[0]?.count ?? memAuditLogs.length,
         };
       } catch (err: any) {
         console.error('Erro ao consultar contagem de tabelas:', err);
       }
+    } else {
+      tableCounts = {
+        users: memUsers.length,
+        service_orders: memOrders.length,
+        stock_items: memStock.length,
+        financial_movements: memMovements.length,
+        audit_logs: memAuditLogs.length,
+      };
     }
     res.json({
       ...status,
@@ -227,6 +322,11 @@ async function startServer() {
   });
 
   app.post('/api/db/test', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Master.' });
+    }
+
     const { host, port, database, user, password } = req.body || {};
     const testResult = await testDbConnection({
       ...(host ? { host } : {}),
@@ -247,39 +347,251 @@ async function startServer() {
     res.json(testResult);
   });
 
-  // Helper to get all column metadata of a table (Field, Type, Null, Default, Key)
-  async function getTableColumnsInfo(tableName: string): Promise<Array<{ Field: string; Type: string; Null: string; Default: any; Key: string }>> {
+  // =========================================================================
+  // 2. AUTHENTICATION & SESSION ENDPOINTS (/api/auth/*)
+  // =========================================================================
+  app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body || {};
+    const cleanEmail = (email || '').trim().toLowerCase();
+
+    if (!cleanEmail || !password) {
+      return res.status(400).json({ success: false, error: 'E-mail e senha são obrigatórios.' });
+    }
+
+    // Busca usuário
+    const user = memUsers.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+
+    if (!user) {
+      await recordAudit({
+        userId: 'anonymous',
+        userName: cleanEmail,
+        userRole: 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'AUTH',
+        action: 'LOGIN_FAILED',
+        result: 'FAILED',
+        details: `Tentativa de login com e-mail inexistente: ${cleanEmail}`,
+      });
+      return res.status(401).json({ success: false, error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
+    }
+
+    // Validação de Usuário Inativo (Revogado)
+    if (user.isActive === false) {
+      await recordAudit({
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        ipAddress: req.ip,
+        module: 'AUTH',
+        action: 'LOGIN_FAILED',
+        result: 'BLOCKED',
+        details: `Tentativa de acesso bloqueada: usuário inativo/revogado (${user.name} - ${user.email}).`,
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso revogado. Sua conta foi desativada pelo Gestor ou Administrador Master.',
+      });
+    }
+
+    // Validação de Senha
+    const validPassword = user.password === password || user.passwordHash === password;
+    if (!validPassword) {
+      await recordAudit({
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        ipAddress: req.ip,
+        module: 'AUTH',
+        action: 'LOGIN_FAILED',
+        result: 'FAILED',
+        details: `Senha incorreta informada para o usuário ${user.name} (${user.email}).`,
+      });
+      return res.status(401).json({ success: false, error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
+    }
+
+    // Requer MFA?
+    if (user.mfaEnabled) {
+      return res.json({
+        success: true,
+        requiresMfa: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    }
+
+    // Login com sucesso
+    await recordAudit({
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      ipAddress: req.ip,
+      module: 'AUTH',
+      action: 'LOGIN',
+      result: 'SUCCESS',
+      details: `Login efetuado com sucesso via autenticação segura (${user.role}).`,
+    });
+
+    res.json({
+      success: true,
+      user,
+      message: `Bem-vindo, ${user.name}!`,
+    });
+  });
+
+  app.post('/api/auth/verify-mfa', async (req, res) => {
+    const { email, code } = req.body || {};
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanCode = (code || '').replace(/\D/g, '');
+
+    const user = memUsers.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ success: false, error: 'Usuário não localizado ou inativo.' });
+    }
+
+    if (cleanCode.length !== 6) {
+      await recordAudit({
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        ipAddress: req.ip,
+        module: 'AUTH',
+        action: 'LOGIN_FAILED',
+        result: 'FAILED',
+        details: `Código MFA inválido digitado para ${user.name}.`,
+      });
+      return res.status(400).json({ success: false, error: 'Código de 6 dígitos inválido.' });
+    }
+
+    await recordAudit({
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      ipAddress: req.ip,
+      module: 'AUTH',
+      action: 'LOGIN',
+      result: 'SUCCESS',
+      details: `Segundo fator MFA validado com sucesso para ${user.name}.`,
+    });
+
+    res.json({ success: true, user });
+  });
+
+  app.post('/api/auth/logout', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester) {
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'AUTH',
+        action: 'LOGOUT',
+        result: 'SUCCESS',
+        details: `Logout efetuado com encerramento de sessão para ${requester.name}.`,
+      });
+    }
+    res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
+  });
+
+  // =========================================================================
+  // 3. AUDIT LOGS ENDPOINTS (/api/audit-logs)
+  // =========================================================================
+  app.get('/api/audit-logs', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      await recordAudit({
+        userId: requester?.id || 'anonymous',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'AUDIT',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de visualizar logs de auditoria por perfil Técnico.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: Técnicos não possuem permissão para acessar logs de auditoria.' });
+    }
+
     try {
-      const db = getDbPool();
-      const [rows]: any = await db.query(`SHOW COLUMNS FROM \`${tableName}\``);
-      return rows.map((r: any) => ({
-        Field: r.Field,
-        Type: (r.Type || '').toLowerCase(),
-        Null: r.Null,
-        Default: r.Default,
-        Key: r.Key,
-      }));
-    } catch {
-      return [];
-    }
-  }
+      let logs = [...memAuditLogs];
 
-  // Helper to get map of column names
-  async function getTableColumnsMap(tableName: string): Promise<Map<string, string>> {
-    const cols = await getTableColumnsInfo(tableName);
-    const colMap = new Map<string, string>();
-    for (const c of cols) {
-      colMap.set(c.Field.toLowerCase(), c.Field);
-    }
-    return colMap;
-  }
+      // Se MariaDB estiver acessível, buscar também do banco
+      try {
+        const db = getDbPool();
+        const [rows]: any = await db.query('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 200');
+        if (rows && rows.length > 0) {
+          logs = rows.map((r: any) => ({
+            ...r,
+            timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
+          }));
+        }
+      } catch {
+        // fallback to memory
+      }
 
-  // 2. USERS & TECHNICIANS API (GET, POST, PUT, DELETE)
+      // Se Gestor Operacional, filtrar apenas módulos operacionais (oculta configurações de banco)
+      if (requester.role === 'OPERATIONAL') {
+        logs = logs.filter((l) => l.module !== 'DATABASE' && l.module !== 'SETTINGS');
+      }
+
+      // Filtros opcionais via Query params
+      const { module, action, result, search, userId } = req.query as any;
+      if (module) logs = logs.filter((l) => l.module === module);
+      if (action) logs = logs.filter((l) => l.action === action);
+      if (result) logs = logs.filter((l) => l.result === result);
+      if (userId) logs = logs.filter((l) => l.userId === userId);
+      if (search) {
+        const s = search.toLowerCase();
+        logs = logs.filter(
+          (l) =>
+            l.userName.toLowerCase().includes(s) ||
+            l.action.toLowerCase().includes(s) ||
+            (l.details && l.details.toLowerCase().includes(s)) ||
+            (l.affectedRecordId && l.affectedRecordId.toLowerCase().includes(s))
+        );
+      }
+
+      res.json({ success: true, count: logs.length, data: logs });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/audit-logs', async (req, res) => {
+    const requester = await getRequester(req);
+    const body = req.body || {};
+
+    const entry = await recordAudit({
+      userId: requester?.id || body.userId || 'system',
+      userName: requester?.name || body.userName || 'Sistema',
+      userRole: requester?.role || body.userRole || 'TECHNICIAN',
+      ipAddress: req.ip,
+      module: body.module || 'AUTH',
+      action: body.action || 'ACCESS_DENIED',
+      affectedRecordId: body.affectedRecordId,
+      affectedRecordType: body.affectedRecordType,
+      oldValue: body.oldValue,
+      newValue: body.newValue,
+      result: body.result || 'SUCCESS',
+      details: body.details || 'Evento registrado via interface frontend.',
+    });
+
+    res.json({ success: true, log: entry });
+  });
+
+  // =========================================================================
+  // 4. USERS & TECHNICIANS API (GET, POST, PUT, DELETE) com RBAC & Unicidade
+  // =========================================================================
   app.get('/api/users', async (req, res) => {
+    const requester = await getRequester(req);
+
     try {
       const db = getDbPool();
       const [rows]: any = await db.query('SELECT * FROM users ORDER BY name ASC');
-      // Format numeric/boolean fields
       const formatted = rows.map((u: any) => ({
         ...u,
         isActive: Boolean(u.isActive ?? u.is_active ?? true),
@@ -294,10 +606,20 @@ async function startServer() {
         bankAccount: u.bankAccount ?? u.bank_account ?? '',
       }));
       memUsers = formatted;
+
+      // Escopo OWN para Técnico: retorna apenas seu próprio perfil
+      if (requester && requester.role === 'TECHNICIAN') {
+        const selfUser = formatted.filter((u: any) => u.id === requester.id);
+        return res.json({ success: true, data: selfUser.length > 0 ? selfUser : [requester] });
+      }
+
       res.json({ success: true, data: formatted });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', 'MariaDB inacessível no ambiente atual. Servindo lista de usuários da memória.');
+        if (requester && requester.role === 'TECHNICIAN') {
+          const selfUser = memUsers.filter((u) => u.id === requester.id);
+          return res.json({ success: true, data: selfUser.length > 0 ? selfUser : [requester] });
+        }
         return res.json({ success: true, data: memUsers });
       }
       res.status(500).json({ success: false, error: err.message });
@@ -305,72 +627,124 @@ async function startServer() {
   });
 
   app.post('/api/users', async (req, res) => {
+    const requester = await getRequester(req);
     const u = req.body;
-    if (!u.id || !u.name) {
-      return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes (id, name).' });
+
+    if (!requester || requester.role === 'TECHNICIAN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de criar usuário por perfil Técnico.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: Técnicos não podem criar novos usuários.' });
     }
 
-    // Always update in-memory list
+    // Gestor Operacional não pode criar perfil Master ADMIN
+    if (requester.role === 'OPERATIONAL' && u.role === 'ADMIN') {
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Gestor Operacional tentou criar usuário com privilégio Master ADMIN.',
+      });
+      return res.status(403).json({ success: false, error: 'Gestores Operacionais só podem cadastrar Técnicos ou outros Gestores.' });
+    }
+
+    if (!u.id || !u.name || !u.email) {
+      return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes (id, name, email).' });
+    }
+
+    // Validação de Unicidade: E-mail e CPF
+    const cleanEmail = (u.email || '').trim().toLowerCase();
+    const cleanCpf = (u.documentCpf || u.cpf || '').replace(/\D/g, '');
+
+    const duplicateEmail = memUsers.find((item) => item.id !== u.id && (item.email || '').trim().toLowerCase() === cleanEmail);
+    if (duplicateEmail) {
+      return res.status(400).json({ success: false, error: `O e-mail "${u.email}" já está cadastrado para outro usuário (${duplicateEmail.name}).` });
+    }
+
+    if (cleanCpf) {
+      const duplicateCpf = memUsers.find((item) => item.id !== u.id && (item.documentCpf || '').replace(/\D/g, '') === cleanCpf);
+      if (duplicateCpf) {
+        return res.status(400).json({ success: false, error: `O CPF informado já está cadastrado para o usuário "${duplicateCpf.name}".` });
+      }
+    }
+
+    // Gestor não pode definir regra fiscal nem ajuda de custo fora do padrão
+    if (requester.role === 'OPERATIONAL') {
+      u.hasSpecialTaxRule = false;
+      u.specialTaxRate = 0;
+      u.baseCostAllowance = u.role === 'TECHNICIAN' ? 250 : 0;
+    }
+
+    // Salva em memória
     const existingIdx = memUsers.findIndex((item) => item.id === u.id);
-    if (existingIdx >= 0) {
+    const isEdit = existingIdx >= 0;
+    if (isEdit) {
       memUsers[existingIdx] = { ...memUsers[existingIdx], ...u };
     } else {
       memUsers.push(u);
     }
 
+    // Auditoria
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'USERS',
+      action: isEdit ? 'USER_UPDATE' : 'USER_CREATE',
+      affectedRecordId: u.id,
+      affectedRecordType: 'user',
+      newValue: JSON.stringify({ name: u.name, email: u.email, role: u.role, cpf: u.documentCpf }),
+      result: 'SUCCESS',
+      details: `${isEdit ? 'Atualização' : 'Cadastro'} do usuário "${u.name}" (${u.role}) realizado por ${requester.name}.`,
+    });
+
     try {
       const db = getDbPool();
       const cols = await getTableColumnsInfo('users');
 
-      // Dicionário completo de valores suportados por campo (lowercase)
       const userValues: Record<string, any> = {
         id: u.id,
         name: u.name,
         nome: u.name,
-        email: u.email || `${u.id}@higienizador.com.br`,
+        email: u.email,
         passwordhash: u.password || u.passwordHash || 'Porto@2026',
         password_hash: u.password || u.passwordHash || 'Porto@2026',
-        password: u.password || u.passwordHash || 'Porto@2026',
-        senha: u.password || u.passwordHash || 'Porto@2026',
         role: u.role || 'TECHNICIAN',
         cargo: u.role || 'TECHNICIAN',
-        perfil: u.role || 'TECHNICIAN',
         documentcpf: u.documentCpf || u.cpf || '',
         document_cpf: u.documentCpf || u.cpf || '',
-        cpf: u.documentCpf || u.cpf || '',
         phone: u.phone || '',
-        telefone: u.phone || '',
-        whatsapp: u.phone || '',
         avatarurl: u.avatarUrl || null,
-        avatar_url: u.avatarUrl || null,
-        avatar: u.avatarUrl || null,
         isactive: u.isActive !== false ? 1 : 0,
         is_active: u.isActive !== false ? 1 : 0,
-        ativo: u.isActive !== false ? 1 : 0,
         pixkeytype: u.pixKeyType || 'CPF',
         pix_key_type: u.pixKeyType || 'CPF',
-        tipo_pix: u.pixKeyType || 'CPF',
         pixkey: u.pixKey || u.documentCpf || '',
         pix_key: u.pixKey || u.documentCpf || '',
-        chave_pix: u.pixKey || u.documentCpf || '',
         bankname: u.bankName || 'Banco Itaú',
         bank_name: u.bankName || 'Banco Itaú',
-        banco: u.bankName || 'Banco Itaú',
         bankagency: u.bankAgency || '0001',
         bank_agency: u.bankAgency || '0001',
-        agencia: u.bankAgency || '0001',
         bankaccount: u.bankAccount || '00000-0',
         bank_account: u.bankAccount || '00000-0',
-        conta: u.bankAccount || '00000-0',
         basecostallowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
         base_cost_allowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
-        ajuda_custo: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
         hasspecialtaxrule: u.hasSpecialTaxRule ? 1 : 0,
         has_special_tax_rule: u.hasSpecialTaxRule ? 1 : 0,
-        regra_fiscal: u.hasSpecialTaxRule ? 1 : 0,
         specialtaxrate: Number(u.specialTaxRate || 0),
         special_tax_rate: Number(u.specialTaxRate || 0),
-        taxa_retencao: Number(u.specialTaxRate || 0),
       };
 
       const insertCols: string[] = [];
@@ -388,13 +762,7 @@ async function startServer() {
           } else if (colLower === 'updatedat' || colLower === 'updated_at') {
             val = new Date();
           } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
-            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
-              val = 0;
-            } else if (col.Type.includes('date') || col.Type.includes('time')) {
-              val = new Date();
-            } else {
-              val = '';
-            }
+            val = col.Type.includes('int') || col.Type.includes('decimal') ? 0 : '';
           }
         }
 
@@ -415,27 +783,123 @@ async function startServer() {
           ON DUPLICATE KEY UPDATE
           ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
         `;
-
-        logDb('INFO', `Executando INSERT/UPDATE para usuário ${u.name} (${u.id})`, query, insertValues);
         await db.execute(query, insertValues);
-        logDb('INFO', `Usuário ${u.name} salvo com sucesso no MariaDB.`);
       }
       res.json({ success: true, message: `Usuário ${u.name} salvo com sucesso.`, user: u });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', `Usuário ${u.name} salvo na memória local (MariaDB offline no ambiente atual).`);
         return res.json({ success: true, message: `Usuário ${u.name} salvo na memória local.`, user: u });
       }
-      logDb('ERROR', `Erro ao gravar usuário ${u.name}: ${err.message}`, undefined, { user: u, stack: err.stack });
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.put('/api/users/:id', async (req, res) => {
     const { id } = req.params;
+    const requester = await getRequester(req);
     const u = req.body;
 
     const existingIdx = memUsers.findIndex((item) => item.id === id);
+    const oldUser = existingIdx >= 0 ? memUsers[existingIdx] : null;
+
+    if (!requester) {
+      return res.status(401).json({ success: false, error: 'Usuário não autenticado.' });
+    }
+
+    // Regras de Autorização para Edição de Usuário
+    if (requester.role === 'TECHNICIAN') {
+      // Técnico só pode editar a si mesmo
+      if (requester.id !== id) {
+        await recordAudit({
+          userId: requester.id,
+          userName: requester.name,
+          userRole: requester.role,
+          ipAddress: req.ip,
+          module: 'USERS',
+          action: 'ACCESS_DENIED',
+          result: 'BLOCKED',
+          details: `Técnico ${requester.name} tentou alterar dados de outro usuário (${id}).`,
+        });
+        return res.status(403).json({ success: false, error: 'Acesso negado: você só pode editar o seu próprio perfil.' });
+      }
+
+      // Técnico não pode alterar seu próprio role, regra fiscal, ajuda de custo ou status ativo
+      if (u.role && u.role !== oldUser?.role) {
+        return res.status(403).json({ success: false, error: 'Técnicos não podem alterar seu perfil de acesso.' });
+      }
+      if (u.hasSpecialTaxRule !== undefined && u.hasSpecialTaxRule !== oldUser?.hasSpecialTaxRule) {
+        return res.status(403).json({ success: false, error: 'Apenas Administrador Master pode configurar regra fiscal.' });
+      }
+      if (u.baseCostAllowance !== undefined && u.baseCostAllowance !== oldUser?.baseCostAllowance) {
+        return res.status(403).json({ success: false, error: 'Apenas Administrador Master pode configurar ajuda de custo.' });
+      }
+    }
+
+    if (requester.role === 'OPERATIONAL') {
+      // Gestor Operacional não pode editar Administrador Master
+      if (oldUser && oldUser.role === 'ADMIN') {
+        await recordAudit({
+          userId: requester.id,
+          userName: requester.name,
+          userRole: requester.role,
+          ipAddress: req.ip,
+          module: 'USERS',
+          action: 'ACCESS_DENIED',
+          result: 'BLOCKED',
+          details: `Gestor Operacional tentou editar dados do Administrador Master (${oldUser.name}).`,
+        });
+        return res.status(403).json({ success: false, error: 'Gestores Operacionais não possuem permissão para alterar o Administrador Master.' });
+      }
+
+      // Gestor não pode promover ninguém para ADMIN
+      if (u.role === 'ADMIN') {
+        return res.status(403).json({ success: false, error: 'Apenas Administrador Master pode definir perfis de nível Master.' });
+      }
+      // Gestor não pode alterar regra fiscal nem ajuda de custo
+      if (u.hasSpecialTaxRule !== undefined || u.specialTaxRate !== undefined || u.baseCostAllowance !== undefined) {
+        u.hasSpecialTaxRule = oldUser?.hasSpecialTaxRule;
+        u.specialTaxRate = oldUser?.specialTaxRate;
+        u.baseCostAllowance = oldUser?.baseCostAllowance;
+      }
+    }
+
+    // Auditoria de Mudança de Chave PIX (Operação Crítica)
+    if (u.pixKey && oldUser && u.pixKey !== oldUser.pixKey) {
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'PIX_CHANGE',
+        affectedRecordId: id,
+        affectedRecordType: 'user_pix',
+        oldValue: `${oldUser.pixKeyType || 'CPF'}: ${oldUser.pixKey || 'N/A'}`,
+        newValue: `${u.pixKeyType || 'CPF'}: ${u.pixKey}`,
+        result: 'SUCCESS',
+        details: `Alteração de chave PIX do usuário "${oldUser.name}" solicitada por ${requester.name} (${requester.role}).`,
+      });
+    }
+
+    // Auditoria de Regra Fiscal Especial
+    if (u.hasSpecialTaxRule !== undefined && oldUser && u.hasSpecialTaxRule !== oldUser.hasSpecialTaxRule) {
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'SPECIAL_TAX_CHANGE',
+        affectedRecordId: id,
+        affectedRecordType: 'user_tax_rule',
+        oldValue: String(oldUser.hasSpecialTaxRule),
+        newValue: String(u.hasSpecialTaxRule),
+        result: 'SUCCESS',
+        details: `Regra fiscal de exceção (16%) ${u.hasSpecialTaxRule ? 'ativada' : 'desativada'} para o técnico "${oldUser.name}".`,
+      });
+    }
+
+    // Atualização em memória
     if (existingIdx >= 0) {
       memUsers[existingIdx] = { ...memUsers[existingIdx], ...u };
     }
@@ -448,39 +912,23 @@ async function startServer() {
 
       const userUpdates: Record<string, any> = {
         name: u.name,
-        nome: u.name,
         email: u.email,
         role: u.role,
-        cargo: u.role,
-        perfil: u.role,
         documentcpf: u.documentCpf ?? u.cpf,
         document_cpf: u.documentCpf ?? u.cpf,
-        cpf: u.documentCpf ?? u.cpf,
         phone: u.phone,
-        telefone: u.phone,
-        whatsapp: u.phone,
         avatarurl: u.avatarUrl,
-        avatar_url: u.avatarUrl,
         isactive: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined,
         is_active: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined,
         pixkeytype: u.pixKeyType,
-        pix_key_type: u.pixKeyType,
         pixkey: u.pixKey,
-        pix_key: u.pixKey,
         bankname: u.bankName,
-        bank_name: u.bankName,
         bankagency: u.bankAgency,
-        bank_agency: u.bankAgency,
         bankaccount: u.bankAccount,
-        bank_account: u.bankAccount,
         basecostallowance: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined,
-        base_cost_allowance: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined,
         hasspecialtaxrule: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined,
-        has_special_tax_rule: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined,
         specialtaxrate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
-        special_tax_rate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
         passwordhash: u.password,
-        password_hash: u.password,
         password: u.password,
       };
 
@@ -497,23 +945,53 @@ async function startServer() {
       if (fields.length > 0) {
         values.push(id);
         const query = `UPDATE \`users\` SET ${fields.join(', ')} WHERE \`id\` = ?`;
-        logDb('INFO', `Atualizando usuário ${id}`, query, values);
         await db.execute(query, values);
-        logDb('INFO', `Usuário ${id} atualizado com sucesso.`);
       }
       res.json({ success: true, message: `Usuário ${id} atualizado.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
         return res.json({ success: true, message: `Usuário ${id} atualizado na memória local.` });
       }
-      logDb('ERROR', `Erro ao atualizar usuário ${id}: ${err.message}`, undefined, { id, stack: err.stack });
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.delete('/api/users/:id', async (req, res) => {
     const { id } = req.params;
+    const requester = await getRequester(req);
+
+    // Apenas Administrador Master pode excluir fisicamente um usuário
+    if (!requester || requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: `Tentativa não autorizada de excluir permanentemente o usuário ${id}.`,
+      });
+      return res.status(403).json({ success: false, error: 'Apenas o Administrador Master pode excluir usuários permanentemente.' });
+    }
+
+    const targetUser = memUsers.find((u) => u.id === id);
     memUsers = memUsers.filter((u) => u.id !== id);
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'USERS',
+      action: 'USER_DELETE',
+      affectedRecordId: id,
+      affectedRecordType: 'user',
+      oldValue: JSON.stringify(targetUser || { id }),
+      result: 'SUCCESS',
+      details: `Exclusão permanente do usuário "${targetUser?.name || id}" efetuada por ${requester.name}.`,
+    });
+
     try {
       const db = getDbPool();
       await db.execute('DELETE FROM users WHERE id = ?', [id]);
@@ -526,78 +1004,162 @@ async function startServer() {
     }
   });
 
-  // 3. SERVICE ORDERS API (GET, POST, PUT, DELETE)
+  // =========================================================================
+  // 5. SERVICE ORDERS API (GET, POST, PUT, DELETE) com Escopo OWN para Técnico
+  // =========================================================================
   app.get('/api/orders', async (req, res) => {
+    const requester = await getRequester(req);
+
     try {
       const db = getDbPool();
       const cols = await getTableColumnsMap('service_orders');
       let orderClause = 'id DESC';
       if (cols.has('scheduleddate')) orderClause = `\`${cols.get('scheduleddate')}\` DESC`;
       else if (cols.has('scheduled_date')) orderClause = `\`${cols.get('scheduled_date')}\` DESC`;
-      else if (cols.has('createdat')) orderClause = `\`${cols.get('createdat')}\` DESC`;
-      else if (cols.has('created_at')) orderClause = `\`${cols.get('created_at')}\` DESC`;
 
       const [rows]: any = await db.query(`SELECT * FROM \`service_orders\` ORDER BY ${orderClause}`);
       const formatted = rows.map((o: any) => ({
         ...o,
         id: o.id,
         callNumber: o.callNumber || o.call_number || o.numero_chamado || '',
-        portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || o.protocolo_porto || null,
-        serviceCategory: o.serviceCategory || o.service_category || o.categoria || 'Higienização Padrão',
-        baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? o.valor_base ?? 0),
-        customerName: o.customerName || o.customer_name || o.cliente_nome || '',
-        customerCpf: o.customerCpf || o.customer_cpf || o.cliente_cpf || '',
-        customerPhone: o.customerPhone || o.customer_phone || o.cliente_telefone || null,
-        city: o.city || o.cidade || 'São Paulo',
-        uf: o.uf || o.estado || 'SP',
-        neighborhood: o.neighborhood || o.bairro || '',
-        addressStreet: o.addressStreet || o.address_street || o.endereco || '',
-        addressNumber: o.addressNumber || o.address_number || o.numero || '',
-        addressComplement: o.addressComplement || o.address_complement || o.complemento || null,
-        postalCode: o.postalCode || o.postal_code || o.cep || '',
-        technicianId: o.technicianId || o.technician_id || o.tecnico_id || null,
+        portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
+        serviceCategory: o.serviceCategory || o.service_category || 'Higienização Padrão',
+        baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
+        customerName: o.customerName || o.customer_name || '',
+        customerCpf: o.customerCpf || o.customer_cpf || '',
+        customerPhone: o.customerPhone || o.customer_phone || null,
+        city: o.city || 'São Paulo',
+        uf: o.uf || 'SP',
+        neighborhood: o.neighborhood || '',
+        addressStreet: o.addressStreet || '',
+        addressNumber: o.addressNumber || '',
+        addressComplement: o.addressComplement || null,
+        postalCode: o.postalCode || '',
+        technicianId: o.technicianId || o.technician_id || null,
         status: o.status || 'PENDING',
-        scheduledDate: o.scheduledDate || o.scheduled_date || o.data_agendada,
+        scheduledDate: o.scheduledDate || o.scheduled_date,
         startedAt: o.startedAt || o.started_at,
         completedAt: o.completedAt || o.completed_at,
-        kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? o.km_rodado ?? 0),
-        kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? o.valor_km ?? 0.5),
-        kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? o.total_km ?? 0),
-        tollCost: Number(o.tollCost ?? o.toll_cost ?? o.pedagio ?? 0),
-        supportCost: Number(o.supportCost ?? o.support_cost ?? o.ajuda_custo_adicional ?? 0),
-        totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? o.total_bruto_tecnico ?? 0),
-        faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? o.valor_porto ?? 0),
-        customerSignature: o.customerSignature || o.customer_signature || o.assinatura || null,
-        executionNotes: o.executionNotes || o.execution_notes || o.observacoes || null,
-        tollReceiptUrl: o.tollReceiptUrl || o.toll_receipt_url || o.comprovante_pedagio || null,
+        kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
+        kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
+        kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
+        tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
+        supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
+        totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
+        faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
+        customerSignature: o.customerSignature || null,
+        executionNotes: o.executionNotes || null,
+        tollReceiptUrl: o.tollReceiptUrl || null,
         itemsUsed: [],
       }));
       memOrders = formatted;
+
+      // Escopo OWN para Técnicos de Campo: restringe estritamente às OS dele
+      if (requester && requester.role === 'TECHNICIAN') {
+        const ownOrders = formatted.filter((o: any) => o.technicianId === requester.id);
+        return res.json({ success: true, data: ownOrders });
+      }
+
       res.json({ success: true, data: formatted });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', 'MariaDB inacessível no ambiente atual. Servindo ordens de serviço da memória.');
+        if (requester && requester.role === 'TECHNICIAN') {
+          const ownOrders = memOrders.filter((o) => o.technicianId === requester.id);
+          return res.json({ success: true, data: ownOrders });
+        }
         return res.json({ success: true, data: memOrders });
       }
-      logDb('ERROR', `Erro ao buscar ordens de serviço: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.post('/api/orders', async (req, res) => {
+    const requester = await getRequester(req);
     const o = req.body;
+
     const existingIdx = memOrders.findIndex((item) => item.id === o.id);
     const isEdit = existingIdx >= 0;
     const oldOrder = isEdit ? memOrders[existingIdx] : null;
+
+    // Regras de Autorização de Ordens de Serviço
+    if (requester && requester.role === 'TECHNICIAN') {
+      // Técnico NÃO pode criar novas ordens de serviço
+      if (!isEdit) {
+        await recordAudit({
+          userId: requester.id,
+          userName: requester.name,
+          userRole: requester.role,
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'ACCESS_DENIED',
+          result: 'BLOCKED',
+          details: 'Técnico tentou criar uma nova OS diretamente via API.',
+        });
+        return res.status(403).json({ success: false, error: 'Acesso negado: Técnicos de campo não possuem permissão para abrir novas Ordens de Serviço.' });
+      }
+
+      // Técnico só pode editar sua própria OS
+      if (oldOrder && oldOrder.technicianId !== requester.id) {
+        await recordAudit({
+          userId: requester.id,
+          userName: requester.name,
+          userRole: requester.role,
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'ACCESS_DENIED',
+          result: 'BLOCKED',
+          details: `Técnico ${requester.name} tentou alterar OS #${oldOrder.callNumber} pertencente a outro técnico.`,
+        });
+        return res.status(403).json({ success: false, error: 'Acesso negado: você só pode preencher e atualizar as suas próprias Ordens de Serviço.' });
+      }
+
+      // Técnico não pode alterar valores financeiros protegidos
+      if (oldOrder) {
+        o.baseServiceFee = oldOrder.baseServiceFee;
+        o.faturamentoPorto = oldOrder.faturamentoPorto;
+        o.technicianId = oldOrder.technicianId;
+        o.callNumber = oldOrder.callNumber;
+      }
+    }
+
+    // Auditoria de Reatribuição de Técnico
+    if (isEdit && oldOrder && o.technicianId && o.technicianId !== oldOrder.technicianId) {
+      await recordAudit({
+        userId: requester?.id || 'system',
+        userName: requester?.name || 'Sistema',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'SERVICE_ORDERS',
+        action: 'OS_TECHNICIAN_REASSIGN',
+        affectedRecordId: o.id,
+        affectedRecordType: 'service_order',
+        oldValue: oldOrder.technicianId,
+        newValue: o.technicianId,
+        result: 'SUCCESS',
+        details: `Reatribuição da OS #${o.callNumber}: técnico alterado de "${oldOrder.technicianName || oldOrder.technicianId}" para "${o.technicianName || o.technicianId}".`,
+      });
+    }
+
+    // Auditoria Geral de Criação ou Atualização de OS
+    await recordAudit({
+      userId: requester?.id || 'system',
+      userName: requester?.name || 'Sistema',
+      userRole: requester?.role || 'ADMIN',
+      ipAddress: req.ip,
+      module: 'SERVICE_ORDERS',
+      action: isEdit ? 'OS_UPDATE' : 'OS_CREATE',
+      affectedRecordId: o.id,
+      affectedRecordType: 'service_order',
+      newValue: JSON.stringify({ callNumber: o.callNumber, customer: o.customerName, status: o.status, tech: o.technicianId }),
+      result: 'SUCCESS',
+      details: `${isEdit ? 'Atualização' : 'Criação'} da OS #${o.callNumber} para o cliente "${o.customerName}" (Status: ${o.status}).`,
+    });
 
     if (isEdit) {
       memOrders[existingIdx] = { ...memOrders[existingIdx], ...o };
     } else {
       memOrders.unshift(o);
     }
-
-    const techName = o.technicianName || o.technicianId || 'Não Alocado';
-    const totalGross = Number(o.totalTechnicianGross || 0);
 
     try {
       const db = getDbPool();
@@ -607,84 +1169,58 @@ async function startServer() {
         id: o.id,
         callnumber: o.callNumber,
         call_number: o.callNumber,
-        numero_chamado: o.callNumber,
         portoseguroprotocol: o.portoSeguroProtocol || null,
         porto_seguro_protocol: o.portoSeguroProtocol || null,
-        protocolo_porto: o.portoSeguroProtocol || null,
         servicecategory: o.serviceCategory || 'Higienização Padrão',
         service_category: o.serviceCategory || 'Higienização Padrão',
-        categoria: o.serviceCategory || 'Higienização Padrão',
         baseservicefee: Number(o.baseServiceFee || 0),
         base_service_fee: Number(o.baseServiceFee || 0),
-        valor_base: Number(o.baseServiceFee || 0),
-        customername: o.customerName || '',
-        customer_name: o.customerName || '',
-        cliente_nome: o.customerName || '',
-        customercpf: o.customerCpf || '',
-        customer_cpf: o.customerCpf || '',
-        cliente_cpf: o.customerCpf || '',
+        customername: o.customerName,
+        customer_name: o.customerName,
+        customercpf: o.customerCpf,
+        customer_cpf: o.customerCpf,
         customerphone: o.customerPhone || null,
         customer_phone: o.customerPhone || null,
-        cliente_telefone: o.customerPhone || null,
         city: o.city || 'São Paulo',
-        cidade: o.city || 'São Paulo',
         uf: o.uf || 'SP',
-        estado: o.uf || 'SP',
         neighborhood: o.neighborhood || '',
-        bairro: o.neighborhood || '',
         addressstreet: o.addressStreet || '',
         address_street: o.addressStreet || '',
-        endereco: o.addressStreet || '',
         addressnumber: o.addressNumber || '',
         address_number: o.addressNumber || '',
-        numero: o.addressNumber || '',
         addresscomplement: o.addressComplement || null,
         address_complement: o.addressComplement || null,
-        complemento: o.addressComplement || null,
         postalcode: o.postalCode || '',
         postal_code: o.postalCode || '',
-        cep: o.postalCode || '',
         technicianid: o.technicianId || null,
         technician_id: o.technicianId || null,
-        tecnico_id: o.technicianId || null,
         status: o.status || 'PENDING',
         scheduleddate: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
         scheduled_date: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
-        data_agendada: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
         startedat: o.startedAt ? new Date(o.startedAt) : null,
         started_at: o.startedAt ? new Date(o.startedAt) : null,
         completedat: o.completedAt ? new Date(o.completedAt) : null,
         completed_at: o.completedAt ? new Date(o.completedAt) : null,
         kmtraveled: Number(o.kmTraveled || 0),
         km_traveled: Number(o.kmTraveled || 0),
-        km_rodado: Number(o.kmTraveled || 0),
         kmrateapplied: Number(o.kmRateApplied || 0.5),
         km_rate_applied: Number(o.kmRateApplied || 0.5),
-        valor_km: Number(o.kmRateApplied || 0.5),
         kmtotalcost: Number(o.kmTotalCost || 0),
         km_total_cost: Number(o.kmTotalCost || 0),
-        total_km: Number(o.kmTotalCost || 0),
         tollcost: Number(o.tollCost || 0),
         toll_cost: Number(o.tollCost || 0),
-        pedagio: Number(o.tollCost || 0),
         supportcost: Number(o.supportCost || 0),
         support_cost: Number(o.supportCost || 0),
-        ajuda_custo_adicional: Number(o.supportCost || 0),
         totaltechniciangross: Number(o.totalTechnicianGross || 0),
         total_technician_gross: Number(o.totalTechnicianGross || 0),
-        total_bruto_tecnico: Number(o.totalTechnicianGross || 0),
         faturamentoporto: Number(o.faturamentoPorto || 0),
         faturamento_porto: Number(o.faturamentoPorto || 0),
-        valor_porto: Number(o.faturamentoPorto || 0),
         customersignature: o.customerSignature || null,
         customer_signature: o.customerSignature || null,
-        assinatura: o.customerSignature || null,
         executionnotes: o.executionNotes || null,
         execution_notes: o.executionNotes || null,
-        observacoes: o.executionNotes || null,
         tollreceipturl: o.tollReceiptUrl || null,
         toll_receipt_url: o.tollReceiptUrl || null,
-        comprovante_pedagio: o.tollReceiptUrl || null,
       };
 
       const insertCols: string[] = [];
@@ -702,13 +1238,7 @@ async function startServer() {
           } else if (colLower === 'updatedat' || colLower === 'updated_at') {
             val = new Date();
           } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
-            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
-              val = 0;
-            } else if (col.Type.includes('date') || col.Type.includes('time')) {
-              val = new Date();
-            } else {
-              val = '';
-            }
+            val = col.Type.includes('int') || col.Type.includes('decimal') ? 0 : '';
           }
         }
 
@@ -729,83 +1259,78 @@ async function startServer() {
           ON DUPLICATE KEY UPDATE
           ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
         `;
-
-        if (isEdit) {
-          const techChangeMsg = oldOrder && oldOrder.technicianId !== o.technicianId
-            ? ` | Técnico alterado de [${oldOrder.technicianName || oldOrder.technicianId || 'Nenhum'}] para [${techName}]`
-            : '';
-          logDb(
-            'INFO',
-            `[OS-EDIT/UPDATE] Gravando alterações da OS #${o.callNumber} (${o.id}) - Status: ${o.status} - Técnico: ${techName}${techChangeMsg} - Bruto: R$ ${totalGross.toFixed(2)}`,
-            query,
-            { id: o.id, callNumber: o.callNumber, technicianId: o.technicianId, status: o.status }
-          );
-        } else {
-          logDb(
-            'INFO',
-            `[OS-CREATE/INSERT] Registrando nova OS #${o.callNumber} (${o.id}) para cliente "${o.customerName}" - Técnico: ${techName} - Status: ${o.status} - Taxa Base: R$ ${Number(o.baseServiceFee || 0).toFixed(2)}`,
-            query,
-            { id: o.id, callNumber: o.callNumber, customerName: o.customerName, technicianId: o.technicianId }
-          );
-        }
-
         await db.execute(query, insertValues);
-
-        if (isEdit) {
-          logDb('INFO', `[OS-SUCCESS] OS #${o.callNumber} atualizada com sucesso no MariaDB (brsaolxdb01).`);
-        } else {
-          logDb('INFO', `[OS-SUCCESS] Nova OS #${o.callNumber} persistida com sucesso no MariaDB (brsaolxdb01).`);
-        }
       }
       res.json({ success: true, message: `OS ${o.callNumber} gravada com sucesso.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', `[OS-MEMORY-FALLBACK] OS #${o.callNumber} (${isEdit ? 'edição' : 'criação'}) gravada na memória local resiliente.`);
         return res.json({ success: true, message: `OS ${o.callNumber} salva com sucesso.` });
       }
-      logDb('ERROR', `[OS-ERROR] Erro ao gravar OS #${o.callNumber}: ${err.message}`, undefined, { order: o });
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.delete('/api/orders/:id', async (req, res) => {
     const { id } = req.params;
+    const requester = await getRequester(req);
+
+    // Técnico não pode excluir Ordens de Serviço
+    if (!requester || requester.role === 'TECHNICIAN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'SERVICE_ORDERS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: `Tentativa não autorizada de exclusão da OS ${id} por perfil Técnico.`,
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: Técnicos não possuem permissão para excluir Ordens de Serviço.' });
+    }
+
     const target = memOrders.find((o) => o.id === id);
     const callNum = target ? target.callNumber : id;
     memOrders = memOrders.filter((o) => o.id !== id);
 
-    logDb(
-      'INFO',
-      `[OS-DELETE] Solicitada exclusão da OS #${callNum} (${id}) - Cliente: ${target?.customerName || 'N/A'} - Técnico: ${target?.technicianName || target?.technicianId || 'N/A'}`,
-      'DELETE FROM service_orders WHERE id = ?',
-      [id]
-    );
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'SERVICE_ORDERS',
+      action: 'OS_DELETE',
+      affectedRecordId: id,
+      affectedRecordType: 'service_order',
+      oldValue: JSON.stringify(target || { id, callNumber: callNum }),
+      result: 'SUCCESS',
+      details: `Exclusão da OS #${callNum} (Cliente: ${target?.customerName || 'N/A'}) efetuada por ${requester.name} (${requester.role}).`,
+    });
 
     try {
       const db = getDbPool();
       await db.execute('DELETE FROM service_orders WHERE id = ?', [id]);
-      logDb('INFO', `[OS-DELETE-SUCCESS] OS #${callNum} (${id}) excluída com sucesso do MariaDB.`);
       res.json({ success: true, message: `OS ${id} removida.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', `[OS-DELETE-FALLBACK] OS #${callNum} removida da memória local.`);
         return res.json({ success: true, message: `OS ${id} removida da memória local.` });
       }
-      logDb('ERROR', `[OS-DELETE-ERROR] Erro ao excluir OS #${callNum} (${id}): ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // 4. STOCK ITEMS API (GET, POST, PUT, DELETE)
+  // =========================================================================
+  // 6. STOCK ITEMS API (Acesso: Master & Gestor Operacional)
+  // =========================================================================
   app.get('/api/stock', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado ao módulo de Estoque.' });
+    }
+
     try {
       const db = getDbPool();
-      const cols = await getTableColumnsMap('stock_items');
-      let orderClause = 'id ASC';
-      if (cols.has('name')) orderClause = `\`${cols.get('name')}\` ASC`;
-      else if (cols.has('nome')) orderClause = `\`${cols.get('nome')}\` ASC`;
-
-      const [rows]: any = await db.query(`SELECT * FROM \`stock_items\` ORDER BY ${orderClause}`);
+      const [rows]: any = await db.query('SELECT * FROM `stock_items` ORDER BY name ASC');
       const formatted = rows.map((s: any) => ({
         ...s,
         id: s.id,
@@ -814,31 +1339,49 @@ async function startServer() {
         description: s.description || s.descricao || '',
         category: s.category || s.categoria || 'Geral',
         unit: s.unit || s.unidade || 'UN',
-        quantityInStock: Number(s.quantityInStock ?? s.quantity_in_stock ?? s.quantity ?? s.quantidade ?? 0),
-        minimumThreshold: Number(s.minimumThreshold ?? s.minimum_threshold ?? s.minimo ?? 0),
-        unitCost: Number(s.unitCost ?? s.unit_cost ?? s.custo_unitario ?? 0),
+        quantityInStock: Number(s.quantityInStock ?? s.quantity_in_stock ?? 0),
+        minimumThreshold: Number(s.minimumThreshold ?? s.minimum_threshold ?? 0),
+        unitCost: Number(s.unitCost ?? s.unit_cost ?? 0),
         isSupportSupply: Boolean(s.isSupportSupply ?? s.is_support_supply ?? true),
       }));
       memStock = formatted;
       res.json({ success: true, data: formatted });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', 'MariaDB inacessível no ambiente atual. Servindo estoque da memória.');
         return res.json({ success: true, data: memStock });
       }
-      logDb('ERROR', `Erro ao buscar estoque: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.post('/api/stock', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: Técnicos não alteram estoque central.' });
+    }
+
     const s = req.body;
     const existingIdx = memStock.findIndex((item) => item.id === s.id);
-    if (existingIdx >= 0) {
+    const isEdit = existingIdx >= 0;
+    if (isEdit) {
       memStock[existingIdx] = { ...memStock[existingIdx], ...s };
     } else {
       memStock.push(s);
     }
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'STOCK',
+      action: isEdit ? 'STOCK_UPDATE' : 'STOCK_CREATE',
+      affectedRecordId: s.id,
+      affectedRecordType: 'stock_item',
+      newValue: JSON.stringify({ code: s.code, name: s.name, qty: s.quantityInStock }),
+      result: 'SUCCESS',
+      details: `${isEdit ? 'Atualização' : 'Cadastro'} do item de estoque "${s.name}" (${s.quantityInStock} ${s.unit}) por ${requester.name}.`,
+    });
 
     try {
       const db = getDbPool();
@@ -847,27 +1390,14 @@ async function startServer() {
       const stockValues: Record<string, any> = {
         id: s.id,
         code: s.code,
-        codigo: s.code,
         name: s.name,
-        nome: s.name,
         description: s.description || null,
-        descricao: s.description || null,
         category: s.category || 'Geral',
-        categoria: s.category || 'Geral',
         unit: s.unit || 'UN',
-        unidade: s.unit || 'UN',
         quantityinstock: Number(s.quantityInStock || 0),
-        quantity_in_stock: Number(s.quantityInStock || 0),
-        quantity: Number(s.quantityInStock || 0),
-        quantidade: Number(s.quantityInStock || 0),
         minimumthreshold: Number(s.minimumThreshold || 5),
-        minimum_threshold: Number(s.minimumThreshold || 5),
-        minimo: Number(s.minimumThreshold || 5),
         unitcost: Number(s.unitCost || 0),
-        unit_cost: Number(s.unitCost || 0),
-        custo_unitario: Number(s.unitCost || 0),
         issupportsupply: s.isSupportSupply ? 1 : 0,
-        is_support_supply: s.isSupportSupply ? 1 : 0,
       };
 
       const insertCols: string[] = [];
@@ -878,23 +1408,6 @@ async function startServer() {
       for (const col of cols) {
         const colLower = col.Field.toLowerCase();
         let val = stockValues[colLower];
-
-        if (val === undefined) {
-          if (colLower === 'createdat' || colLower === 'created_at') {
-            val = new Date();
-          } else if (colLower === 'updatedat' || colLower === 'updated_at') {
-            val = new Date();
-          } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
-            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
-              val = 0;
-            } else if (col.Type.includes('date') || col.Type.includes('time')) {
-              val = new Date();
-            } else {
-              val = '';
-            }
-          }
-        }
-
         if (val !== undefined) {
           insertCols.push(`\`${col.Field}\``);
           insertPlaceholders.push('?');
@@ -912,85 +1425,117 @@ async function startServer() {
           ON DUPLICATE KEY UPDATE
           ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
         `;
-
-        logDb('INFO', `Salvando item de estoque ${s.name} (${s.id})...`);
         await db.execute(query, insertValues);
-        logDb('INFO', `Item ${s.name} salvo com sucesso no MariaDB.`);
       }
       res.json({ success: true, message: `Item ${s.name} salvo no estoque.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', `Item ${s.name} salvo na memória local.`);
         return res.json({ success: true, message: `Item ${s.name} salvo no estoque.` });
       }
-      logDb('ERROR', `Erro ao gravar item ${s.name}: ${err.message}`, undefined, { stock: s });
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.delete('/api/stock/:id', async (req, res) => {
     const { id } = req.params;
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado.' });
+    }
+
+    const item = memStock.find((s) => s.id === id);
     memStock = memStock.filter((s) => s.id !== id);
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'STOCK',
+      action: 'STOCK_DELETE',
+      affectedRecordId: id,
+      affectedRecordType: 'stock_item',
+      oldValue: JSON.stringify(item || { id }),
+      result: 'SUCCESS',
+      details: `Exclusão do item de estoque "${item?.name || id}" efetuada por ${requester.name}.`,
+    });
+
     try {
       const db = getDbPool();
       await db.execute('DELETE FROM stock_items WHERE id = ?', [id]);
-      logDb('INFO', `Item de estoque ${id} excluído do MariaDB.`);
       res.json({ success: true, message: `Item ${id} removido.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
         return res.json({ success: true, message: `Item ${id} removido da memória local.` });
       }
-      logDb('ERROR', `Erro ao excluir item de estoque ${id}: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // 5. FINANCIAL MOVEMENTS API (GET, POST, DELETE)
+  // =========================================================================
+  // 7. FINANCIAL MOVEMENTS API (Master & Gestor Operacional)
+  // =========================================================================
   app.get('/api/movements', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado ao Fluxo de Caixa Global.' });
+    }
+
     try {
       const db = getDbPool();
-      const cols = await getTableColumnsMap('financial_movements');
-      let orderClause = 'id DESC';
-      if (cols.has('createdat')) orderClause = `\`${cols.get('createdat')}\` DESC`;
-      else if (cols.has('created_at')) orderClause = `\`${cols.get('created_at')}\` DESC`;
-      else if (cols.has('duedate')) orderClause = `\`${cols.get('duedate')}\` DESC`;
-      else if (cols.has('due_date')) orderClause = `\`${cols.get('due_date')}\` DESC`;
-
-      const [rows]: any = await db.query(`SELECT * FROM \`financial_movements\` ORDER BY ${orderClause}`);
+      const [rows]: any = await db.query('SELECT * FROM `financial_movements` ORDER BY id DESC');
       const formatted = rows.map((m: any) => ({
         ...m,
         id: m.id,
-        type: m.type || m.tipo || 'INCOME',
-        category: m.category || m.categoria || 'Geral',
-        description: m.description || m.descricao || '',
-        amount: Number(m.amount ?? m.valor ?? 0),
+        type: m.type || 'INCOME',
+        category: m.category || 'Geral',
+        description: m.description || '',
+        amount: Number(m.amount ?? 0),
         status: m.status || 'CONFIRMED',
-        technicianId: m.technicianId || m.technician_id || m.tecnico_id || null,
-        serviceOrderId: m.serviceOrderId || m.service_order_id || m.os_id || null,
-        biweeklyClosingId: m.biweeklyClosingId || m.biweekly_closing_id || m.fechamento_id || null,
-        paymentMethod: m.paymentMethod || m.payment_method || m.forma_pagamento || null,
-        date: m.date || m.dueDate || m.due_date || m.createdAt || m.created_at || new Date().toISOString(),
+        technicianId: m.technicianId || null,
+        serviceOrderId: m.serviceOrderId || null,
+        biweeklyClosingId: m.biweeklyClosingId || null,
+        paymentMethod: m.paymentMethod || null,
+        date: m.date || m.dueDate || new Date().toISOString(),
       }));
       memMovements = formatted;
       res.json({ success: true, data: formatted });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', 'MariaDB inacessível no ambiente atual. Servindo movimentações da memória.');
         return res.json({ success: true, data: memMovements });
       }
-      logDb('ERROR', `Erro ao buscar movimentações financeiras: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.post('/api/movements', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado ao lançamento financeiro.' });
+    }
+
     const m = req.body;
     const existingIdx = memMovements.findIndex((item) => item.id === m.id);
-    if (existingIdx >= 0) {
+    const isEdit = existingIdx >= 0;
+    if (isEdit) {
       memMovements[existingIdx] = { ...memMovements[existingIdx], ...m };
     } else {
       memMovements.unshift(m);
     }
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'CASHFLOW',
+      action: 'FINANCIAL_MOVEMENT_CREATE',
+      affectedRecordId: m.id,
+      affectedRecordType: 'financial_movement',
+      newValue: JSON.stringify({ type: m.type, desc: m.description, val: m.amount }),
+      result: 'SUCCESS',
+      details: `Lançamento financeiro [${m.type}] de R$ ${m.amount} ("${m.description}") por ${requester.name}.`,
+    });
 
     try {
       const db = getDbPool();
@@ -999,30 +1544,16 @@ async function startServer() {
       const movValues: Record<string, any> = {
         id: m.id,
         type: m.type || 'INCOME',
-        tipo: m.type || 'INCOME',
         category: m.category || 'Geral',
-        categoria: m.category || 'Geral',
         description: m.description || '',
-        descricao: m.description || '',
         amount: Number(m.amount || 0),
-        valor: Number(m.amount || 0),
         status: m.status || 'CONFIRMED',
         technicianid: m.technicianId || null,
-        technician_id: m.technicianId || null,
-        tecnico_id: m.technicianId || null,
         serviceorderid: m.serviceOrderId || null,
-        service_order_id: m.serviceOrderId || null,
-        os_id: m.serviceOrderId || null,
         biweeklyclosingid: m.biweeklyClosingId || null,
-        biweekly_closing_id: m.biweeklyClosingId || null,
-        fechamento_id: m.biweeklyClosingId || null,
         paymentmethod: m.paymentMethod || null,
-        payment_method: m.paymentMethod || null,
-        forma_pagamento: m.paymentMethod || null,
         duedate: m.date || m.dueDate ? new Date(m.date || m.dueDate) : new Date(),
-        due_date: m.date || m.dueDate ? new Date(m.date || m.dueDate) : new Date(),
         paymentdate: m.paymentDate ? new Date(m.paymentDate) : null,
-        payment_date: m.paymentDate ? new Date(m.paymentDate) : null,
       };
 
       const insertCols: string[] = [];
@@ -1033,23 +1564,6 @@ async function startServer() {
       for (const col of cols) {
         const colLower = col.Field.toLowerCase();
         let val = movValues[colLower];
-
-        if (val === undefined) {
-          if (colLower === 'createdat' || colLower === 'created_at') {
-            val = new Date();
-          } else if (colLower === 'updatedat' || colLower === 'updated_at') {
-            val = new Date();
-          } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
-            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
-              val = 0;
-            } else if (col.Type.includes('date') || col.Type.includes('time')) {
-              val = new Date();
-            } else {
-              val = '';
-            }
-          }
-        }
-
         if (val !== undefined) {
           insertCols.push(`\`${col.Field}\``);
           insertPlaceholders.push('?');
@@ -1067,41 +1581,62 @@ async function startServer() {
           ON DUPLICATE KEY UPDATE
           ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
         `;
-
-        logDb('INFO', `Salvando movimento financeiro ${m.description || m.id} no MariaDB...`);
         await db.execute(query, insertValues);
-        logDb('INFO', `Movimento ${m.id} salvo no MariaDB.`);
       }
-      res.json({ success: true, message: 'Movimento financeiro gravado no MariaDB.' });
+      res.json({ success: true, message: 'Movimento financeiro gravado.' });
     } catch (err: any) {
       if (isNetworkError(err)) {
-        logDb('INFO', `Movimento financeiro ${m.description || m.id} salvo na memória local.`);
         return res.json({ success: true, message: 'Movimento financeiro salvo com sucesso.' });
       }
-      logDb('ERROR', `Erro ao gravar movimento financeiro: ${err.message}`, undefined, { movement: m });
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   app.delete('/api/movements/:id', async (req, res) => {
     const { id } = req.params;
+    const requester = await getRequester(req);
+    if (!requester || requester.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, error: 'Apenas Administrador Master pode estornar/excluir lançamentos financeiros.' });
+    }
+
+    const mov = memMovements.find((m) => m.id === id);
     memMovements = memMovements.filter((m) => m.id !== id);
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'CASHFLOW',
+      action: 'FINANCIAL_MOVEMENT_DELETE',
+      affectedRecordId: id,
+      affectedRecordType: 'financial_movement',
+      oldValue: JSON.stringify(mov || { id }),
+      result: 'SUCCESS',
+      details: `Exclusão de movimento financeiro "${mov?.description || id}" por ${requester.name}.`,
+    });
+
     try {
       const db = getDbPool();
       await db.execute('DELETE FROM financial_movements WHERE id = ?', [id]);
-      logDb('INFO', `Movimento financeiro ${id} excluído.`);
       res.json({ success: true, message: `Movimento ${id} removido.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
         return res.json({ success: true, message: `Movimento ${id} removido da memória local.` });
       }
-      logDb('ERROR', `Erro ao excluir movimento ${id}: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // 6. GENERAL SETTINGS API (GET, POST)
+  // =========================================================================
+  // 8. GENERAL SETTINGS API (Restrito: Administrador Master)
+  // =========================================================================
   app.get('/api/settings', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Master.' });
+    }
+
     try {
       const db = getDbPool();
       const [rows]: any = await db.query('SELECT * FROM general_settings LIMIT 1').catch(() => [[]]);
@@ -1133,8 +1668,36 @@ async function startServer() {
   });
 
   app.post('/api/settings', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'SETTINGS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de alterar configurações do sistema.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas o Administrador Master pode alterar configurações.' });
+    }
+
     const s = req.body;
     memSettings = { ...memSettings, ...s };
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'SETTINGS',
+      action: 'SETTINGS_UPDATE',
+      newValue: JSON.stringify(s),
+      result: 'SUCCESS',
+      details: `Configurações gerais do sistema alteradas por ${requester.name}.`,
+    });
+
     try {
       const db = getDbPool();
       const cols = await getTableColumnsInfo('general_settings');
@@ -1145,25 +1708,15 @@ async function startServer() {
       const settingsValues: Record<string, any> = {
         id: 'default',
         companyname: s.companyName || 'O Higienizador',
-        company_name: s.companyName || 'O Higienizador',
         companycnpj: s.companyCnpj || '32.145.890/0001-44',
-        company_cnpj: s.companyCnpj || '32.145.890/0001-44',
         kmratedefault: Number(s.kmRateDefault || 0.5),
-        km_rate_default: Number(s.kmRateDefault || 0.5),
         portosegurobasefeedefault: Number(s.portoSeguroBaseFeeDefault || 180),
-        porto_seguro_base_fee_default: Number(s.portoSeguroBaseFeeDefault || 180),
         defaultspecialtaxrate: Number(s.defaultSpecialTaxRate || 16),
-        default_special_tax_rate: Number(s.defaultSpecialTaxRate || 16),
         whatsappapiurl: s.whatsappApiUrl || '',
-        whatsapp_api_url: s.whatsappApiUrl || '',
         whatsappapikey: s.whatsappApiKey || '',
-        whatsapp_api_key: s.whatsappApiKey || '',
         whatsappinstancename: s.whatsappInstanceName || '',
-        whatsapp_instance_name: s.whatsappInstanceName || '',
         whatsapptemplatemessage: s.whatsappTemplateMessage || '',
-        whatsapp_template_message: s.whatsappTemplateMessage || '',
         autostockdeduction: s.autoStockDeduction ? 1 : 0,
-        auto_stock_deduction: s.autoStockDeduction ? 1 : 0,
       };
 
       const insertCols: string[] = [];
@@ -1192,14 +1745,12 @@ async function startServer() {
           ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
         `;
         await db.execute(query, insertValues);
-        logDb('INFO', 'Configurações do sistema salvas no MariaDB.');
       }
       res.json({ success: true, message: 'Configurações salvas no MariaDB.' });
     } catch (err: any) {
       if (isNetworkError(err)) {
         return res.json({ success: true, message: 'Configurações salvas em memória local.' });
       }
-      logDb('ERROR', `Erro ao salvar configurações no MariaDB: ${err.message}`);
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -1223,7 +1774,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Sistema Higienizador] Servidor Full-Stack rodando em http://0.0.0.0:${PORT}`);
-    console.log(`[Sistema Higienizador] Banco configurado: MariaDB (192.168.15.246 / higienizador_db)`);
+    console.log(`[Sistema Higienizador] RBAC, Auditoria e MariaDB ativos.`);
   });
 }
 

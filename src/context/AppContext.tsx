@@ -27,6 +27,9 @@ import { ApiService } from '../services/apiService';
 interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
+  isMasterAdmin: boolean;
+  isOperational: boolean;
+  isTechnician: boolean;
   users: User[];
   setUsers: React.Dispatch<React.SetStateAction<User[]>>;
   orders: ServiceOrder[];
@@ -216,6 +219,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return INITIAL_USERS[0];
   });
+
+  const isMasterAdmin = useMemo(() => currentUser?.role === 'ADMIN', [currentUser]);
+  const isOperational = useMemo(() => currentUser?.role === 'OPERATIONAL', [currentUser]);
+  const isTechnician = useMemo(() => currentUser?.role === 'TECHNICIAN', [currentUser]);
+
+  useEffect(() => {
+    if (isAuthenticated && currentUser?.id) {
+      ApiService.setAuthUser(currentUser.id);
+    } else {
+      ApiService.setAuthUser(null);
+    }
+  }, [isAuthenticated, currentUser]);
 
   // Auth Methods
   const login = async (
@@ -1180,6 +1195,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentUser,
         setCurrentUser,
+        isMasterAdmin,
+        isOperational,
+        isTechnician,
         users,
         setUsers,
         orders,

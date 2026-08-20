@@ -8,9 +8,9 @@ import {
   Users,
   DollarSign,
   Sliders,
+  ShieldCheck,
+  UserCheck,
   X,
-  ChevronLeft,
-  ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
@@ -30,7 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen = false,
   onClose,
 }) => {
-  const { currentUser, orders = [], stock = [] } = useApp();
+  const { currentUser, isMasterAdmin, isOperational, isTechnician, orders = [], stock = [] } = useApp();
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
 
   const safeOrders = orders || [];
@@ -44,25 +44,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
     (s) => s && s.quantityInStock <= s.minimumThreshold
   ).length;
 
-  const navItems = [
+  const allNavItems = [
     {
       id: 'dashboard',
       label: 'Dashboard',
       icon: LayoutDashboard,
       badge: null,
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
       id: 'orders',
-      label: 'Ordens de Serviço',
+      label: isTechnician ? 'Minhas Ordens de Serviço' : 'Ordens de Serviço',
       icon: ClipboardList,
       badge: pendingOrdersCount > 0 ? pendingOrdersCount : null,
       badgeColor: 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30',
+      roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
+    },
+    {
+      id: 'mobile_app',
+      label: 'App Mobile Técnico',
+      icon: Smartphone,
+      badge: isTechnician ? 'Principal' : 'Simulador',
+      badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
+      roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
     },
     {
       id: 'technicians',
       label: 'Técnicos & PIX',
       icon: Users,
       badge: null,
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
       id: 'stock',
@@ -70,6 +81,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: PackageCheck,
       badge: lowStockCount > 0 ? `${lowStockCount} alertas` : null,
       badgeColor: 'bg-red-500/20 text-red-200 border border-red-400/30',
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
       id: 'finance',
@@ -77,27 +89,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: FileSpreadsheet,
       badge: 'Auditado',
       badgeColor: 'bg-cyan-400/20 text-cyan-200 border border-cyan-300/30',
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
       id: 'cashflow',
       label: 'Fluxo de Caixa & Vales',
       icon: DollarSign,
       badge: null,
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
-      id: 'mobile_app',
-      label: 'App Mobile Técnico',
-      icon: Smartphone,
-      badge: 'Ao Vivo',
-      badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
+      id: 'audit',
+      label: 'Trilha de Auditoria',
+      icon: ShieldCheck,
+      badge: 'RBAC',
+      badgeColor: 'bg-indigo-500/20 text-indigo-200 border border-indigo-400/30',
+      roles: ['ADMIN', 'OPERATIONAL'],
     },
     {
       id: 'settings',
       label: 'Configurações',
       icon: Sliders,
       badge: null,
+      roles: ['ADMIN'],
     },
   ];
+
+  const userRole = safeUser.role || 'TECHNICIAN';
+  const navItems = allNavItems.filter((item) => item.roles.includes(userRole));
 
   const handleSelectTab = (tabId: string) => {
     setActiveTab(tabId);

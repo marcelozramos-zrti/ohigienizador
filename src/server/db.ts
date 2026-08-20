@@ -273,7 +273,31 @@ export async function initializeDatabaseSchema(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db`.');
+    // 5. audit_logs table (Mandatório conforme Especificação Técnica)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id VARCHAR(36) NOT NULL PRIMARY KEY,
+        timestamp DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        userId VARCHAR(36) NOT NULL,
+        userName VARCHAR(120) NOT NULL,
+        userRole VARCHAR(30) NOT NULL,
+        ipAddress VARCHAR(50) NULL,
+        module VARCHAR(50) NOT NULL,
+        action VARCHAR(60) NOT NULL,
+        affectedRecordId VARCHAR(100) NULL,
+        affectedRecordType VARCHAR(60) NULL,
+        oldValue LONGTEXT NULL,
+        newValue LONGTEXT NULL,
+        result ENUM('SUCCESS', 'BLOCKED', 'FAILED') NOT NULL DEFAULT 'SUCCESS',
+        details TEXT NULL,
+        INDEX idx_audit_user (userId),
+        INDEX idx_audit_module (module),
+        INDEX idx_audit_action (action),
+        INDEX idx_audit_time (timestamp)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db` (incluindo audit_logs).');
   } catch (err: any) {
     console.warn(`[MariaDB] Inicialização de schema adiada: ${err.message}`);
   }

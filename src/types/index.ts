@@ -1,5 +1,70 @@
 export type Role = 'ADMIN' | 'OPERATIONAL' | 'TECHNICIAN';
 
+export type DataScope = 'ALL' | 'OWN' | 'NONE';
+
+export type AppModule =
+  | 'AUTH'
+  | 'SERVICE_ORDERS'
+  | 'USERS'
+  | 'STOCK'
+  | 'FINANCE'
+  | 'CASHFLOW'
+  | 'SETTINGS'
+  | 'DATABASE'
+  | 'AUDIT';
+
+export type AuditAction =
+  | 'LOGIN'
+  | 'LOGOUT'
+  | 'LOGIN_FAILED'
+  | 'PASSWORD_CHANGE'
+  | 'MFA_TOGGLE'
+  | 'USER_CREATE'
+  | 'USER_UPDATE'
+  | 'USER_DEACTIVATE'
+  | 'USER_RESTORE'
+  | 'USER_DELETE'
+  | 'USER_ROLE_CHANGE'
+  | 'PIX_CHANGE'
+  | 'SPECIAL_TAX_CHANGE'
+  | 'COST_ALLOWANCE_CHANGE'
+  | 'OS_CREATE'
+  | 'OS_UPDATE'
+  | 'OS_STATUS_CHANGE'
+  | 'OS_DELETE'
+  | 'OS_TECHNICIAN_REASSIGN'
+  | 'STOCK_CREATE'
+  | 'STOCK_UPDATE'
+  | 'STOCK_DELETE'
+  | 'STOCK_ADJUST'
+  | 'FINANCIAL_MOVEMENT_CREATE'
+  | 'FINANCIAL_MOVEMENT_DELETE'
+  | 'FINANCIAL_CLOSING_CREATE'
+  | 'FINANCIAL_CLOSING_PAY'
+  | 'SETTINGS_UPDATE'
+  | 'DB_CONFIG_UPDATE'
+  | 'DATA_EXPORT'
+  | 'ACCESS_DENIED';
+
+export type AuditResult = 'SUCCESS' | 'BLOCKED' | 'FAILED';
+
+export interface AuditLog {
+  id: string;
+  timestamp: string; // ISO String
+  userId: string;
+  userName: string;
+  userRole: Role;
+  ipAddress?: string;
+  module: AppModule;
+  action: AuditAction;
+  affectedRecordId?: string;
+  affectedRecordType?: string;
+  oldValue?: string | null;
+  newValue?: string | null;
+  result: AuditResult;
+  details?: string;
+}
+
 export type OsStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 
 export type MovementType =

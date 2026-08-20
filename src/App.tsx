@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -10,6 +10,7 @@ import { TechniciansView } from './components/TechniciansView';
 import { CashFlowView } from './components/CashFlowView';
 import { MobileAppSimulator } from './components/MobileAppSimulator';
 import { SettingsView } from './components/SettingsView';
+import { AuditLogsView } from './components/AuditLogsView';
 import { NewServiceOrderModal } from './components/NewServiceOrderModal';
 import { LoginView } from './components/LoginView';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
@@ -21,10 +22,30 @@ const MainLayout: React.FC = () => {
     toasts = [],
     removeToast,
     isAuthenticated,
+    currentUser,
+    isMasterAdmin,
+    isOperational,
+    isTechnician,
   } = useApp();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState<boolean>(false);
   const [showNewAdvanceModal, setShowNewAdvanceModal] = useState<boolean>(false);
+
+  // Redirecionamento automático e proteção de rota no Frontend baseado no RBAC
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    if (isTechnician) {
+      const allowedForTech = ['mobile_app', 'orders'];
+      if (!allowedForTech.includes(activeTab)) {
+        setActiveTab('mobile_app');
+      }
+    } else if (isOperational) {
+      if (activeTab === 'settings') {
+        setActiveTab('dashboard');
+      }
+    }
+  }, [isAuthenticated, isTechnician, isOperational, activeTab, setActiveTab]);
 
   // If not authenticated, render the secure Login View with Superadmin and Technician access
   if (!isAuthenticated) {
@@ -82,6 +103,8 @@ const MainLayout: React.FC = () => {
                 onCloseNewModal={() => setShowNewAdvanceModal(false)}
               />
             )}
+
+            {activeTab === 'audit' && <AuditLogsView />}
 
             {activeTab === 'mobile_app' && <MobileAppSimulator />}
 

@@ -175,6 +175,51 @@ export const LoginView: React.FC = () => {
                   </>
                 )}
               </button>
+
+              {/* Perfis Pré-configurados para Demonstração de RBAC */}
+              <div className="pt-3 border-t border-slate-100">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 text-center">
+                  Acesso Rápido por Perfil (RBAC v1.0)
+                </span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmail('gestor@ohigienizador.com.br');
+                      setPassword('Porto@2026');
+                    }}
+                    className="p-2 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-800 text-[11px] font-semibold flex flex-col items-center justify-center text-center transition-colors border border-purple-200"
+                    title="Acesso Total Irrestrito + Logs + Banco"
+                  >
+                    <span className="font-bold">Master</span>
+                    <span className="text-[9px] text-purple-600 font-normal">Superadmin</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmail('operacional@ohigienizador.com.br');
+                      setPassword('Porto@2026');
+                    }}
+                    className="p-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 text-[11px] font-semibold flex flex-col items-center justify-center text-center transition-colors border border-blue-200"
+                    title="Operações, OS, Estoque e Extratos"
+                  >
+                    <span className="font-bold">Gestor</span>
+                    <span className="text-[9px] text-blue-600 font-normal">Operacional</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmail('carlos.silva@ohigienizador.com.br');
+                      setPassword('Porto@2026');
+                    }}
+                    className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-semibold flex flex-col items-center justify-center text-center transition-colors border border-emerald-200"
+                    title="Escopo restrito às suas próprias OS"
+                  >
+                    <span className="font-bold">Técnico</span>
+                    <span className="text-[9px] text-emerald-600 font-normal">Campo</span>
+                  </button>
+                </div>
+              </div>
             </form>
           ) : (
             /* STEP 2: MFA 6-DIGIT CODE */

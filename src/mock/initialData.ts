@@ -22,7 +22,28 @@ export const INITIAL_USERS: User[] = [
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
   },
-  // 2. Técnico 1: Carlos Henrique Silva
+  // 2. Gestor Operacional
+  {
+    id: 'op1',
+    name: 'Mariana Costa (Gestão Operacional)',
+    email: 'operacional@ohigienizador.com.br',
+    password: 'Porto@2026',
+    role: 'OPERATIONAL',
+    isSuperAdmin: false,
+    documentCpf: '890.123.456-77',
+    phone: '11981112233',
+    isActive: true,
+    mfaEnabled: false,
+    pixKeyType: 'EMAIL',
+    pixKey: 'operacional@ohigienizador.com.br',
+    bankName: 'Banco do Brasil',
+    bankAgency: '1234',
+    bankAccount: '98765-4',
+    baseCostAllowance: 0,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 0,
+  },
+  // 3. Técnico 1: Carlos Henrique Silva
   {
     id: 'u1',
     name: 'Carlos Henrique Silva',
