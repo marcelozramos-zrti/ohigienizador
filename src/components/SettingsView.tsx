@@ -99,6 +99,49 @@ export const SettingsView: React.FC = () => {
   const [showSqlSchemaModal, setShowSqlSchemaModal] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
+  // Live MariaDB Logs & Schema Diagnostics
+  const [dbLogs, setDbLogs] = useState<Array<{ id: string; timestamp: string; level: 'INFO' | 'WARN' | 'ERROR'; message: string; query?: string; details?: any }>>([]);
+  const [isFetchingLogs, setIsFetchingLogs] = useState(false);
+  const [isSyncingSchema, setIsSyncingSchema] = useState(false);
+  const [schemaSyncResult, setSchemaSyncResult] = useState<{ success: boolean; message: string; added: string[]; skipped: string[]; errors: string[] } | null>(null);
+
+  const fetchDbLogs = async () => {
+    setIsFetchingLogs(true);
+    try {
+      const logs = await ApiService.getDbLogs();
+      setDbLogs(logs);
+    } catch {
+      // ignore
+    } finally {
+      setIsFetchingLogs(false);
+    }
+  };
+
+  const handleSyncSchema = async () => {
+    setIsSyncingSchema(true);
+    setSchemaSyncResult(null);
+    try {
+      const res = await ApiService.syncDbSchema();
+      setSchemaSyncResult(res);
+      if (res.success) {
+        addToast('Schema Sincronizado', res.message, 'success');
+      } else {
+        addToast('Atenção no Schema', res.message, 'warning');
+      }
+      fetchDbLogs();
+    } catch (err: any) {
+      addToast('Erro na Sincronização', err.message, 'error');
+    } finally {
+      setIsSyncingSchema(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (activeTab === 'DATABASE') {
+      fetchDbLogs();
+    }
+  }, [activeTab]);
+
   const handleTestDatabase = async () => {
     setIsTestingDb(true);
     try {
@@ -713,7 +756,7 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={handleTestDatabase}
@@ -726,6 +769,16 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
 
                 <button
                   type="button"
+                  onClick={handleSyncSchema}
+                  disabled={isSyncingSchema}
+                  className="flex items-center space-x-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-all cursor-pointer disabled:opacity-50 shadow-xs"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingSchema ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingSchema ? 'Sincronizando...' : 'Auto-Criar Colunas (Reparar)'}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setShowSqlSchemaModal(true)}
                   className="flex items-center space-x-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-lg transition-all cursor-pointer"
                 >
@@ -734,6 +787,34 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
                 </button>
               </div>
             </div>
+
+            {schemaSyncResult && (
+              <div className={`p-3 rounded-lg border text-xs ${
+                schemaSyncResult.errors.length > 0
+                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}>
+                <div className="font-bold flex items-center space-x-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{schemaSyncResult.message}</span>
+                </div>
+                {schemaSyncResult.added.length > 0 && (
+                  <div className="text-[11px] mt-1 text-emerald-800">
+                    Colunas adicionadas: <span className="font-mono font-bold">{schemaSyncResult.added.join(', ')}</span>
+                  </div>
+                )}
+                {schemaSyncResult.skipped.length > 0 && (
+                  <div className="text-[11px] mt-0.5 text-slate-500">
+                    Colunas já existentes: <span className="font-mono">{schemaSyncResult.skipped.join(', ')}</span>
+                  </div>
+                )}
+                {schemaSyncResult.errors.length > 0 && (
+                  <div className="text-[11px] mt-1 text-red-700 font-mono">
+                    Erros: {schemaSyncResult.errors.join(' | ')}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Realtime Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -912,6 +993,74 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Live MariaDB Execution & Diagnostics Console */}
+          <div className="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-lg text-xs space-y-3 font-mono">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Terminal className="w-4 h-4 text-cyan-400" />
+                <span className="font-bold text-slate-200">Terminal de Logs do Backend & MariaDB em Tempo Real</span>
+                <span className="px-1.5 py-0.5 bg-cyan-950 text-cyan-400 border border-cyan-800/60 rounded text-[9px]">
+                  {dbLogs.length} eventos registrados
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={fetchDbLogs}
+                  disabled={isFetchingLogs}
+                  className="flex items-center space-x-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-bold transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isFetchingLogs ? 'animate-spin' : ''}`} />
+                  <span>Atualizar Logs</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-60 overflow-y-auto space-y-1 text-[11px] pr-2 scrollbar-thin scrollbar-thumb-slate-700">
+              {dbLogs.length === 0 ? (
+                <div className="text-slate-500 italic py-3 text-center">
+                  Nenhum log registrado ainda. Clique em "Atualizar Logs" ou execute uma ação de gravação.
+                </div>
+              ) : (
+                dbLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className={`p-2 rounded border flex flex-col space-y-1 ${
+                      log.level === 'ERROR'
+                        ? 'bg-red-950/40 border-red-800/60 text-red-300'
+                        : log.level === 'WARN'
+                        ? 'bg-amber-950/40 border-amber-800/60 text-amber-300'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className={`px-1 rounded text-[9px] font-bold ${
+                          log.level === 'ERROR' ? 'bg-red-800 text-white' : log.level === 'WARN' ? 'bg-amber-800 text-white' : 'bg-cyan-900 text-cyan-200'
+                        }`}>
+                          {log.level}
+                        </span>
+                        <span className="text-slate-400">{log.timestamp}</span>
+                        <span className="font-semibold">{log.message}</span>
+                      </div>
+                    </div>
+                    {log.query && (
+                      <div className="text-[10px] text-slate-400 bg-black/40 p-1.5 rounded overflow-x-auto">
+                        SQL: {log.query}
+                      </div>
+                    )}
+                    {log.details && (
+                      <div className="text-[10px] text-slate-500 overflow-x-auto">
+                        Detalhes: {typeof log.details === 'object' ? JSON.stringify(log.details) : String(log.details)}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

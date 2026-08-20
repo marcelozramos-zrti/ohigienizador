@@ -201,4 +201,46 @@ export const ApiService = {
       return false;
     }
   },
+
+  // DATABASE DIAGNOSTICS & LIVE LOGS
+  async getDbLogs(): Promise<Array<{ id: string; timestamp: string; level: 'INFO' | 'WARN' | 'ERROR'; message: string; query?: string; details?: any }>> {
+    try {
+      const res = await fetch('/api/db/logs');
+      if (!res.ok) return [];
+      const json = await res.json();
+      return json.logs || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async getDbDiagnostics(): Promise<{
+    success: boolean;
+    tables: string[];
+    schema: Record<string, any[]>;
+    logs: any[];
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/db/diagnostics');
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, tables: [], schema: {}, logs: [], error: err.message };
+    }
+  },
+
+  async syncDbSchema(): Promise<{
+    success: boolean;
+    message: string;
+    added: string[];
+    skipped: string[];
+    errors: string[];
+  }> {
+    try {
+      const res = await fetch('/api/db/sync-schema', { method: 'POST' });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, message: err.message, added: [], skipped: [], errors: [err.message] };
+    }
+  },
 };

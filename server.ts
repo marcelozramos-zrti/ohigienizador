@@ -29,6 +29,126 @@ async function startServer() {
     });
   });
 
+  // In-memory log buffer for database diagnostic inspection
+  const dbLogs: Array<{ id: string; timestamp: string; level: 'INFO' | 'WARN' | 'ERROR'; message: string; query?: string; details?: any }> = [];
+  function logDb(level: 'INFO' | 'WARN' | 'ERROR', message: string, query?: string, details?: any) {
+    const entry = {
+      id: Math.random().toString(36).substring(2, 9),
+      timestamp: new Date().toLocaleTimeString('pt-BR', { hour12: false }) + '.' + String(new Date().getMilliseconds()).padStart(3, '0'),
+      level,
+      message,
+      query,
+      details,
+    };
+    dbLogs.unshift(entry);
+    if (dbLogs.length > 80) dbLogs.pop();
+    if (level === 'ERROR') {
+      console.error(`[DB-LOG] ${entry.timestamp} [${level}] ${message}`, query || '', details || '');
+    } else {
+      console.log(`[DB-LOG] ${entry.timestamp} [${level}] ${message}`);
+    }
+  }
+
+  app.get('/api/db/logs', (req, res) => {
+    res.json({ success: true, logs: dbLogs });
+  });
+
+  app.get('/api/db/diagnostics', async (req, res) => {
+    try {
+      const db = getDbPool();
+      const [tables]: any = await db.query('SHOW TABLES');
+      const tableNames = tables.map((t: any) => Object.values(t)[0]);
+      const schemaDetails: Record<string, any[]> = {};
+      
+      for (const t of tableNames) {
+        const [cols]: any = await db.query(`SHOW COLUMNS FROM \`${t}\``);
+        schemaDetails[t] = cols.map((c: any) => ({
+          Field: c.Field,
+          Type: c.Type,
+          Null: c.Null,
+          Key: c.Key,
+          Default: c.Default,
+        }));
+      }
+
+      res.json({
+        success: true,
+        tables: tableNames,
+        schema: schemaDetails,
+        logs: dbLogs.slice(0, 20),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Automatic safe column updater endpoint
+  app.post('/api/db/sync-schema', async (req, res) => {
+    try {
+      const db = getDbPool();
+      logDb('INFO', 'Iniciando sincronização e verificação de colunas no MariaDB...');
+      
+      // Get existing columns in 'users'
+      const [userCols]: any = await db.query('SHOW COLUMNS FROM users').catch(() => [[]]);
+      const existingUserFields = new Set(userCols.map((c: any) => c.Field.toLowerCase()));
+
+      const columnDefs: Array<{ name: string; type: string }> = [
+        { name: 'email', type: 'VARCHAR(150) NULL' },
+        { name: 'passwordHash', type: 'VARCHAR(255) NULL' },
+        { name: 'role', type: "VARCHAR(30) NOT NULL DEFAULT 'TECHNICIAN'" },
+        { name: 'documentCpf', type: 'VARCHAR(18) NULL' },
+        { name: 'phone', type: 'VARCHAR(25) NULL' },
+        { name: 'avatarUrl', type: 'VARCHAR(255) NULL' },
+        { name: 'isActive', type: 'TINYINT(1) NOT NULL DEFAULT 1' },
+        { name: 'pixKeyType', type: "VARCHAR(20) DEFAULT 'CPF'" },
+        { name: 'pixKey', type: 'VARCHAR(100) NULL' },
+        { name: 'bankName', type: 'VARCHAR(80) NULL' },
+        { name: 'bankAgency', type: 'VARCHAR(20) NULL' },
+        { name: 'bankAccount', type: 'VARCHAR(30) NULL' },
+        { name: 'baseCostAllowance', type: 'DECIMAL(10, 2) NOT NULL DEFAULT 0.00' },
+        { name: 'hasSpecialTaxRule', type: 'TINYINT(1) NOT NULL DEFAULT 0' },
+        { name: 'specialTaxRate', type: 'DECIMAL(5, 2) NOT NULL DEFAULT 0.00' },
+        { name: 'createdAt', type: 'DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3)' },
+        { name: 'updatedAt', type: 'DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)' },
+      ];
+
+      const added: string[] = [];
+      const skipped: string[] = [];
+      const errors: string[] = [];
+
+      for (const col of columnDefs) {
+        if (existingUserFields.has(col.name.toLowerCase())) {
+          skipped.push(col.name);
+          continue;
+        }
+
+        try {
+          await db.query(`ALTER TABLE \`users\` ADD COLUMN \`${col.name}\` ${col.type}`);
+          added.push(col.name);
+          logDb('INFO', `Coluna criada com sucesso: users.${col.name}`);
+        } catch (err: any) {
+          if (err.code === 'ER_DUP_FIELDNAME' || err.message?.includes('Duplicate column')) {
+            skipped.push(col.name);
+          } else {
+            errors.push(`${col.name}: ${err.message}`);
+            logDb('WARN', `Falha ao adicionar users.${col.name}: ${err.message}`);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Schema sincronizado. ${added.length} criadas, ${skipped.length} já existiam.`,
+        added,
+        skipped,
+        errors,
+      });
+    } catch (err: any) {
+      logDb('ERROR', `Erro na sincronização de schema: ${err.message}`);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.get('/api/db/status', async (req, res) => {
     const status = await testDbConnection();
     let tableCounts: Record<string, number> = {};
@@ -191,11 +311,12 @@ async function startServer() {
         ${updateClauses.length > 0 ? updateClauses.join(', ') : 'id = id'}
       `;
 
+      logDb('INFO', `Executando INSERT/UPDATE para usuário ${u.name} (${u.id})`, query, insertValues);
       await db.execute(query, insertValues);
-      console.log(`[MariaDB] Usuário sincronizado: ${u.name} (ID: ${u.id})`);
+      logDb('INFO', `Usuário ${u.name} salvo com sucesso no MariaDB.`);
       res.json({ success: true, message: `Usuário ${u.name} gravado no MariaDB.`, user: u });
     } catch (err: any) {
-      console.error(`[MariaDB] Erro ao sincronizar usuário ${u.name}:`, err);
+      logDb('ERROR', `Erro ao gravar usuário ${u.name}: ${err.message}`, undefined, { user: u, stack: err.stack });
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -254,9 +375,12 @@ async function startServer() {
 
       values.push(id);
       const query = `UPDATE \`users\` SET ${fields.join(', ')} WHERE \`id\` = ?`;
+      logDb('INFO', `Atualizando usuário ${id}`, query, values);
       await db.execute(query, values);
+      logDb('INFO', `Usuário ${id} atualizado com sucesso.`);
       res.json({ success: true, message: `Usuário ${id} atualizado no MariaDB.` });
     } catch (err: any) {
+      logDb('ERROR', `Erro ao atualizar usuário ${id}: ${err.message}`, undefined, { id, stack: err.stack });
       res.status(500).json({ success: false, error: err.message });
     }
   });
