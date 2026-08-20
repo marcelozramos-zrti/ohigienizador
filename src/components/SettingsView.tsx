@@ -128,7 +128,7 @@ export const SettingsView: React.FC = () => {
       } else {
         addToast('Atenção no Schema', res.message, 'warning');
       }
-      fetchDbLogs();
+      setTimeout(() => fetchDbLogs(), 500);
     } catch (err: any) {
       addToast('Erro na Sincronização', err.message, 'error');
     } finally {
@@ -139,6 +139,12 @@ export const SettingsView: React.FC = () => {
   React.useEffect(() => {
     if (activeTab === 'DATABASE') {
       fetchDbLogs();
+      const interval = setInterval(() => {
+        ApiService.getDbLogs().then((logs) => {
+          if (logs && logs.length > 0) setDbLogs(logs);
+        }).catch(() => {});
+      }, 3000);
+      return () => clearInterval(interval);
     }
   }, [activeTab]);
 

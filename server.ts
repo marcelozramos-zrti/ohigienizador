@@ -136,6 +136,29 @@ async function startServer() {
         }
       }
 
+      // Relax any existing legacy strict columns if they exist
+      const legacyToRelax = [
+        'document_cpf VARCHAR(18) NULL DEFAULT \'\'',
+        'documentCpf VARCHAR(18) NULL DEFAULT \'\'',
+        'password_hash VARCHAR(255) NULL',
+        'passwordHash VARCHAR(255) NULL',
+        'phone VARCHAR(25) NULL DEFAULT \'\'',
+        'email VARCHAR(150) NULL',
+        'pix_key VARCHAR(100) NULL DEFAULT \'\'',
+        'pixKey VARCHAR(100) NULL DEFAULT \'\'',
+      ];
+
+      for (const leg of legacyToRelax) {
+        const colName = leg.split(' ')[0];
+        if (existingUserFields.has(colName.toLowerCase())) {
+          try {
+            await db.query(`ALTER TABLE \`users\` MODIFY COLUMN ${leg}`);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
       res.json({
         success: true,
         message: `Schema sincronizado. ${added.length} criadas, ${skipped.length} já existiam.`,
@@ -196,19 +219,31 @@ async function startServer() {
     res.json(testResult);
   });
 
-  // Helper to get all column names of a table (lowercase)
-  async function getTableColumnsMap(tableName: string): Promise<Map<string, string>> {
+  // Helper to get all column metadata of a table (Field, Type, Null, Default, Key)
+  async function getTableColumnsInfo(tableName: string): Promise<Array<{ Field: string; Type: string; Null: string; Default: any; Key: string }>> {
     try {
       const db = getDbPool();
       const [rows]: any = await db.query(`SHOW COLUMNS FROM \`${tableName}\``);
-      const colMap = new Map<string, string>(); // lowercase -> exact case in DB
-      for (const r of rows) {
-        colMap.set(r.Field.toLowerCase(), r.Field);
-      }
-      return colMap;
+      return rows.map((r: any) => ({
+        Field: r.Field,
+        Type: (r.Type || '').toLowerCase(),
+        Null: r.Null,
+        Default: r.Default,
+        Key: r.Key,
+      }));
     } catch {
-      return new Map<string, string>();
+      return [];
     }
+  }
+
+  // Helper to get map of column names
+  async function getTableColumnsMap(tableName: string): Promise<Map<string, string>> {
+    const cols = await getTableColumnsInfo(tableName);
+    const colMap = new Map<string, string>();
+    for (const c of cols) {
+      colMap.set(c.Field.toLowerCase(), c.Field);
+    }
+    return colMap;
   }
 
   // 2. USERS & TECHNICIANS API (GET, POST, PUT, DELETE)
@@ -244,60 +279,93 @@ async function startServer() {
 
     try {
       const db = getDbPool();
-      const colMap = await getTableColumnsMap('users');
+      const cols = await getTableColumnsInfo('users');
 
-      // Possíveis mapeamentos de campos (campo lógico -> valor a inserir)
-      const candidates: Array<{ keys: string[]; value: any }> = [
-        { keys: ['id'], value: u.id },
-        { keys: ['name', 'nome'], value: u.name },
-        { keys: ['email'], value: u.email || `${u.id}@higienizador.com.br` },
-        { keys: ['passwordhash', 'password_hash', 'password', 'senha'], value: u.password || u.passwordHash || 'Porto@2026' },
-        { keys: ['role', 'cargo', 'perfil'], value: u.role || 'TECHNICIAN' },
-        { keys: ['documentcpf', 'document_cpf', 'cpf'], value: u.documentCpf || '' },
-        { keys: ['phone', 'telefone', 'whatsapp'], value: u.phone || '' },
-        { keys: ['avatarurl', 'avatar_url', 'avatar'], value: u.avatarUrl || null },
-        { keys: ['isactive', 'is_active', 'ativo'], value: u.isActive !== false ? 1 : 0 },
-        { keys: ['pixkeytype', 'pix_key_type', 'tipo_pix'], value: u.pixKeyType || 'CPF' },
-        { keys: ['pixkey', 'pix_key', 'chave_pix'], value: u.pixKey || u.documentCpf || '' },
-        { keys: ['bankname', 'bank_name', 'banco'], value: u.bankName || 'Banco Itaú' },
-        { keys: ['bankagency', 'bank_agency', 'agencia'], value: u.bankAgency || '0001' },
-        { keys: ['bankaccount', 'bank_account', 'conta'], value: u.bankAccount || '00000-0' },
-        { keys: ['basecostallowance', 'base_cost_allowance', 'ajuda_custo'], value: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)) },
-        { keys: ['hasspecialtaxrule', 'has_special_tax_rule', 'regra_fiscal'], value: u.hasSpecialTaxRule ? 1 : 0 },
-        { keys: ['specialtaxrate', 'special_tax_rate', 'taxa_retencao'], value: Number(u.specialTaxRate || 0) },
-      ];
+      // Dicionário completo de valores suportados por campo (lowercase)
+      const userValues: Record<string, any> = {
+        id: u.id,
+        name: u.name,
+        nome: u.name,
+        email: u.email || `${u.id}@higienizador.com.br`,
+        passwordhash: u.password || u.passwordHash || 'Porto@2026',
+        password_hash: u.password || u.passwordHash || 'Porto@2026',
+        password: u.password || u.passwordHash || 'Porto@2026',
+        senha: u.password || u.passwordHash || 'Porto@2026',
+        role: u.role || 'TECHNICIAN',
+        cargo: u.role || 'TECHNICIAN',
+        perfil: u.role || 'TECHNICIAN',
+        documentcpf: u.documentCpf || u.cpf || '',
+        document_cpf: u.documentCpf || u.cpf || '',
+        cpf: u.documentCpf || u.cpf || '',
+        phone: u.phone || '',
+        telefone: u.phone || '',
+        whatsapp: u.phone || '',
+        avatarurl: u.avatarUrl || null,
+        avatar_url: u.avatarUrl || null,
+        avatar: u.avatarUrl || null,
+        isactive: u.isActive !== false ? 1 : 0,
+        is_active: u.isActive !== false ? 1 : 0,
+        ativo: u.isActive !== false ? 1 : 0,
+        pixkeytype: u.pixKeyType || 'CPF',
+        pix_key_type: u.pixKeyType || 'CPF',
+        tipo_pix: u.pixKeyType || 'CPF',
+        pixkey: u.pixKey || u.documentCpf || '',
+        pix_key: u.pixKey || u.documentCpf || '',
+        chave_pix: u.pixKey || u.documentCpf || '',
+        bankname: u.bankName || 'Banco Itaú',
+        bank_name: u.bankName || 'Banco Itaú',
+        banco: u.bankName || 'Banco Itaú',
+        bankagency: u.bankAgency || '0001',
+        bank_agency: u.bankAgency || '0001',
+        agencia: u.bankAgency || '0001',
+        bankaccount: u.bankAccount || '00000-0',
+        bank_account: u.bankAccount || '00000-0',
+        conta: u.bankAccount || '00000-0',
+        basecostallowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
+        base_cost_allowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
+        ajuda_custo: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
+        hasspecialtaxrule: u.hasSpecialTaxRule ? 1 : 0,
+        has_special_tax_rule: u.hasSpecialTaxRule ? 1 : 0,
+        regra_fiscal: u.hasSpecialTaxRule ? 1 : 0,
+        specialtaxrate: Number(u.specialTaxRate || 0),
+        special_tax_rate: Number(u.specialTaxRate || 0),
+        taxa_retencao: Number(u.specialTaxRate || 0),
+      };
 
       const insertCols: string[] = [];
       const insertPlaceholders: string[] = [];
       const insertValues: any[] = [];
       const updateClauses: string[] = [];
 
-      for (const item of candidates) {
-        // Encontra o nome exato da coluna existente no banco
-        let matchedCol: string | undefined;
-        for (const k of item.keys) {
-          if (colMap.has(k.toLowerCase())) {
-            matchedCol = colMap.get(k.toLowerCase());
-            break;
+      for (const col of cols) {
+        const colLower = col.Field.toLowerCase();
+        let val = userValues[colLower];
+
+        if (val === undefined) {
+          if (colLower === 'createdat' || colLower === 'created_at') {
+            val = new Date();
+          } else if (colLower === 'updatedat' || colLower === 'updated_at') {
+            val = new Date();
+          } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
+            // Coluna obrigatória no banco sem default -> fornece default seguro
+            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
+              val = 0;
+            } else if (col.Type.includes('date') || col.Type.includes('time')) {
+              val = new Date();
+            } else {
+              val = '';
+            }
           }
         }
 
-        if (matchedCol) {
-          insertCols.push(`\`${matchedCol}\``);
+        if (val !== undefined) {
+          insertCols.push(`\`${col.Field}\``);
           insertPlaceholders.push('?');
-          insertValues.push(item.value);
-          if (matchedCol.toLowerCase() !== 'id') {
-            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          insertValues.push(val);
+          if (colLower !== 'id') {
+            updateClauses.push(`\`${col.Field}\` = VALUES(\`${col.Field}\`)`);
           }
         }
-      }
-
-      if (colMap.has('updatedat')) {
-        const uCol = colMap.get('updatedat')!;
-        updateClauses.push(`\`${uCol}\` = NOW()`);
-      } else if (colMap.has('updated_at')) {
-        const uCol = colMap.get('updated_at')!;
-        updateClauses.push(`\`${uCol}\` = NOW()`);
       }
 
       if (insertCols.length === 0) {
@@ -327,50 +395,60 @@ async function startServer() {
 
     try {
       const db = getDbPool();
-      const colMap = await getTableColumnsMap('users');
+      const cols = await getTableColumnsInfo('users');
       const fields: string[] = [];
       const values: any[] = [];
 
-      const candidateUpdates: Array<{ keys: string[]; value: any }> = [
-        { keys: ['name', 'nome'], value: u.name },
-        { keys: ['email'], value: u.email },
-        { keys: ['role', 'cargo', 'perfil'], value: u.role },
-        { keys: ['documentcpf', 'document_cpf', 'cpf'], value: u.documentCpf },
-        { keys: ['phone', 'telefone', 'whatsapp'], value: u.phone },
-        { keys: ['avatarurl', 'avatar_url'], value: u.avatarUrl },
-        { keys: ['isactive', 'is_active'], value: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined },
-        { keys: ['pixkeytype', 'pix_key_type'], value: u.pixKeyType },
-        { keys: ['pixkey', 'pix_key'], value: u.pixKey },
-        { keys: ['bankname', 'bank_name'], value: u.bankName },
-        { keys: ['bankagency', 'bank_agency'], value: u.bankAgency },
-        { keys: ['bankaccount', 'bank_account'], value: u.bankAccount },
-        { keys: ['basecostallowance', 'base_cost_allowance'], value: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined },
-        { keys: ['hasspecialtaxrule', 'has_special_tax_rule'], value: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined },
-        { keys: ['specialtaxrate', 'special_tax_rate'], value: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined },
-        { keys: ['passwordhash', 'password_hash', 'password'], value: u.password },
-      ];
+      const userUpdates: Record<string, any> = {
+        name: u.name,
+        nome: u.name,
+        email: u.email,
+        role: u.role,
+        cargo: u.role,
+        perfil: u.role,
+        documentcpf: u.documentCpf ?? u.cpf,
+        document_cpf: u.documentCpf ?? u.cpf,
+        cpf: u.documentCpf ?? u.cpf,
+        phone: u.phone,
+        telefone: u.phone,
+        whatsapp: u.phone,
+        avatarurl: u.avatarUrl,
+        avatar_url: u.avatarUrl,
+        isactive: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined,
+        is_active: u.isActive !== undefined ? (u.isActive ? 1 : 0) : undefined,
+        pixkeytype: u.pixKeyType,
+        pix_key_type: u.pixKeyType,
+        pixkey: u.pixKey,
+        pix_key: u.pixKey,
+        bankname: u.bankName,
+        bank_name: u.bankName,
+        bankagency: u.bankAgency,
+        bank_agency: u.bankAgency,
+        bankaccount: u.bankAccount,
+        bank_account: u.bankAccount,
+        basecostallowance: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined,
+        base_cost_allowance: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined,
+        hasspecialtaxrule: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined,
+        has_special_tax_rule: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined,
+        specialtaxrate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
+        special_tax_rate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
+        passwordhash: u.password,
+        password_hash: u.password,
+        password: u.password,
+      };
 
-      for (const item of candidateUpdates) {
-        if (item.value !== undefined) {
-          for (const k of item.keys) {
-            if (colMap.has(k.toLowerCase())) {
-              const matchedCol = colMap.get(k.toLowerCase())!;
-              fields.push(`\`${matchedCol}\` = ?`);
-              values.push(item.value);
-              break;
-            }
-          }
+      for (const col of cols) {
+        const colLower = col.Field.toLowerCase();
+        if (colLower === 'updatedat' || colLower === 'updated_at') {
+          fields.push(`\`${col.Field}\` = NOW()`);
+        } else if (userUpdates[colLower] !== undefined && colLower !== 'id') {
+          fields.push(`\`${col.Field}\` = ?`);
+          values.push(userUpdates[colLower]);
         }
       }
 
       if (fields.length === 0) {
         return res.json({ success: true, message: 'Nenhum campo para atualizar.' });
-      }
-
-      if (colMap.has('updatedat')) {
-        fields.push(`\`${colMap.get('updatedat')}\` = NOW()`);
-      } else if (colMap.has('updated_at')) {
-        fields.push(`\`${colMap.get('updated_at')}\` = NOW()`);
       }
 
       values.push(id);
@@ -423,67 +501,121 @@ async function startServer() {
     const o = req.body;
     try {
       const db = getDbPool();
-      const colMap = await getTableColumnsMap('service_orders');
+      const cols = await getTableColumnsInfo('service_orders');
 
-      const candidates: Array<{ keys: string[]; value: any }> = [
-        { keys: ['id'], value: o.id },
-        { keys: ['callnumber', 'call_number', 'numero_chamado'], value: o.callNumber },
-        { keys: ['portoseguroprotocol', 'porto_seguro_protocol', 'protocolo_porto'], value: o.portoSeguroProtocol || null },
-        { keys: ['servicecategory', 'service_category', 'categoria'], value: o.serviceCategory || 'Higienização Padrão' },
-        { keys: ['baseservicefee', 'base_service_fee', 'valor_base'], value: Number(o.baseServiceFee || 0) },
-        { keys: ['customername', 'customer_name', 'cliente_nome'], value: o.customerName || '' },
-        { keys: ['customercpf', 'customer_cpf', 'cliente_cpf'], value: o.customerCpf || '' },
-        { keys: ['customerphone', 'customer_phone', 'cliente_telefone'], value: o.customerPhone || null },
-        { keys: ['city', 'cidade'], value: o.city || 'São Paulo' },
-        { keys: ['uf', 'estado'], value: o.uf || 'SP' },
-        { keys: ['neighborhood', 'bairro'], value: o.neighborhood || '' },
-        { keys: ['addressstreet', 'address_street', 'endereco'], value: o.addressStreet || '' },
-        { keys: ['addressnumber', 'address_number', 'numero'], value: o.addressNumber || '' },
-        { keys: ['addresscomplement', 'address_complement', 'complemento'], value: o.addressComplement || null },
-        { keys: ['postalcode', 'postal_code', 'cep'], value: o.postalCode || '' },
-        { keys: ['technicianid', 'technician_id', 'tecnico_id'], value: o.technicianId || null },
-        { keys: ['status'], value: o.status || 'PENDING' },
-        { keys: ['scheduleddate', 'scheduled_date', 'data_agendada'], value: o.scheduledDate ? new Date(o.scheduledDate) : new Date() },
-        { keys: ['kmtraveled', 'km_traveled', 'km_rodado'], value: Number(o.kmTraveled || 0) },
-        { keys: ['kmrateapplied', 'km_rate_applied', 'valor_km'], value: Number(o.kmRateApplied || 0.5) },
-        { keys: ['kmtotalcost', 'km_total_cost', 'total_km'], value: Number(o.kmTotalCost || 0) },
-        { keys: ['tollcost', 'toll_cost', 'pedagio'], value: Number(o.tollCost || 0) },
-        { keys: ['supportcost', 'support_cost', 'ajuda_custo_adicional'], value: Number(o.supportCost || 0) },
-        { keys: ['totaltechniciangross', 'total_technician_gross', 'total_bruto_tecnico'], value: Number(o.totalTechnicianGross || 0) },
-        { keys: ['faturamentoporto', 'faturamento_porto', 'valor_porto'], value: Number(o.faturamentoPorto || 0) },
-        { keys: ['customersignature', 'customer_signature', 'assinatura'], value: o.customerSignature || null },
-        { keys: ['executionnotes', 'execution_notes', 'observacoes'], value: o.executionNotes || null },
-        { keys: ['tollreceipturl', 'toll_receipt_url', 'comprovante_pedagio'], value: o.tollReceiptUrl || null },
-      ];
+      const orderValues: Record<string, any> = {
+        id: o.id,
+        callnumber: o.callNumber,
+        call_number: o.callNumber,
+        numero_chamado: o.callNumber,
+        portoseguroprotocol: o.portoSeguroProtocol || null,
+        porto_seguro_protocol: o.portoSeguroProtocol || null,
+        protocolo_porto: o.portoSeguroProtocol || null,
+        servicecategory: o.serviceCategory || 'Higienização Padrão',
+        service_category: o.serviceCategory || 'Higienização Padrão',
+        categoria: o.serviceCategory || 'Higienização Padrão',
+        baseservicefee: Number(o.baseServiceFee || 0),
+        base_service_fee: Number(o.baseServiceFee || 0),
+        valor_base: Number(o.baseServiceFee || 0),
+        customername: o.customerName || '',
+        customer_name: o.customerName || '',
+        cliente_nome: o.customerName || '',
+        customercpf: o.customerCpf || '',
+        customer_cpf: o.customerCpf || '',
+        cliente_cpf: o.customerCpf || '',
+        customerphone: o.customerPhone || null,
+        customer_phone: o.customerPhone || null,
+        cliente_telefone: o.customerPhone || null,
+        city: o.city || 'São Paulo',
+        cidade: o.city || 'São Paulo',
+        uf: o.uf || 'SP',
+        estado: o.uf || 'SP',
+        neighborhood: o.neighborhood || '',
+        bairro: o.neighborhood || '',
+        addressstreet: o.addressStreet || '',
+        address_street: o.addressStreet || '',
+        endereco: o.addressStreet || '',
+        addressnumber: o.addressNumber || '',
+        address_number: o.addressNumber || '',
+        numero: o.addressNumber || '',
+        addresscomplement: o.addressComplement || null,
+        address_complement: o.addressComplement || null,
+        complemento: o.addressComplement || null,
+        postalcode: o.postalCode || '',
+        postal_code: o.postalCode || '',
+        cep: o.postalCode || '',
+        technicianid: o.technicianId || null,
+        technician_id: o.technicianId || null,
+        tecnico_id: o.technicianId || null,
+        status: o.status || 'PENDING',
+        scheduleddate: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
+        scheduled_date: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
+        data_agendada: o.scheduledDate ? new Date(o.scheduledDate) : new Date(),
+        kmtraveled: Number(o.kmTraveled || 0),
+        km_traveled: Number(o.kmTraveled || 0),
+        km_rodado: Number(o.kmTraveled || 0),
+        kmrateapplied: Number(o.kmRateApplied || 0.5),
+        km_rate_applied: Number(o.kmRateApplied || 0.5),
+        valor_km: Number(o.kmRateApplied || 0.5),
+        kmtotalcost: Number(o.kmTotalCost || 0),
+        km_total_cost: Number(o.kmTotalCost || 0),
+        total_km: Number(o.kmTotalCost || 0),
+        tollcost: Number(o.tollCost || 0),
+        toll_cost: Number(o.tollCost || 0),
+        pedagio: Number(o.tollCost || 0),
+        supportcost: Number(o.supportCost || 0),
+        support_cost: Number(o.supportCost || 0),
+        ajuda_custo_adicional: Number(o.supportCost || 0),
+        totaltechniciangross: Number(o.totalTechnicianGross || 0),
+        total_technician_gross: Number(o.totalTechnicianGross || 0),
+        total_bruto_tecnico: Number(o.totalTechnicianGross || 0),
+        faturamentoporto: Number(o.faturamentoPorto || 0),
+        faturamento_porto: Number(o.faturamentoPorto || 0),
+        valor_porto: Number(o.faturamentoPorto || 0),
+        customersignature: o.customerSignature || null,
+        customer_signature: o.customerSignature || null,
+        assinatura: o.customerSignature || null,
+        executionnotes: o.executionNotes || null,
+        execution_notes: o.executionNotes || null,
+        observacoes: o.executionNotes || null,
+        tollreceipturl: o.tollReceiptUrl || null,
+        toll_receipt_url: o.tollReceiptUrl || null,
+        comprovante_pedagio: o.tollReceiptUrl || null,
+      };
 
       const insertCols: string[] = [];
       const insertPlaceholders: string[] = [];
       const insertValues: any[] = [];
       const updateClauses: string[] = [];
 
-      for (const item of candidates) {
-        let matchedCol: string | undefined;
-        for (const k of item.keys) {
-          if (colMap.has(k.toLowerCase())) {
-            matchedCol = colMap.get(k.toLowerCase());
-            break;
+      for (const col of cols) {
+        const colLower = col.Field.toLowerCase();
+        let val = orderValues[colLower];
+
+        if (val === undefined) {
+          if (colLower === 'createdat' || colLower === 'created_at') {
+            val = new Date();
+          } else if (colLower === 'updatedat' || colLower === 'updated_at') {
+            val = new Date();
+          } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
+            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
+              val = 0;
+            } else if (col.Type.includes('date') || col.Type.includes('time')) {
+              val = new Date();
+            } else {
+              val = '';
+            }
           }
         }
 
-        if (matchedCol) {
-          insertCols.push(`\`${matchedCol}\``);
+        if (val !== undefined) {
+          insertCols.push(`\`${col.Field}\``);
           insertPlaceholders.push('?');
-          insertValues.push(item.value);
-          if (matchedCol.toLowerCase() !== 'id') {
-            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          insertValues.push(val);
+          if (colLower !== 'id') {
+            updateClauses.push(`\`${col.Field}\` = VALUES(\`${col.Field}\`)`);
           }
         }
-      }
-
-      if (colMap.has('updatedat')) {
-        updateClauses.push(`\`${colMap.get('updatedat')}\` = NOW()`);
-      } else if (colMap.has('updated_at')) {
-        updateClauses.push(`\`${colMap.get('updated_at')}\` = NOW()`);
       }
 
       if (insertCols.length === 0) {
@@ -500,6 +632,7 @@ async function startServer() {
       await db.execute(query, insertValues);
       res.json({ success: true, message: `OS ${o.callNumber} gravada no MariaDB.` });
     } catch (err: any) {
+      logDb('ERROR', `Erro ao gravar OS ${o.callNumber}: ${err.message}`, undefined, { order: o });
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -526,49 +659,67 @@ async function startServer() {
     const s = req.body;
     try {
       const db = getDbPool();
-      const colMap = await getTableColumnsMap('stock_items');
+      const cols = await getTableColumnsInfo('stock_items');
 
-      const candidates: Array<{ keys: string[]; value: any }> = [
-        { keys: ['id'], value: s.id },
-        { keys: ['code', 'codigo'], value: s.code },
-        { keys: ['name', 'nome'], value: s.name },
-        { keys: ['description', 'descricao'], value: s.description || null },
-        { keys: ['category', 'categoria'], value: s.category || 'Geral' },
-        { keys: ['unit', 'unidade'], value: s.unit || 'UN' },
-        { keys: ['quantityinstock', 'quantity_in_stock', 'quantity', 'quantidade'], value: Number(s.quantityInStock || 0) },
-        { keys: ['minimumthreshold', 'minimum_threshold', 'minimo'], value: Number(s.minimumThreshold || 5) },
-        { keys: ['unitcost', 'unit_cost', 'custo_unitario'], value: Number(s.unitCost || 0) },
-        { keys: ['issupportsupply', 'is_support_supply'], value: s.isSupportSupply ? 1 : 0 },
-      ];
+      const stockValues: Record<string, any> = {
+        id: s.id,
+        code: s.code,
+        codigo: s.code,
+        name: s.name,
+        nome: s.name,
+        description: s.description || null,
+        descricao: s.description || null,
+        category: s.category || 'Geral',
+        categoria: s.category || 'Geral',
+        unit: s.unit || 'UN',
+        unidade: s.unit || 'UN',
+        quantityinstock: Number(s.quantityInStock || 0),
+        quantity_in_stock: Number(s.quantityInStock || 0),
+        quantity: Number(s.quantityInStock || 0),
+        quantidade: Number(s.quantityInStock || 0),
+        minimumthreshold: Number(s.minimumThreshold || 5),
+        minimum_threshold: Number(s.minimumThreshold || 5),
+        minimo: Number(s.minimumThreshold || 5),
+        unitcost: Number(s.unitCost || 0),
+        unit_cost: Number(s.unitCost || 0),
+        custo_unitario: Number(s.unitCost || 0),
+        issupportsupply: s.isSupportSupply ? 1 : 0,
+        is_support_supply: s.isSupportSupply ? 1 : 0,
+      };
 
       const insertCols: string[] = [];
       const insertPlaceholders: string[] = [];
       const insertValues: any[] = [];
       const updateClauses: string[] = [];
 
-      for (const item of candidates) {
-        let matchedCol: string | undefined;
-        for (const k of item.keys) {
-          if (colMap.has(k.toLowerCase())) {
-            matchedCol = colMap.get(k.toLowerCase());
-            break;
+      for (const col of cols) {
+        const colLower = col.Field.toLowerCase();
+        let val = stockValues[colLower];
+
+        if (val === undefined) {
+          if (colLower === 'createdat' || colLower === 'created_at') {
+            val = new Date();
+          } else if (colLower === 'updatedat' || colLower === 'updated_at') {
+            val = new Date();
+          } else if (col.Null === 'NO' && col.Default === null && col.Key !== 'PRI') {
+            if (col.Type.includes('int') || col.Type.includes('decimal') || col.Type.includes('float') || col.Type.includes('double')) {
+              val = 0;
+            } else if (col.Type.includes('date') || col.Type.includes('time')) {
+              val = new Date();
+            } else {
+              val = '';
+            }
           }
         }
 
-        if (matchedCol) {
-          insertCols.push(`\`${matchedCol}\``);
+        if (val !== undefined) {
+          insertCols.push(`\`${col.Field}\``);
           insertPlaceholders.push('?');
-          insertValues.push(item.value);
-          if (matchedCol.toLowerCase() !== 'id') {
-            updateClauses.push(`\`${matchedCol}\` = VALUES(\`${matchedCol}\`)`);
+          insertValues.push(val);
+          if (colLower !== 'id') {
+            updateClauses.push(`\`${col.Field}\` = VALUES(\`${col.Field}\`)`);
           }
         }
-      }
-
-      if (colMap.has('updatedat')) {
-        updateClauses.push(`\`${colMap.get('updatedat')}\` = NOW()`);
-      } else if (colMap.has('updated_at')) {
-        updateClauses.push(`\`${colMap.get('updated_at')}\` = NOW()`);
       }
 
       if (insertCols.length === 0) {
@@ -585,6 +736,7 @@ async function startServer() {
       await db.execute(query, insertValues);
       res.json({ success: true, message: `Item ${s.name} salvo no estoque.` });
     } catch (err: any) {
+      logDb('ERROR', `Erro ao gravar item ${s.name}: ${err.message}`, undefined, { stock: s });
       res.status(500).json({ success: false, error: err.message });
     }
   });
