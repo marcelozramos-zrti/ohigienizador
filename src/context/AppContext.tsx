@@ -111,10 +111,11 @@ interface AppContextType {
   dispatchWhatsAppStatement: (summary: TechnicianClosingSummary) => Promise<WhatsAppDispatchResult>;
   dispatchAllWhatsAppStatements: () => Promise<void>;
 
-  // CSV
+  // CSV & Data Sync
   exportClosingCsv: () => void;
   exportOrdersCsv: () => void;
   exportCashFlowCsv: () => void;
+  reloadAllData: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -1190,6 +1191,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast('Exportação CSV', 'Fluxo de Caixa exportado com sucesso.', 'success');
   };
 
+  const reloadAllData = async () => {
+    try {
+      const [dbUsers, dbOrders, dbStock, dbMovements] = await Promise.all([
+        ApiService.fetchUsers(),
+        ApiService.fetchOrders(),
+        ApiService.fetchStock(),
+        ApiService.fetchMovements(),
+      ]);
+      if (dbUsers && dbUsers.length > 0) setUsers(dbUsers);
+      if (dbOrders && dbOrders.length > 0) setOrders(dbOrders);
+      if (dbStock && dbStock.length > 0) setStock(dbStock);
+      if (dbMovements && dbMovements.length > 0) setMovements(dbMovements);
+    } catch (err) {
+      console.warn('Erro ao recarregar dados do MariaDB:', err);
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1251,6 +1269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         exportClosingCsv,
         exportOrdersCsv,
         exportCashFlowCsv,
+        reloadAllData,
       }}
     >
       {children}

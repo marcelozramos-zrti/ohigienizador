@@ -1,6 +1,8 @@
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
+import multer from 'multer';
+import * as XLSX from 'xlsx';
 import { createServer as createViteServer } from 'vite';
 import { getDbPool, testDbConnection, initializeDatabaseSchema, updateDbConfig, getDbConfig } from './src/server/db';
 import { INITIAL_USERS, INITIAL_SERVICE_ORDERS, INITIAL_STOCK, INITIAL_MOVEMENTS, INITIAL_SETTINGS } from './src/mock/initialData';
@@ -1320,7 +1322,406 @@ async function startServer() {
   });
 
   // =========================================================================
-  // 6. STOCK ITEMS API (Acesso: Master & Gestor Operacional)
+  // 5.1 MASS IMPORT OF PORTO SEGURO SERVICE ORDERS (.xlsx via multer & xlsx)
+  // =========================================================================
+  const uploadExcel = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 35 * 1024 * 1024 }, // 35MB
+  });
+
+  app.post('/api/import/orders', uploadExcel.single('file'), async (req, res) => {
+    const requester = await getRequester(req);
+
+    if (requester && requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'SERVICE_ORDERS',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de executar importação massiva de planilhas.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas o Administrador Master pode realizar importação massiva.' });
+    }
+
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ success: false, error: 'Nenhum arquivo de planilha (.xlsx/.xls) foi enviado.' });
+    }
+
+    try {
+      // 1. Leitura do arquivo Excel
+      const workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: true });
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        return res.status(400).json({ success: false, error: 'A planilha enviada não contém nenhuma aba válida.' });
+      }
+
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
+
+      if (!rawRows || rawRows.length === 0) {
+        return res.status(400).json({ success: false, error: 'Nenhum dado encontrado na planilha enviada.' });
+      }
+
+      // Helpers de Sanitização e Mapeamento
+      function parseCurrency(val: any): number {
+        if (val === null || val === undefined || val === '') return 0;
+        if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
+        const str = String(val)
+          .replace(/R\$/gi, '')
+          .replace(/\s+/g, '')
+          .replace(/\./g, '')
+          .replace(/,/g, '.')
+          .trim();
+        const num = parseFloat(str);
+        return isNaN(num) ? 0 : Number(num.toFixed(2));
+      }
+
+      function parseDateValue(val: any): string {
+        if (!val) return new Date().toISOString();
+        if (val instanceof Date) {
+          return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
+        }
+        if (typeof val === 'number') {
+          const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+          return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+        }
+        if (typeof val === 'string') {
+          const clean = val.trim();
+          const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+          if (brMatch) {
+            const day = parseInt(brMatch[1], 10);
+            const month = parseInt(brMatch[2], 10) - 1;
+            let year = parseInt(brMatch[3], 10);
+            if (year < 100) year += 2000;
+            const hour = brMatch[4] ? parseInt(brMatch[4], 10) : 12;
+            const min = brMatch[5] ? parseInt(brMatch[5], 10) : 0;
+            const d = new Date(year, month, day, hour, min);
+            if (!isNaN(d.getTime())) return d.toISOString();
+          }
+          const d = new Date(clean);
+          if (!isNaN(d.getTime())) return d.toISOString();
+        }
+        return new Date().toISOString();
+      }
+
+      function shouldIgnoreRow(origem: any, tecnico: any): boolean {
+        if (origem === null || origem === undefined || tecnico === null || tecnico === undefined) return true;
+        const o = String(origem).trim().toLowerCase();
+        const t = String(tecnico).trim().toLowerCase();
+        if (o === '' || t === '') return true;
+
+        const forbiddenWords = ['total', 'totais', 'vale', 'liquido', 'líquido', 'bruto', 'subtotal', 'resumo'];
+        for (const w of forbiddenWords) {
+          if (o.includes(w) || t.includes(w)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      function getField(row: Record<string, any>, candidates: string[]): any {
+        const keys = Object.keys(row);
+        for (const cand of candidates) {
+          const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
+          for (const k of keys) {
+            const cleanK = k.toLowerCase().replace(/[_\s\.]+/g, '');
+            if (cleanK === cleanCand) {
+              return row[k];
+            }
+          }
+        }
+        // Tentativa de includes se match exato falhar
+        for (const cand of candidates) {
+          const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
+          for (const k of keys) {
+            const cleanK = k.toLowerCase().replace(/[_\s\.]+/g, '');
+            if (cleanK.includes(cleanCand) || cleanCand.includes(cleanK)) {
+              return row[k];
+            }
+          }
+        }
+        return null;
+      }
+
+      let importedCount = 0;
+      let ignoredRowsCount = 0;
+      let techniciansCreatedCount = 0;
+      const createdTechniciansList: Array<{ id: string; name: string; email: string }> = [];
+      const importedOrdersSummary: any[] = [];
+
+      const db = getDbPool();
+
+      // Buscar todos os usuários atuais para matching
+      let currentUsersList = [...memUsers];
+      try {
+        const [userRows]: any = await db.query('SELECT * FROM users');
+        if (userRows && userRows.length > 0) {
+          currentUsersList = userRows;
+        }
+      } catch {}
+
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
+
+        // 2. Mapeamento das colunas
+        const origemRaw = getField(row, ['Origem', 'Orig', 'Source']);
+        const tecnicoRaw = getField(row, ['Tecnico', 'Técnico', 'Nome Tecnico', 'Nome do Tecnico', 'Prestador']);
+
+        // Sanitization: Ignora linhas vazias ou com palavras de totais
+        if (shouldIgnoreRow(origemRaw, tecnicoRaw)) {
+          ignoredRowsCount++;
+          continue;
+        }
+
+        const techName = String(tecnicoRaw).trim();
+        const callNumberRaw = getField(row, ['IdChamado', 'Id Chamado', 'ID Chamado', 'Chamado', 'OS', 'Numero Chamado', 'Id_Chamado']) || `PS-IMP-${Date.now()}-${idx + 1}`;
+        const dtVisitaRaw = getField(row, ['Dt.Visita', 'Dt Visita', 'Data Visita', 'Data', 'Dt_Visita', 'Data_Visita', 'Dt. Visita']);
+        const tipoVisitaRaw = getField(row, ['Tipo Visita', 'Tipo de Visita', 'Tipo_Visita', 'Serviço', 'Servico', 'Categoria']) || 'Higienização de Estofados Porto Seguro';
+        const statusRaw = getField(row, ['Status', 'Situacao', 'Situação']);
+        const kmRaw = getField(row, ['KM', 'Km', 'Km Rodado', 'Quilometragem']);
+        const pedagioRaw = getField(row, ['PEDAGIO', 'Pedagio', 'Pedágio', 'Valor Pedagio', 'Vl Pedagio']);
+        const valorDaVistaRaw = getField(row, ['VALOR DA VISTA', 'Valor da Visita', 'Valor da Vista', 'Valor Visita', 'Valor', 'Vl Visita', 'Base Fee']);
+
+        // 3. Lógica de Criação Automática do Técnico (CRÍTICO)
+        const cleanTechNameNorm = techName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        let existingUser = currentUsersList.find((u: any) => {
+          const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          return uNameNorm === cleanTechNameNorm;
+        });
+
+        let technicianId: string;
+
+        if (existingUser) {
+          technicianId = existingUser.id;
+        } else {
+          // Criar novo técnico dinamicamente
+          technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+          const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
+          let finalEmail = `${slug}@ohigienizador.com.br`;
+          let emailSuffix = 1;
+          while (currentUsersList.some((u: any) => (u.email || '').toLowerCase() === finalEmail.toLowerCase())) {
+            finalEmail = `${slug}${emailSuffix}@ohigienizador.com.br`;
+            emailSuffix++;
+          }
+
+          const newTech = {
+            id: technicianId,
+            name: techName,
+            email: finalEmail,
+            passwordHash: 'Porto@2026',
+            role: 'TECHNICIAN',
+            documentCpf: '',
+            phone: '(11) 99999-0000',
+            isActive: 1,
+            pixKeyType: 'CPF',
+            pixKey: '',
+            bankName: 'Porto Seguro Bank',
+            bankAgency: '',
+            bankAccount: '',
+            baseCostAllowance: 0,
+            hasSpecialTaxRule: 0,
+            specialTaxRate: 0,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+
+          currentUsersList.push(newTech);
+          memUsers.push(newTech);
+
+          try {
+            await db.execute(
+              `INSERT INTO users (id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, createdAt, updatedAt)
+               VALUES (?, ?, ?, ?, 'TECHNICIAN', 1, 0, 0, 0, ?, NOW(), NOW())
+               ON DUPLICATE KEY UPDATE name = VALUES(name), role = VALUES(role), isActive = 1`,
+              [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
+            );
+          } catch (insertUserErr) {
+            console.warn('[Import] Falha ao inserir usuário no MariaDB:', insertUserErr);
+          }
+
+          techniciansCreatedCount++;
+          createdTechniciansList.push({ id: newTech.id, name: newTech.name, email: newTech.email });
+        }
+
+        // 4. Lógica Financeira e Mapeamento da Ordem
+        const kmTraveled = parseCurrency(kmRaw);
+        const kmRateApplied = 0.50;
+        const kmTotalCost = kmTraveled > 0 ? Number((kmTraveled * kmRateApplied).toFixed(2)) : 0;
+        const tollCost = parseCurrency(pedagioRaw);
+        const baseServiceFee = parseCurrency(valorDaVistaRaw);
+        const totalTechnicianGross = Number((baseServiceFee + kmTotalCost + tollCost).toFixed(2));
+        const faturamentoPorto = totalTechnicianGross;
+
+        // Normalização de Status
+        const cleanStatus = String(statusRaw || '').toLowerCase().trim();
+        let finalStatus = 'COMPLETED';
+        if (cleanStatus.includes('canc') || cleanStatus.includes('recus') || cleanStatus.includes('imposs')) {
+          finalStatus = 'CANCELLED';
+        } else if (cleanStatus.includes('anda') || cleanStatus.includes('exec') || cleanStatus.includes('inici')) {
+          finalStatus = 'IN_PROGRESS';
+        } else if (cleanStatus.includes('pend') || cleanStatus.includes('agend')) {
+          finalStatus = 'PENDING';
+        }
+
+        const scheduledDateStr = parseDateValue(dtVisitaRaw);
+        const callNumber = String(callNumberRaw).trim();
+
+        // Encontrar ou gerar ID de Ordem
+        const existingOrder = memOrders.find((o) => o.callNumber === callNumber);
+        const orderId = existingOrder ? existingOrder.id : `os-imp-${Date.now()}-${idx + 1}`;
+
+        const customerName = String(row.Cliente || row.ClienteNome || row.NomeCliente || 'Cliente Porto Seguro').trim();
+        const city = String(row.Cidade || row.Municipio || 'São Paulo').trim();
+        const uf = String(row.UF || row.Estado || 'SP').trim().toUpperCase().substring(0, 2);
+        const neighborhood = String(row.Bairro || '').trim();
+        const addressStreet = String(row.Endereco || row.Logradouro || '').trim();
+        const addressNumber = String(row.Numero || '').trim();
+        const postalCode = String(row.CEP || row.Cep || '01001-000').trim();
+
+        const orderObj: any = {
+          id: orderId,
+          callNumber,
+          portoSeguroProtocol: String(origemRaw).trim() || null,
+          serviceCategory: String(tipoVisitaRaw).trim(),
+          baseServiceFee,
+          customerName,
+          customerCpf: '',
+          customerPhone: null,
+          city,
+          uf,
+          neighborhood,
+          addressStreet,
+          addressNumber,
+          addressComplement: null,
+          postalCode,
+          technicianId,
+          technicianName: techName,
+          status: finalStatus,
+          scheduledDate: scheduledDateStr,
+          kmTraveled,
+          kmRateApplied,
+          kmTotalCost,
+          tollCost,
+          supportCost: 0,
+          totalTechnicianGross,
+          faturamentoPorto,
+          itemsUsed: [],
+        };
+
+        // 5. Atualização em memória
+        const memIdx = memOrders.findIndex((o) => o.callNumber === callNumber || o.id === orderId);
+        if (memIdx >= 0) {
+          memOrders[memIdx] = { ...memOrders[memIdx], ...orderObj };
+        } else {
+          memOrders.unshift(orderObj);
+        }
+
+        // 6. Inserção no MariaDB com INSERT ... ON DUPLICATE KEY UPDATE
+        try {
+          const insertOrderQuery = `
+            INSERT INTO \`service_orders\` (
+              id, callNumber, portoSeguroProtocol, serviceCategory, baseServiceFee,
+              customerName, customerCpf, customerPhone, city, uf, neighborhood,
+              addressStreet, addressNumber, addressComplement, postalCode,
+              technicianId, status, scheduledDate, kmTraveled, kmRateApplied,
+              kmTotalCost, tollCost, supportCost, totalTechnicianGross, faturamentoPorto,
+              createdAt, updatedAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+              serviceCategory = VALUES(serviceCategory),
+              baseServiceFee = VALUES(baseServiceFee),
+              technicianId = VALUES(technicianId),
+              status = VALUES(status),
+              scheduledDate = VALUES(scheduledDate),
+              kmTraveled = VALUES(kmTraveled),
+              kmRateApplied = VALUES(kmRateApplied),
+              kmTotalCost = VALUES(kmTotalCost),
+              tollCost = VALUES(tollCost),
+              totalTechnicianGross = VALUES(totalTechnicianGross),
+              faturamentoPorto = VALUES(faturamentoPorto),
+              updatedAt = NOW()
+          `;
+
+          await db.execute(insertOrderQuery, [
+            orderObj.id,
+            orderObj.callNumber,
+            orderObj.portoSeguroProtocol,
+            orderObj.serviceCategory,
+            orderObj.baseServiceFee,
+            orderObj.customerName,
+            orderObj.customerCpf,
+            orderObj.customerPhone,
+            orderObj.city,
+            orderObj.uf,
+            orderObj.neighborhood,
+            orderObj.addressStreet,
+            orderObj.addressNumber,
+            orderObj.addressComplement,
+            orderObj.postalCode,
+            orderObj.technicianId,
+            orderObj.status,
+            new Date(orderObj.scheduledDate),
+            orderObj.kmTraveled,
+            orderObj.kmRateApplied,
+            orderObj.kmTotalCost,
+            orderObj.tollCost,
+            orderObj.supportCost,
+            orderObj.totalTechnicianGross,
+            orderObj.faturamentoPorto,
+          ]);
+        } catch (dbOrderErr) {
+          console.warn(`[Import] Falha ao persistir OS ${callNumber} no MariaDB:`, dbOrderErr);
+        }
+
+        importedCount++;
+        if (importedOrdersSummary.length < 15) {
+          importedOrdersSummary.push({
+            callNumber: orderObj.callNumber,
+            technicianName: techName,
+            date: orderObj.scheduledDate,
+            baseServiceFee: orderObj.baseServiceFee,
+            kmTraveled: orderObj.kmTraveled,
+            kmTotalCost: orderObj.kmTotalCost,
+            tollCost: orderObj.tollCost,
+            totalGross: orderObj.totalTechnicianGross,
+            status: orderObj.status,
+          });
+        }
+      }
+
+      // 7. Registro na Trilha de Auditoria
+      await recordAudit({
+        userId: requester?.id || 'system',
+        userName: requester?.name || 'Administrador Master',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'SERVICE_ORDERS',
+        action: 'DATA_IMPORT',
+        result: 'SUCCESS',
+        details: `Importação massiva concluída: ${importedCount} ordens de serviço processadas e ${techniciansCreatedCount} novos técnicos criados a partir do arquivo "${file.originalname}".`,
+      });
+
+      res.json({
+        success: true,
+        message: `${importedCount} ordens importadas e ${techniciansCreatedCount} técnicos criados`,
+        importedCount,
+        techniciansCreated: techniciansCreatedCount,
+        ignoredRowsCount,
+        createdTechnicians: createdTechniciansList,
+        sampleOrders: importedOrdersSummary,
+      });
+    } catch (err: any) {
+      console.error('[Import] Erro durante o processamento da planilha:', err);
+      res.status(500).json({
+        success: false,
+        error: `Erro ao processar planilha: ${err.message || 'Formato de arquivo inválido ou corrompido.'}`,
+      });
+    }
+  });
   // =========================================================================
   app.get('/api/stock', async (req, res) => {
     const requester = await getRequester(req);

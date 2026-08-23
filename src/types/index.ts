@@ -44,6 +44,7 @@ export type AuditAction =
   | 'SETTINGS_UPDATE'
   | 'DB_CONFIG_UPDATE'
   | 'DATA_EXPORT'
+  | 'DATA_IMPORT'
   | 'ACCESS_DENIED';
 
 export type AuditResult = 'SUCCESS' | 'BLOCKED' | 'FAILED';

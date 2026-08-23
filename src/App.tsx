@@ -11,6 +11,7 @@ import { CashFlowView } from './components/CashFlowView';
 import { MobileAppSimulator } from './components/MobileAppSimulator';
 import { SettingsView } from './components/SettingsView';
 import { AuditLogsView } from './components/AuditLogsView';
+import { DataImportView } from './components/DataImportView';
 import { NewServiceOrderModal } from './components/NewServiceOrderModal';
 import { LoginView } from './components/LoginView';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
@@ -41,7 +42,7 @@ const MainLayout: React.FC = () => {
         setActiveTab('mobile_app');
       }
     } else if (isOperational) {
-      if (activeTab === 'settings') {
+      if (activeTab === 'settings' || activeTab === 'import_orders') {
         setActiveTab('dashboard');
       }
     }
@@ -105,6 +106,8 @@ const MainLayout: React.FC = () => {
             )}
 
             {activeTab === 'audit' && <AuditLogsView />}
+
+            {activeTab === 'import_orders' && <DataImportView />}
 
             {activeTab === 'mobile_app' && <MobileAppSimulator />}
 

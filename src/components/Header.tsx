@@ -16,6 +16,7 @@ import {
   Sliders,
   LogOut,
   Shield,
+  UploadCloud,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -125,6 +126,12 @@ export const Header: React.FC<HeaderProps> = ({
           title: 'Fluxo de Caixa & Vales',
           subtitle: 'Controle de Adiantamentos e Recebíveis',
           icon: DollarSign,
+        };
+      case 'import_orders':
+        return {
+          title: 'Importação Massiva de Ordens de Serviço',
+          subtitle: 'Carga de Histórico Financeiro e Operacional (.xlsx)',
+          icon: UploadCloud,
         };
       case 'mobile_app':
         return {

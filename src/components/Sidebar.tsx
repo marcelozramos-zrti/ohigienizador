@@ -13,6 +13,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  UploadCloud,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
@@ -97,6 +98,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: DollarSign,
       badge: null,
       roles: ['ADMIN', 'OPERATIONAL'],
+    },
+    {
+      id: 'import_orders',
+      label: 'Importação de Dados',
+      icon: UploadCloud,
+      badge: 'Porto .xlsx',
+      badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
+      roles: ['ADMIN'],
     },
     {
       id: 'audit',

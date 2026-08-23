@@ -492,4 +492,48 @@ export const ApiService = {
       return { success: false, message: err.message, added: [], skipped: [], errors: [err.message] };
     }
   },
+
+  // ==========================================
+  // MASS IMPORT (SPREADSHEET / EXCEL)
+  // ==========================================
+  async importOrdersSpreadsheet(file: File): Promise<{
+    success: boolean;
+    message?: string;
+    importedCount?: number;
+    techniciansCreated?: number;
+    ignoredRowsCount?: number;
+    createdTechnicians?: Array<{ id: string; name: string; email: string }>;
+    sampleOrders?: any[];
+    error?: string;
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const headers: Record<string, string> = {};
+      if (currentAuthUserId) {
+        headers['x-user-id'] = currentAuthUserId;
+      }
+
+      const res = await fetch('/api/import/orders', {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        return {
+          success: false,
+          error: json.error || `Erro ao importar arquivo (Status ${res.status})`,
+        };
+      }
+      return json;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Falha de comunicação durante a importação da planilha.',
+      };
+    }
+  },
 };
