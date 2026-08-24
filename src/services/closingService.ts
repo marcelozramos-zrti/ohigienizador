@@ -7,6 +7,85 @@ export interface ClosingCalculationOptions {
   referenceYear: number; // e.g. 2026
 }
 
+export function parseDateComponents(val: any): { year: number; month: number; day: number } | null {
+  if (!val) return null;
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return null;
+    return {
+      year: val.getFullYear(),
+      month: val.getMonth() + 1,
+      day: val.getDate(),
+    };
+  }
+
+  if (typeof val === 'number') {
+    const d = new Date(val > 100000000000 ? val : (val - 25569) * 86400 * 1000);
+    if (!isNaN(d.getTime())) {
+      return {
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        day: d.getDate(),
+      };
+    }
+  }
+
+  if (typeof val === 'string') {
+    const clean = val.trim();
+    // Formato Brasileiro: DD/MM/YYYY ou DD-MM-YYYY
+    const brMatch = clean.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (brMatch) {
+      return {
+        day: parseInt(brMatch[1], 10),
+        month: parseInt(brMatch[2], 10),
+        year: parseInt(brMatch[3], 10),
+      };
+    }
+
+    // Formato ISO: YYYY-MM-DD ou YYYY/MM/DD
+    const isoMatch = clean.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (isoMatch) {
+      return {
+        year: parseInt(isoMatch[1], 10),
+        month: parseInt(isoMatch[2], 10),
+        day: parseInt(isoMatch[3], 10),
+      };
+    }
+
+    const d = new Date(clean);
+    if (!isNaN(d.getTime())) {
+      return {
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        day: d.getDate(),
+      };
+    }
+  }
+
+  return null;
+}
+
+export function isOrderInPeriod(
+  os: ServiceOrder,
+  options: { referenceYear: number; referenceMonth: number; periodNumber: 1 | 2 }
+): boolean {
+  if (!os || os.status !== 'COMPLETED') return false;
+  const dateVal = os.scheduledDate || os.completedAt;
+  if (!dateVal) return false;
+
+  const parsed = parseDateComponents(dateVal);
+  if (!parsed) return false;
+
+  if (parsed.year !== options.referenceYear || parsed.month !== options.referenceMonth) {
+    return false;
+  }
+
+  if (options.periodNumber === 1) {
+    return parsed.day >= 1 && parsed.day <= 15;
+  } else {
+    return parsed.day >= 16;
+  }
+}
+
 export interface ClosingStatementJson {
   statementId: string;
   technician: {
@@ -97,9 +176,9 @@ export class ClosingService {
     const safeOrders = orders || [];
     const safeMovements = movements || [];
 
-    // 1. Filtrar ordens concluídas do técnico no período
+    // 1. Filtrar ordens concluídas do técnico estritamente no período (Mês, Ano, Quinzena e Status COMPLETED)
     const completedOrders = safeOrders.filter(
-      (os) => os && os.technicianId === technician.id && os.status === 'COMPLETED'
+      (os) => os && os.technicianId === technician.id && os.status === 'COMPLETED' && isOrderInPeriod(os, options)
     );
 
     let sumBaseService = 0;
@@ -339,7 +418,7 @@ export class ClosingService {
     });
 
     const totalFaturamentoPorto = (orders || [])
-      .filter((os) => os && os.status === 'COMPLETED')
+      .filter((os) => os && os.status === 'COMPLETED' && isOrderInPeriod(os, options))
       .reduce((sum, os) => sum + (os.faturamentoPorto || 0), 0);
 
     const totalTechnicianGross = summaries.reduce((acc, s) => acc + s.grossTotal, 0);

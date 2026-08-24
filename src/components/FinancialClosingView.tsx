@@ -24,12 +24,13 @@ import {
   CheckCircle,
   Clock,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TechnicianClosingSummary, ServiceOrder } from '../types';
 import { WhatsAppDispatchModal } from './WhatsAppDispatchModal';
 import { CsvExportService } from '../services/csvExportService';
-import { ClosingService } from '../services/closingService';
+import { isOrderInPeriod } from '../services/closingService';
 
 interface FinancialClosingViewProps {
   onOpenNewAdvance: () => void;
@@ -42,11 +43,14 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     currentClosing,
     selectedMonth,
     setSelectedMonth,
+    selectedYear,
+    setSelectedYear,
     selectedPeriod,
     setSelectedPeriod,
     exportClosingCsv,
     generatePdfForTechnician,
     dispatchWhatsAppStatement,
+    settleOrderPayment,
     orders = [],
     users = [],
     movements = [],
@@ -55,10 +59,12 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
   const [activeSubTab, setActiveSubTab] = useState<'datagrid' | 'technicians' | 'summary'>('datagrid');
   const [selectedTechForWhatsApp, setSelectedTechForWhatsApp] = useState<TechnicianClosingSummary | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   // Filters state (Query Panel)
   const [filterTechnicianId, setFilterTechnicianId] = useState<string>('ALL');
-  const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterStatus, setFilterStatus] = useState<string>('COMPLETED');
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const monthNames = [
@@ -74,22 +80,41 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
   }, [safeUsers]);
 
-  // Filtered Orders for the DataGrid
+  // Filtered Orders for the DataGrid (Strict Rule: Status COMPLETED and within selected Month/Year/Quinzena)
   const filteredOrders = useMemo(() => {
     return safeOrders.filter((os) => {
       if (!os) return false;
 
-      // Filter by Technician
+      // 1. Strict Status Filter (default COMPLETED)
+      if (filterStatus === 'COMPLETED' || filterStatus === 'ALL') {
+        if (os.status !== 'COMPLETED') return false;
+      } else if (os.status !== filterStatus) {
+        return false;
+      }
+
+      // 2. Strict Period Filter: Year, Month, and Quinzena (1: 01-15, 2: 16-end)
+      if (
+        !isOrderInPeriod(os, {
+          referenceYear: selectedYear,
+          referenceMonth: selectedMonth,
+          periodNumber: selectedPeriod,
+        })
+      ) {
+        return false;
+      }
+
+      // 3. Filter by Technician
       if (filterTechnicianId !== 'ALL' && os.technicianId !== filterTechnicianId) {
         return false;
       }
 
-      // Filter by Status
-      if (filterStatus !== 'ALL' && os.status !== filterStatus) {
+      // 4. Filter by Payment Status (Quitação)
+      const payStatus = os.paymentStatus || 'PENDING';
+      if (filterPaymentStatus !== 'ALL' && payStatus !== filterPaymentStatus) {
         return false;
       }
 
-      // Search Query (Call number, customer, city, neighborhood, service)
+      // 5. Search Query (Call number, customer, city, neighborhood, service, tech)
       if (searchQuery.trim() !== '') {
         const query = searchQuery.toLowerCase();
         const matchesCall = os.callNumber?.toLowerCase().includes(query);
@@ -106,16 +131,36 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
       return true;
     });
-  }, [safeOrders, filterTechnicianId, filterStatus, searchQuery]);
+  }, [
+    safeOrders,
+    selectedYear,
+    selectedMonth,
+    selectedPeriod,
+    filterStatus,
+    filterTechnicianId,
+    filterPaymentStatus,
+    searchQuery,
+  ]);
 
-  const currentPeriodLabel = `${selectedPeriod}ª Quinzena (${monthNames[selectedMonth - 1] || 'Agosto'}/2026)`;
+  const currentPeriodLabel = `${selectedPeriod}ª Quinzena (${monthNames[selectedMonth - 1] || 'Agosto'}/${selectedYear})`;
 
-  // Export Closing DataGrid CSV with exact 17 columns
+  // Handle Quitação ("Dar Baixa" / "Reverter")
+  const handleTogglePayment = async (orderId: string, currentStatus?: 'PAID' | 'PENDING') => {
+    try {
+      setActionLoadingId(orderId);
+      const nextStatus = currentStatus === 'PAID' ? 'PENDING' : 'PAID';
+      await settleOrderPayment(orderId, nextStatus);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Export Closing DataGrid CSV with exact columns
   const handleExportDataGridCsv = () => {
     CsvExportService.exportClosingDataGridCsv(filteredOrders, currentPeriodLabel);
     addToast(
       'Exportação Concluída',
-      `O arquivo CSV com as 17 colunas de fechamento foi gerado com sucesso (${filteredOrders.length} registros).`,
+      `O arquivo CSV com as colunas de fechamento foi gerado com sucesso (${filteredOrders.length} registros).`,
       'success'
     );
   };
@@ -127,6 +172,9 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
   const companyProfitMargin = currentClosing?.companyProfitMargin || 0;
   const totalNetPayout = currentClosing?.totalNetPayout || 0;
   const technicianSummaries = currentClosing?.technicianSummaries || [];
+
+  const paidOrdersCount = filteredOrders.filter((o) => o.paymentStatus === 'PAID').length;
+  const pendingOrdersCount = filteredOrders.length - paidOrdersCount;
 
   return (
     <div className="space-y-6">
@@ -171,7 +219,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              2ª Quinzena (16-31)
+              2ª Quinzena (16-fim)
             </button>
           </div>
 
@@ -184,9 +232,21 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
           >
             {monthNames.map((m, idx) => (
               <option key={idx} value={idx + 1}>
-                {m} / 2026
+                {m}
               </option>
             ))}
+          </select>
+
+          {/* Year Selector */}
+          <select
+            id="closing-year-select"
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(Number(e.target.value))}
+            className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 shadow-xs cursor-pointer focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+          >
+            <option value={2025}>2025</option>
+            <option value={2026}>2026</option>
+            <option value={2027}>2027</option>
           </select>
 
           {/* Lançar Vale */}
@@ -324,7 +384,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
         </div>
       </div>
 
-      {/* SUBTAB 1: DataGrid Completo com Painel de Query / Filtros */}
+      {/* SUBTAB 1: DataGrid Completo com Painel de Query / Filtros e Controle de Quitação */}
       {activeSubTab === 'datagrid' && (
         <div className="space-y-4">
           
@@ -340,16 +400,17 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
               <button
                 onClick={() => {
                   setFilterTechnicianId('ALL');
-                  setFilterStatus('ALL');
+                  setFilterStatus('COMPLETED');
+                  setFilterPaymentStatus('ALL');
                   setSearchQuery('');
                 }}
-                className="text-[11px] text-cyan-700 hover:underline font-bold"
+                className="text-[11px] text-cyan-700 hover:underline font-bold cursor-pointer"
               >
                 Limpar Filtros
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               {/* Filtro por Técnico */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
@@ -370,7 +431,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                 </select>
               </div>
 
-              {/* Filtro por Status */}
+              {/* Filtro por Status da OS */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                   Status da OS
@@ -381,11 +442,28 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
                 >
+                  <option value="COMPLETED">Finalizadas (COMPLETED) [Padrão]</option>
                   <option value="ALL">Todos os Status</option>
-                  <option value="COMPLETED">Finalizadas (COMPLETED)</option>
                   <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
                   <option value="PENDING">Pendentes (PENDING)</option>
                   <option value="CANCELLED">Canceladas (CANCELLED)</option>
+                </select>
+              </div>
+
+              {/* Filtro por Status de Quitação */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Status de Pagamento
+                </label>
+                <select
+                  id="query-payment-status-select"
+                  value={filterPaymentStatus}
+                  onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                >
+                  <option value="ALL">Todos (Pagos e Pendentes)</option>
+                  <option value="PAID">Apenas Pagos (PAGO)</option>
+                  <option value="PENDING">Apenas Pendentes (PENDENTE)</option>
                 </select>
               </div>
 
@@ -409,17 +487,22 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             </div>
           </div>
 
-          {/* DataGrid Table with Exact 17 Columns */}
+          {/* DataGrid Table with Complete Columns & Quitação Controls */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+            <div className="p-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-cyan-600" />
                 <h3 className="text-xs font-bold text-slate-800">
-                  DataGrid Oficial de Fechamento ({filteredOrders.length} Chamados)
+                  DataGrid Oficial de Fechamento ({filteredOrders.length} Chamados Concluídos no Período)
                 </h3>
               </div>
-              <div className="text-[11px] text-slate-500 font-medium">
-                Modelo compatível com planilhas de transparência
+              <div className="flex items-center gap-3 text-[11px] font-semibold">
+                <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  {paidOrdersCount} Pagos
+                </span>
+                <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  {pendingOrdersCount} Pendentes
+                </span>
               </div>
             </div>
 
@@ -433,7 +516,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     <th className="py-2.5 px-3 border-r border-[#004080]">Periodo</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Tipo Visita</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Prestador</th>
-                    <th className="py-2.5 px-3 border-r border-[#004080]">Status</th>
+                    <th className="py-2.5 px-3 border-r border-[#004080]">Status OS</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Tecnico</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Status Mobile</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Cidade</th>
@@ -443,7 +526,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     <th className="py-2.5 px-3 border-r border-[#004080] text-center">KM</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Pedágio</th>
                     <th className="py-2.5 px-3 border-r border-[#004080]">Valor da Visita</th>
-                    <th className="py-2.5 px-3 bg-cyan-600 text-white font-extrabold text-right">Total</th>
+                    <th className="py-2.5 px-3 bg-cyan-700 text-white font-extrabold text-right border-r border-[#004080]">Total</th>
+                    <th className="py-2.5 px-3 border-r border-[#004080] text-center">Status Pagto</th>
+                    <th className="py-2.5 px-3 border-r border-[#004080] text-center">Data Pagto</th>
+                    <th className="py-2.5 px-3 bg-[#00264d] text-white font-extrabold text-center">Ações / Quitação</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -465,6 +551,9 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                         : os.status === 'CANCELLED'
                         ? 'Cancelado'
                         : 'Pendente';
+
+                    const isPaid = os.paymentStatus === 'PAID';
+                    const isLoading = actionLoadingId === os.id;
 
                     return (
                       <tr
@@ -577,8 +666,72 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                         </td>
 
                         {/* 17. Total */}
-                        <td className="py-2.5 px-3 font-black text-[#003366] bg-cyan-50/80 text-right whitespace-nowrap font-mono">
+                        <td className="py-2.5 px-3 font-black text-[#003366] bg-cyan-50/80 text-right whitespace-nowrap font-mono border-r border-slate-100">
                           R$ {totalOs.toFixed(2)}
+                        </td>
+
+                        {/* 18. Status Pagto */}
+                        <td className="py-2.5 px-3 border-r border-slate-100 whitespace-nowrap text-center">
+                          {isPaid ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              PAGO
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300">
+                              <Clock className="w-3 h-3 text-amber-600" />
+                              PENDENTE
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 19. Data Pagto */}
+                        <td className="py-2.5 px-3 text-slate-600 border-r border-slate-100 whitespace-nowrap text-center font-mono text-[11px]">
+                          {os.paymentDate ? (
+                            <span>
+                              {new Date(os.paymentDate).toLocaleDateString('pt-BR')}{' '}
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(os.paymentDate).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-sans italic text-[10px]">-</span>
+                          )}
+                        </td>
+
+                        {/* 20. Ações / Quitação */}
+                        <td className="py-2 px-3 text-center whitespace-nowrap">
+                          {isPaid ? (
+                            <button
+                              id={`revert-payment-${os.id}`}
+                              disabled={isLoading}
+                              onClick={() => handleTogglePayment(os.id, 'PAID')}
+                              title="Clique para estornar o pagamento deste chamado para PENDENTE"
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-slate-600 hover:text-red-700 bg-slate-100 hover:bg-red-50 border border-slate-200 hover:border-red-200 rounded-md transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              {isLoading ? (
+                                <span className="animate-spin inline-block w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full" />
+                              ) : (
+                                <RotateCcw className="w-3 h-3 text-slate-500" />
+                              )}
+                              <span>Estornar</span>
+                            </button>
+                          ) : (
+                            <button
+                              id={`settle-payment-${os.id}`}
+                              disabled={isLoading}
+                              onClick={() => handleTogglePayment(os.id, 'PENDING')}
+                              title="Dar baixa e marcar como PAGO para este técnico"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-extrabold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 rounded-md shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              {isLoading ? (
+                                <span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                              ) : (
+                                <DollarSign className="w-3 h-3 text-emerald-200" />
+                              )}
+                              <span>Dar Baixa</span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -586,8 +739,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                   {filteredOrders.length === 0 && (
                     <tr>
-                      <td colSpan={17} className="py-8 text-center text-slate-400">
-                        Nenhuma Ordem de Serviço encontrada com os filtros selecionados.
+                      <td colSpan={20} className="py-8 text-center text-slate-400">
+                        Nenhuma Ordem de Serviço concluída encontrada para {currentPeriodLabel}.
                       </td>
                     </tr>
                   )}
@@ -596,13 +749,24 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             </div>
 
             {/* Footer Summary Row */}
-            <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between text-xs text-slate-600">
-              <span>
-                Total de Linhas no DataGrid: <strong>{filteredOrders.length}</strong>
-              </span>
+            <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2">
+              <div className="flex items-center gap-3">
+                <span>
+                  Total de Linhas no DataGrid: <strong>{filteredOrders.length}</strong>
+                </span>
+                <span className="text-slate-300">|</span>
+                <span className="text-emerald-700 font-semibold">
+                  Quitados: <strong>{paidOrdersCount}</strong>
+                </span>
+                <span className="text-slate-300">|</span>
+                <span className="text-amber-700 font-semibold">
+                  Pendentes: <strong>{pendingOrdersCount}</strong>
+                </span>
+              </div>
+
               <div className="flex items-center gap-4">
                 <span>
-                  Soma Total das OSs:{' '}
+                  Soma Total das OSs Concluídas:{' '}
                   <strong className="text-[#003366] font-mono">
                     R${' '}
                     {filteredOrders

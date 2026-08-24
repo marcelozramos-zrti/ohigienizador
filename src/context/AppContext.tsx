@@ -63,6 +63,7 @@ interface AppContextType {
   // OS Management
   createServiceOrder: (order: Omit<ServiceOrder, 'id' | 'totalTechnicianGross' | 'itemsUsed' | 'kmTotalCost'>) => void;
   updateServiceOrder: (orderId: string, updates: Partial<ServiceOrder>) => void;
+  settleOrderPayment: (orderId: string, status?: 'PAID' | 'PENDING', paymentDate?: string | null) => Promise<void>;
   deleteServiceOrder: (orderId: string) => void;
   updateOrderStatus: (orderId: string, status: ServiceOrder['status']) => void;
   completeServiceOrder: (
@@ -837,6 +838,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const settleOrderPayment = async (orderId: string, status: 'PAID' | 'PENDING' = 'PAID', paymentDate?: string | null) => {
+    const target = orders.find((o) => o.id === orderId);
+    const dateVal = status === 'PAID' ? (paymentDate || new Date().toISOString()) : null;
+
+    setOrders((prev) =>
+      prev.map((os) => {
+        if (os.id === orderId) {
+          return {
+            ...os,
+            paymentStatus: status,
+            paymentDate: dateVal,
+          };
+        }
+        return os;
+      })
+    );
+
+    try {
+      await ApiService.settleOrderPayment(orderId, status, dateVal);
+      if (status === 'PAID') {
+        addToast(
+          'Quitação Realizada',
+          `Pagamento da OS #${target?.callNumber || orderId} baixado como PAGO.`,
+          'success'
+        );
+      } else {
+        addToast(
+          'Quitação Revertida',
+          `OS #${target?.callNumber || orderId} retornada para status PENDENTE.`,
+          'info'
+        );
+      }
+    } catch {
+      // Estado em memória já atualizado
+    }
+  };
+
   const deleteServiceOrder = (orderId: string) => {
     const target = orders.find((o) => o.id === orderId);
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
@@ -1241,6 +1279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createUserAccount,
         createServiceOrder,
         updateServiceOrder,
+        settleOrderPayment,
         deleteServiceOrder,
         updateOrderStatus,
         completeServiceOrder,

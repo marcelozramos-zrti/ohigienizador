@@ -299,6 +299,30 @@ export const ApiService = {
     }
   },
 
+  async updateOrder(orderId: string, updates: Partial<ServiceOrder>): Promise<{ success: boolean; error?: string; data?: any }> {
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify(updates),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || `HTTP ${res.status}` };
+      }
+      return { success: Boolean(json.success), data: json.data, error: json.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async settleOrderPayment(orderId: string, paymentStatus: 'PAID' | 'PENDING', paymentDate?: string | null): Promise<{ success: boolean; error?: string }> {
+    return this.updateOrder(orderId, {
+      paymentStatus,
+      paymentDate: paymentStatus === 'PAID' ? (paymentDate || new Date().toISOString()) : null,
+    });
+  },
+
   async deleteOrder(orderId: string): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch(`/api/orders/${orderId}`, {

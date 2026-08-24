@@ -54,12 +54,17 @@ export class CsvExportService {
       'Pedágio',
       'Valor da Visita',
       'Total',
+      'Status Pagto',
+      'Data Pagto',
     ];
 
     const safeOrders = orders || [];
     const rows = safeOrders.map((os) => {
       const visitDate = os.completedAt || os.scheduledDate || new Date().toISOString();
       const dateFormatted = new Date(visitDate).toLocaleDateString('pt-BR');
+      const paymentDateFormatted = os.paymentDate
+        ? new Date(os.paymentDate).toLocaleString('pt-BR')
+        : '-';
       const km = os.kmTraveled || 0;
       const kmCost = os.kmTotalCost ?? Number((km * 0.50).toFixed(2));
       const baseFee = os.baseServiceFee || 0;
@@ -94,6 +99,8 @@ export class CsvExportService {
         `R$ ${toll.toFixed(2)}`,
         `R$ ${baseFee.toFixed(2)}`,
         `R$ ${totalOs.toFixed(2)}`,
+        os.paymentStatus === 'PAID' ? 'PAGO' : 'PENDENTE',
+        paymentDateFormatted,
       ];
     });
 

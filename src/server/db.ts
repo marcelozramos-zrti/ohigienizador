@@ -227,12 +227,27 @@ export async function initializeDatabaseSchema(): Promise<void> {
         customerSignature LONGTEXT NULL,
         executionNotes TEXT NULL,
         tollReceiptUrl VARCHAR(255) NULL,
+        paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+        paymentDate DATETIME(3) NULL,
         createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
         INDEX idx_os_status (status),
-        INDEX idx_os_tech (technicianId)
+        INDEX idx_os_tech (technicianId),
+        INDEX idx_os_payment (paymentStatus)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    // Ensure all missing columns exist in existing 'service_orders' table (MariaDB 10.2+)
+    const orderAlterStatements = [
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING'",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentDate DATETIME(3) NULL",
+    ];
+
+    for (const stmt of orderAlterStatements) {
+      await db.query(stmt).catch((err: any) => {
+        console.warn(`[MariaDB Migration Notice] ${stmt}: ${err.message}`);
+      });
+    }
 
     // 3. stock_items table
     await db.query(`

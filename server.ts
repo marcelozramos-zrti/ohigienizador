@@ -1052,6 +1052,8 @@ async function startServer() {
         customerSignature: o.customerSignature || null,
         executionNotes: o.executionNotes || null,
         tollReceiptUrl: o.tollReceiptUrl || null,
+        paymentStatus: o.paymentStatus || o.payment_status || 'PENDING',
+        paymentDate: o.paymentDate || o.payment_date || null,
         itemsUsed: [],
       }));
       memOrders = formatted;
@@ -1223,6 +1225,10 @@ async function startServer() {
         execution_notes: o.executionNotes || null,
         tollreceipturl: o.tollReceiptUrl || null,
         toll_receipt_url: o.tollReceiptUrl || null,
+        paymentstatus: o.paymentStatus || 'PENDING',
+        payment_status: o.paymentStatus || 'PENDING',
+        paymentdate: o.paymentDate ? new Date(o.paymentDate) : null,
+        payment_date: o.paymentDate ? new Date(o.paymentDate) : null,
       };
 
       const insertCols: string[] = [];
@@ -1267,6 +1273,108 @@ async function startServer() {
     } catch (err: any) {
       if (isNetworkError(err)) {
         return res.json({ success: true, message: `OS ${o.callNumber} salva com sucesso.` });
+      }
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Atualização direta de Ordem de Serviço (incluindo Quitação / Dar Baixa)
+  app.put(['/api/orders/:id', '/api/orders'], async (req, res) => {
+    const requester = await getRequester(req);
+    const orderId = req.params.id || req.body?.id;
+    const updates = req.body || {};
+
+    if (!orderId) {
+      return res.status(400).json({ success: false, error: 'ID da Ordem de Serviço é obrigatório.' });
+    }
+
+    const memIdx = memOrders.findIndex((o) => o.id === orderId);
+    const existingOrder = memIdx >= 0 ? memOrders[memIdx] : null;
+
+    if (!existingOrder && memIdx < 0) {
+      // Se não encontrado na memória, ainda tentamos gravar se tiver dados mínimos
+    }
+
+    const isSettlement = updates.paymentStatus && updates.paymentStatus !== existingOrder?.paymentStatus;
+    const paymentStatusVal = updates.paymentStatus || existingOrder?.paymentStatus || 'PENDING';
+    const paymentDateVal = updates.paymentStatus === 'PAID'
+      ? (updates.paymentDate || new Date().toISOString())
+      : (updates.paymentStatus === 'PENDING' ? null : (updates.paymentDate || existingOrder?.paymentDate || null));
+
+    // Atualiza na memória
+    if (memIdx >= 0) {
+      memOrders[memIdx] = {
+        ...memOrders[memIdx],
+        ...updates,
+        paymentStatus: paymentStatusVal,
+        paymentDate: paymentDateVal,
+      };
+    }
+
+    // Grava auditoria
+    if (isSettlement) {
+      await recordAudit({
+        userId: requester?.id || 'system',
+        userName: requester?.name || 'Sistema',
+        userRole: requester?.role || 'OPERATIONAL',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: paymentStatusVal === 'PAID' ? 'OS_PAYMENT_SETTLED' : 'OS_PAYMENT_REVERTED',
+        affectedRecordId: orderId,
+        affectedRecordType: 'service_order',
+        oldValue: existingOrder?.paymentStatus || 'PENDING',
+        newValue: paymentStatusVal,
+        result: 'SUCCESS',
+        details: paymentStatusVal === 'PAID'
+          ? `Baixa de pagamento realizada na OS #${existingOrder?.callNumber || orderId} por ${requester?.name || 'Gestor'}.`
+          : `Status de pagamento da OS #${existingOrder?.callNumber || orderId} revertido para PENDENTE.`,
+      });
+    }
+
+    try {
+      const db = getDbPool();
+      const cols = await getTableColumnsMap('service_orders');
+
+      const setClauses: string[] = [];
+      const values: any[] = [];
+
+      if (cols.has('paymentstatus') || cols.has('payment_status')) {
+        const field = cols.get('paymentstatus') || cols.get('payment_status')!;
+        setClauses.push(`\`${field}\` = ?`);
+        values.push(paymentStatusVal);
+      }
+
+      if (cols.has('paymentdate') || cols.has('payment_date')) {
+        const field = cols.get('paymentdate') || cols.get('payment_date')!;
+        setClauses.push(`\`${field}\` = ?`);
+        values.push(paymentDateVal ? new Date(paymentDateVal) : null);
+      }
+
+      if (updates.status && (cols.has('status'))) {
+        setClauses.push(`\`${cols.get('status')}\` = ?`);
+        values.push(updates.status);
+      }
+
+      if (setClauses.length > 0) {
+        values.push(orderId);
+        await db.execute(
+          `UPDATE \`service_orders\` SET ${setClauses.join(', ')} WHERE id = ?`,
+          values
+        );
+      }
+
+      res.json({
+        success: true,
+        message: 'Ordem de serviço atualizada com sucesso.',
+        data: memIdx >= 0 ? memOrders[memIdx] : { id: orderId, ...updates, paymentStatus: paymentStatusVal, paymentDate: paymentDateVal },
+      });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        return res.json({
+          success: true,
+          message: 'Ordem de serviço atualizada na memória local.',
+          data: memIdx >= 0 ? memOrders[memIdx] : { id: orderId, ...updates },
+        });
       }
       res.status(500).json({ success: false, error: err.message });
     }
@@ -1616,6 +1724,8 @@ async function startServer() {
           supportCost: 0,
           totalTechnicianGross,
           faturamentoPorto,
+          paymentStatus: 'PENDING',
+          paymentDate: null,
           itemsUsed: [],
         };
 

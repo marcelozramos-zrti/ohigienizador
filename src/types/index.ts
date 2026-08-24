@@ -33,6 +33,8 @@ export type AuditAction =
   | 'OS_STATUS_CHANGE'
   | 'OS_DELETE'
   | 'OS_TECHNICIAN_REASSIGN'
+  | 'OS_PAYMENT_SETTLED'
+  | 'OS_PAYMENT_REVERTED'
   | 'STOCK_CREATE'
   | 'STOCK_UPDATE'
   | 'STOCK_DELETE'
@@ -171,6 +173,10 @@ export interface ServiceOrder {
 
   // Insumos/suportes abatidos
   itemsUsed: OSStockItemUsage[];
+
+  // Controle de Quitação Financeira (Dar Baixa ao Técnico)
+  paymentStatus?: 'PENDING' | 'PAID';
+  paymentDate?: string | null;
 }
 
 export interface StockItem {
