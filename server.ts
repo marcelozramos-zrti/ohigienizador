@@ -1370,12 +1370,19 @@ async function startServer() {
       function parseCurrency(val: any): number {
         if (val === null || val === undefined || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
-        const str = String(val)
-          .replace(/R\$/gi, '')
-          .replace(/\s+/g, '')
-          .replace(/\./g, '')
-          .replace(/,/g, '.')
-          .trim();
+
+        let str = String(val).replace(/R\$/gi, '').trim();
+
+        const lastDot = str.lastIndexOf('.');
+        const lastComma = str.lastIndexOf(',');
+
+        if (lastComma > lastDot) {
+          str = str.replace(/\./g, '').replace(/,/g, '.');
+        } else if (lastDot > lastComma) {
+          str = str.replace(/,/g, '');
+        }
+
+        str = str.replace(/\s+/g, '');
         const num = parseFloat(str);
         return isNaN(num) ? 0 : Number(num.toFixed(2));
       }
