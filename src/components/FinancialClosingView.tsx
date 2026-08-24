@@ -63,7 +63,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
   // Filters state (Query Panel)
   const [filterTechnicianId, setFilterTechnicianId] = useState<string>('ALL');
-  const [filterStatus, setFilterStatus] = useState<string>('COMPLETED');
+  const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -80,19 +80,12 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
   }, [safeUsers]);
 
-  // Filtered Orders for the DataGrid (Strict Rule: Status COMPLETED and within selected Month/Year/Quinzena)
+  // Filtered Orders for the DataGrid (Visualização Operacional: Respeita o filtro de status selecionado no período)
   const filteredOrders = useMemo(() => {
     return safeOrders.filter((os) => {
       if (!os) return false;
 
-      // 1. Strict Status Filter (default COMPLETED)
-      if (filterStatus === 'COMPLETED' || filterStatus === 'ALL') {
-        if (os.status !== 'COMPLETED') return false;
-      } else if (os.status !== filterStatus) {
-        return false;
-      }
-
-      // 2. Strict Period Filter: Year, Month, and Quinzena (1: 01-15, 2: 16-end)
+      // 1. Period Filter: Year, Month, and Quinzena (1: 01-15, 2: 16-end)
       if (
         !isOrderInPeriod(os, {
           referenceYear: selectedYear,
@@ -100,6 +93,11 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
           periodNumber: selectedPeriod,
         })
       ) {
+        return false;
+      }
+
+      // 2. Status Filter: Se 'ALL', exibe todos os status; se específico, filtra exatamente
+      if (filterStatus !== 'ALL' && os.status !== filterStatus) {
         return false;
       }
 
@@ -400,7 +398,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
               <button
                 onClick={() => {
                   setFilterTechnicianId('ALL');
-                  setFilterStatus('COMPLETED');
+                  setFilterStatus('ALL');
                   setFilterPaymentStatus('ALL');
                   setSearchQuery('');
                 }}
@@ -442,8 +440,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
                 >
-                  <option value="COMPLETED">Finalizadas (COMPLETED) [Padrão]</option>
                   <option value="ALL">Todos os Status</option>
+                  <option value="COMPLETED">Finalizadas (COMPLETED) [Elegíveis Fechamento]</option>
                   <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
                   <option value="PENDING">Pendentes (PENDING)</option>
                   <option value="CANCELLED">Canceladas (CANCELLED)</option>
@@ -493,14 +491,22 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-cyan-600" />
                 <h3 className="text-xs font-bold text-slate-800">
-                  DataGrid Oficial de Fechamento ({filteredOrders.length} Chamados Concluídos no Período)
+                  DataGrid de Ordens de Serviço ({filteredOrders.length} OSs no Período)
                 </h3>
               </div>
-              <div className="flex items-center gap-3 text-[11px] font-semibold">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                <span className="text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded border border-cyan-200">
+                  {filteredOrders.filter((o) => o.status === 'COMPLETED').length} Concluídas (Elegíveis)
+                </span>
+                {filteredOrders.filter((o) => o.status !== 'COMPLETED').length > 0 && (
+                  <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    {filteredOrders.filter((o) => o.status !== 'COMPLETED').length} Não Concluídas (R$ 0,00 no Fechamento)
+                  </span>
+                )}
                 <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                   {paidOrdersCount} Pagos
                 </span>
-                <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                   {pendingOrdersCount} Pendentes
                 </span>
               </div>
@@ -667,12 +673,21 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 17. Total */}
                         <td className="py-2.5 px-3 font-black text-[#003366] bg-cyan-50/80 text-right whitespace-nowrap font-mono border-r border-slate-100">
-                          R$ {totalOs.toFixed(2)}
+                          <div>R$ {totalOs.toFixed(2)}</div>
+                          {os.status !== 'COMPLETED' && (
+                            <div className="text-[8px] font-bold text-amber-600 tracking-tight uppercase">
+                              R$ 0,00 Fechamento
+                            </div>
+                          )}
                         </td>
 
                         {/* 18. Status Pagto */}
                         <td className="py-2.5 px-3 border-r border-slate-100 whitespace-nowrap text-center">
-                          {isPaid ? (
+                          {os.status !== 'COMPLETED' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200" title="Chamado não concluído não é elegível para pagamento">
+                              Não Elegível
+                            </span>
+                          ) : isPaid ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                               PAGO
@@ -687,7 +702,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 19. Data Pagto */}
                         <td className="py-2.5 px-3 text-slate-600 border-r border-slate-100 whitespace-nowrap text-center font-mono text-[11px]">
-                          {os.paymentDate ? (
+                          {os.status === 'COMPLETED' && os.paymentDate ? (
                             <span>
                               {new Date(os.paymentDate).toLocaleDateString('pt-BR')}{' '}
                               <span className="text-[10px] text-slate-400">
@@ -701,7 +716,15 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 20. Ações / Quitação */}
                         <td className="py-2 px-3 text-center whitespace-nowrap">
-                          {isPaid ? (
+                          {os.status !== 'COMPLETED' ? (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-400 bg-slate-50 border border-slate-200 rounded-md cursor-not-allowed"
+                              title="Apenas chamados finalizados (COMPLETED) geram repasse ao técnico e podem receber baixa de pagamento"
+                            >
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              Aguardando Conclusão
+                            </span>
+                          ) : isPaid ? (
                             <button
                               id={`revert-payment-${os.id}`}
                               disabled={isLoading}
@@ -740,7 +763,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   {filteredOrders.length === 0 && (
                     <tr>
                       <td colSpan={20} className="py-8 text-center text-slate-400">
-                        Nenhuma Ordem de Serviço concluída encontrada para {currentPeriodLabel}.
+                        Nenhuma Ordem de Serviço encontrada para {currentPeriodLabel}.
                       </td>
                     </tr>
                   )}
@@ -750,26 +773,39 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
             {/* Footer Summary Row */}
             <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <span>
-                  Total de Linhas no DataGrid: <strong>{filteredOrders.length}</strong>
+                  Total no DataGrid: <strong>{filteredOrders.length}</strong>
+                </span>
+                <span className="text-slate-300">|</span>
+                <span className="text-cyan-800 font-semibold">
+                  Concluídas (Elegíveis): <strong>{filteredOrders.filter((o) => o.status === 'COMPLETED').length}</strong>
                 </span>
                 <span className="text-slate-300">|</span>
                 <span className="text-emerald-700 font-semibold">
                   Quitados: <strong>{paidOrdersCount}</strong>
                 </span>
                 <span className="text-slate-300">|</span>
-                <span className="text-amber-700 font-semibold">
+                <span className="text-slate-600 font-semibold">
                   Pendentes: <strong>{pendingOrdersCount}</strong>
                 </span>
+                {filteredOrders.filter((o) => o.status !== 'COMPLETED').length > 0 && (
+                  <>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                      ({filteredOrders.filter((o) => o.status !== 'COMPLETED').length} OS(s) em aberto não somam no fechamento)
+                    </span>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-4">
                 <span>
                   Soma Total das OSs Concluídas:{' '}
-                  <strong className="text-[#003366] font-mono">
+                  <strong className="text-[#003366] font-mono font-bold">
                     R${' '}
                     {filteredOrders
+                      .filter((os) => os.status === 'COMPLETED')
                       .reduce((acc, os) => {
                         const kmCost = os.kmTotalCost ?? (os.kmTraveled || 0) * 0.50;
                         return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);

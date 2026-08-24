@@ -68,8 +68,8 @@ export function isOrderInPeriod(
   os: ServiceOrder,
   options: { referenceYear: number; referenceMonth: number; periodNumber: 1 | 2 }
 ): boolean {
-  if (!os || os.status !== 'COMPLETED') return false;
-  const dateVal = os.scheduledDate || os.completedAt;
+  if (!os) return false;
+  const dateVal = os.scheduledDate || os.completedAt || os.startedAt;
   if (!dateVal) return false;
 
   const parsed = parseDateComponents(dateVal);
