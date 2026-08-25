@@ -41,7 +41,11 @@ export const Header: React.FC<HeaderProps> = ({
     markNotificationRead,
     clearNotifications,
     selectedMonth = 8,
+    setSelectedMonth,
+    selectedYear = 2026,
+    setSelectedYear,
     selectedPeriod = 1,
+    setSelectedPeriod,
     addToast,
     logout,
   } = useApp();
@@ -182,9 +186,48 @@ export const Header: React.FC<HeaderProps> = ({
                 <h2 className="text-sm sm:text-base font-bold text-[#003366] truncate">
                   {page.title}
                 </h2>
-                <span className="hidden sm:inline-flex items-center px-2 py-0.5 bg-cyan-50 text-cyan-800 text-[10px] font-bold rounded border border-cyan-200 uppercase tracking-wider">
-                  {selectedPeriod}ª Quinzena • {monthNames[selectedMonth - 1] || 'Agosto'}/2026
-                </span>
+                {/* Interactive Global Period Selector (Ano -> Mês -> Quinzena) */}
+                <div className="hidden sm:flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
+                  {/* Quinzena */}
+                  <select
+                    id="header-period-select"
+                    value={selectedPeriod}
+                    onChange={(e) => setSelectedPeriod(Number(e.target.value) as 1 | 2)}
+                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-cyan-900 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
+                    title="Selecione a Quinzena"
+                  >
+                    <option value={1}>1ª Quinzena (01-15)</option>
+                    <option value={2}>2ª Quinzena (16-fim)</option>
+                  </select>
+
+                  {/* Mês */}
+                  <select
+                    id="header-month-select"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-800 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
+                    title="Selecione o Mês"
+                  >
+                    {monthNames.map((name, idx) => (
+                      <option key={idx} value={idx + 1}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Ano */}
+                  <select
+                    id="header-year-select"
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-800 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
+                    title="Selecione o Ano"
+                  >
+                    <option value={2025}>2025</option>
+                    <option value={2026}>2026</option>
+                    <option value={2027}>2027</option>
+                  </select>
+                </div>
               </div>
               <p className="text-[10px] text-slate-400 font-medium truncate hidden md:block">
                 {page.subtitle}

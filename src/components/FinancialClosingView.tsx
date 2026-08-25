@@ -163,12 +163,116 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     );
   };
 
-  const totalFaturamentoPorto = currentClosing?.totalFaturamentoPorto || 0;
-  const totalTechnicianGross = currentClosing?.totalTechnicianGross || 0;
-  const totalAdvancesDeducted = currentClosing?.totalAdvancesDeducted || 0;
-  const totalTaxesDeducted = currentClosing?.totalTaxesDeducted || 0;
-  const companyProfitMargin = currentClosing?.companyProfitMargin || 0;
-  const totalNetPayout = currentClosing?.totalNetPayout || 0;
+  // Cálculos financeiros dinâmicos e reativos para os KPI Cards
+  const dynamicFinancialMetrics = useMemo(() => {
+    // 1. Ordens concluídas no período de referência (Mês, Ano e Quinzena)
+    const periodCompletedOrders = safeOrders.filter(
+      (os) =>
+        os &&
+        os.status === 'COMPLETED' &&
+        isOrderInPeriod(os, {
+          referenceYear: selectedYear,
+          referenceMonth: selectedMonth,
+          periodNumber: selectedPeriod,
+        })
+    );
+
+    // Se o usuário selecionou um técnico específico no filtro do DataGrid
+    const isFilteredByTech = filterTechnicianId !== 'ALL';
+
+    const kpiOrders = isFilteredByTech
+      ? periodCompletedOrders.filter((os) => os.technicianId === filterTechnicianId)
+      : periodCompletedOrders;
+
+    // Faturamento Porto
+    const totalFaturamentoPorto = kpiOrders.reduce((sum, os) => sum + (os.faturamentoPorto || 0), 0);
+
+    // Soma das ordens de serviço (Base + KM + Pedágio + Suporte)
+    const totalOrdersAmount = kpiOrders.reduce((acc, os) => {
+      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+      return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+    }, 0);
+
+    let totalCostAllowances = 0;
+    let totalAdvances = 0;
+    let totalTaxes = 0;
+
+    if (isFilteredByTech) {
+      const tech = safeUsers.find((u) => u.id === filterTechnicianId);
+      const allowance =
+        tech?.baseCostAllowance !== undefined && tech?.baseCostAllowance !== null
+          ? Number(tech.baseCostAllowance)
+          : (tech?.role === 'TECHNICIAN' ? 250 : 0);
+
+      totalCostAllowances = allowance;
+
+      // Vales do técnico no período
+      const techAdvances = safeMovements.filter(
+        (m) =>
+          m &&
+          m.technicianId === filterTechnicianId &&
+          (m.type === 'ADVANCE_VALE' || m.type === 'EXPENSE_ADVANCE') &&
+          m.status === 'CONFIRMED'
+      );
+      totalAdvances = techAdvances.reduce((acc, m) => acc + (m.amount || 0), 0);
+
+      // Regra fiscal
+      const gross = totalOrdersAmount + totalCostAllowances;
+      if (tech?.hasSpecialTaxRule) {
+        const rate = tech.specialTaxRate || 16;
+        totalTaxes = Number((gross * (rate / 100)).toFixed(2));
+      }
+    } else {
+      // Identifica os técnicos únicos com ordens concluídas no período
+      const activeTechIds = new Set(periodCompletedOrders.map((os) => os.technicianId).filter(Boolean));
+
+      activeTechIds.forEach((techId) => {
+        const tech = safeUsers.find((u) => u.id === techId);
+        const allowance =
+          tech?.baseCostAllowance !== undefined && tech?.baseCostAllowance !== null
+            ? Number(tech.baseCostAllowance)
+            : (tech?.role === 'TECHNICIAN' ? 250 : 0);
+
+        totalCostAllowances += allowance;
+
+        // Vales
+        const techAdvances = safeMovements.filter(
+          (m) =>
+            m &&
+            m.technicianId === techId &&
+            (m.type === 'ADVANCE_VALE' || m.type === 'EXPENSE_ADVANCE') &&
+            m.status === 'CONFIRMED'
+        );
+        totalAdvances += techAdvances.reduce((acc, m) => acc + (m.amount || 0), 0);
+
+        // Impostos
+        if (tech?.hasSpecialTaxRule) {
+          const techOrders = periodCompletedOrders.filter((os) => os.technicianId === techId);
+          const techOrdersSum = techOrders.reduce((acc, os) => {
+            const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+            return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+          }, 0);
+          const techGross = techOrdersSum + allowance;
+          const rate = tech.specialTaxRate || 16;
+          totalTaxes += Number((techGross * (rate / 100)).toFixed(2));
+        }
+      });
+    }
+
+    const totalTechnicianGross = Number((totalOrdersAmount + totalCostAllowances).toFixed(2));
+    const totalDeductions = Number((totalAdvances + totalTaxes).toFixed(2));
+    const totalNetPayout = Math.max(0, Number((totalTechnicianGross - totalDeductions).toFixed(2)));
+
+    return {
+      totalFaturamentoPorto: Number(totalFaturamentoPorto.toFixed(2)),
+      totalTechnicianGross,
+      totalCostAllowances,
+      totalAdvancesDeducted: Number(totalAdvances.toFixed(2)),
+      totalTaxesDeducted: Number(totalTaxes.toFixed(2)),
+      totalNetPayout,
+    };
+  }, [safeOrders, safeUsers, safeMovements, selectedYear, selectedMonth, selectedPeriod, filterTechnicianId]);
+
   const technicianSummaries = currentClosing?.technicianSummaries || [];
 
   const paidOrdersCount = filteredOrders.filter((o) => o.paymentStatus === 'PAID').length;
@@ -189,7 +293,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Cálculo auditado: KM a R$ 0,50/km, pedágios 1:1, ajuda de custo R$ 250, vales e regra fiscal (16%).
+            Cálculo auditado: KM a R$ 0,50/km, pedágios 1:1, ajuda de custo parametrizada por técnico, vales e regra fiscal (16%).
           </p>
         </div>
 
@@ -267,8 +371,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             Faturamento Bruto Porto
           </p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-[#003366]">
-              R$ {totalFaturamentoPorto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            <span className="text-2xl font-black text-[#003366] font-mono">
+              R$ {dynamicFinancialMetrics.totalFaturamentoPorto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </span>
             <span className="text-xs text-green-600 font-semibold bg-green-50 px-1.5 py-0.5 rounded border border-green-100">
               Seguradora
@@ -282,11 +386,11 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             Repasses Técnicos (+ Ajuda Custo)
           </p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-slate-800">
-              R$ {totalTechnicianGross.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            <span className="text-2xl font-black text-slate-800 font-mono">
+              R$ {dynamicFinancialMetrics.totalTechnicianGross.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </span>
             <span className="text-xs text-slate-500 font-medium">
-              Base + KM + R$250
+              Base + KM + Ajuda de Custo
             </span>
           </div>
         </div>
@@ -297,8 +401,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             Deduções (Vales + Impostos)
           </p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-red-600">
-              -R$ {(totalAdvancesDeducted + totalTaxesDeducted).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            <span className="text-2xl font-black text-red-600 font-mono">
+              -R$ {(dynamicFinancialMetrics.totalAdvancesDeducted + dynamicFinancialMetrics.totalTaxesDeducted).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </span>
             <span className="text-[10px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-bold border border-red-100">
               Abatimentos
@@ -312,8 +416,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             Total Líquido a Transferir (PIX)
           </p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-emerald-600">
-              R$ {totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            <span className="text-2xl font-black text-emerald-600 font-mono">
+              R$ {dynamicFinancialMetrics.totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </span>
             <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
               Pronto PIX
@@ -617,7 +721,27 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 8. Tecnico */}
                         <td className="py-2.5 px-3 font-bold text-slate-900 border-r border-slate-100 whitespace-nowrap">
-                          {os.technicianName || 'Não Alocado'}
+                          <div className="flex items-center gap-1.5">
+                            <span>{os.technicianName || 'Não Alocado'}</span>
+                            {(() => {
+                              const techUser = safeUsers.find((u) => u.id === os.technicianId);
+                              const allowance =
+                                techUser?.baseCostAllowance !== undefined && techUser?.baseCostAllowance !== null
+                                  ? Number(techUser.baseCostAllowance)
+                                  : (techUser?.role === 'TECHNICIAN' ? 250 : null);
+                              if (allowance !== null && allowance !== undefined) {
+                                return (
+                                  <span
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    title={`Ajuda de Custo cadastrada no perfil: R$ ${allowance.toFixed(2)}`}
+                                  >
+                                    +R${allowance.toFixed(0)}
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
                         </td>
 
                         {/* 9. Status Mobile */}
@@ -828,7 +952,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                 Extrato Consolidado por Técnico Homologado
               </h2>
               <p className="text-[11px] text-slate-400">
-                Resumo matemático com base de cálculo, Ajuda de Custo (R$ 250), vales e deduções fiscais.
+                Resumo matemático com base de cálculo, Ajuda de Custo parametrizada por técnico, vales e deduções fiscais.
               </p>
             </div>
             <div className="text-xs text-slate-500 font-medium">
@@ -855,6 +979,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                 {technicianSummaries.map((summary) => {
                   const sumOfOrders =
                     summary.totalBaseFee + summary.totalKmCost + summary.totalTollCost + summary.totalSupportCost;
+                  const displayCostAllowance =
+                    summary.fixedCostAllowance !== undefined && summary.fixedCostAllowance !== null
+                      ? Number(summary.fixedCostAllowance)
+                      : 250.0;
 
                   return (
                     <tr key={summary.technicianId} className="hover:bg-slate-50/70 transition-colors">
@@ -880,7 +1008,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                       {/* Ajuda de Custo */}
                       <td className="py-3.5 px-4 text-slate-800 font-mono">
-                        +R$ {(summary.fixedCostAllowance || 250.0).toFixed(2)}
+                        +R$ {displayCostAllowance.toFixed(2)}
                       </td>
 
                       {/* Total Gross */}
@@ -953,7 +1081,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             <span>
               Total líquido a transferir via PIX aos técnicos:{' '}
               <strong className="text-[#003366] text-sm font-mono">
-                R$ {totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                R$ {dynamicFinancialMetrics.totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </strong>
             </span>
             <span className="text-slate-400 text-[11px]">

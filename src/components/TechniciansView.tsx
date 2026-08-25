@@ -795,15 +795,19 @@ export const TechniciansView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Ajuda de Custo (R$)
+                    Ajuda de Custo / Fixo (R$)
                   </label>
                   <input
+                    id="tech-create-cost-allowance"
                     type="number"
+                    min="0"
+                    step="10"
                     value={newFormData.baseCostAllowance}
                     onChange={(e) => setNewFormData({ ...newFormData, baseCostAllowance: Number(e.target.value) })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                    placeholder="Ex: 250, 100 ou 0"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
                   />
-                  <span className="text-[10px] text-slate-400">Padrão: R$ 250,00</span>
+                  <span className="text-[10px] text-slate-400">Padrão: R$ 250,00 (customizável: R$ 100, R$ 0)</span>
                 </div>
 
                 <div className="sm:col-span-2 flex items-center space-x-4 pt-4">
@@ -1017,14 +1021,19 @@ export const TechniciansView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Ajuda de Custo (R$)
+                    Ajuda de Custo / Fixo (R$)
                   </label>
                   <input
+                    id="tech-edit-cost-allowance"
                     type="number"
+                    min="0"
+                    step="10"
                     value={editFormData.baseCostAllowance}
                     onChange={(e) => setEditFormData({ ...editFormData, baseCostAllowance: Number(e.target.value) })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                    placeholder="Ex: 250, 100 ou 0"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
                   />
+                  <span className="text-[10px] text-slate-400">Defina R$ 250, R$ 100 ou R$ 0</span>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">

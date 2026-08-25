@@ -9,7 +9,6 @@ import {
   DollarSign,
   Sliders,
   ShieldCheck,
-  UserCheck,
   X,
   PanelLeftClose,
   PanelLeftOpen,
@@ -25,13 +24,29 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
+interface NavItem {
+  id: string;
+  label: string;
+  icon: React.ElementType;
+  badge?: string | number | null;
+  badgeColor?: string;
+  roles: string[];
+}
+
+interface NavGroup {
+  id: string;
+  title: string;
+  adminOnly?: boolean;
+  items: NavItem[];
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
   isOpen = false,
   onClose,
 }) => {
-  const { currentUser, isMasterAdmin, isOperational, isTechnician, orders = [], stock = [] } = useApp();
+  const { currentUser, isTechnician, orders = [], stock = [] } = useApp();
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
 
   const safeOrders = orders || [];
@@ -45,87 +60,116 @@ export const Sidebar: React.FC<SidebarProps> = ({
     (s) => s && s.quantityInStock <= s.minimumThreshold
   ).length;
 
-  const allNavItems = [
+  const userRole = safeUser.role || 'TECHNICIAN';
+  const isAdmin = userRole === 'ADMIN';
+
+  // Grupos organizados por Arquitetura de Informação e UX Writing
+  const navGroups: NavGroup[] = [
     {
-      id: 'dashboard',
-      label: 'Dashboard',
-      icon: LayoutDashboard,
-      badge: null,
-      roles: ['ADMIN', 'OPERATIONAL'],
+      id: 'operacao',
+      title: 'OPERAÇÃO',
+      items: [
+        {
+          id: 'dashboard',
+          label: 'Painel',
+          icon: LayoutDashboard,
+          badge: null,
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+        {
+          id: 'orders',
+          label: isTechnician ? 'Meus Chamados (OS)' : 'Chamados (OS)',
+          icon: ClipboardList,
+          badge: pendingOrdersCount > 0 ? pendingOrdersCount : null,
+          badgeColor: 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30',
+          roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
+        },
+        {
+          id: 'technicians',
+          label: 'Equipe',
+          icon: Users,
+          badge: null,
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+        {
+          id: 'stock',
+          label: 'Estoque',
+          icon: PackageCheck,
+          badge: lowStockCount > 0 ? `${lowStockCount} alertas` : null,
+          badgeColor: 'bg-red-500/20 text-red-200 border border-red-400/30',
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+        {
+          id: 'mobile_app',
+          label: 'App Mobile Técnico',
+          icon: Smartphone,
+          badge: isTechnician ? 'Principal' : 'Simulador',
+          badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
+          roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
+        },
+      ],
     },
     {
-      id: 'orders',
-      label: isTechnician ? 'Minhas Ordens de Serviço' : 'Ordens de Serviço',
-      icon: ClipboardList,
-      badge: pendingOrdersCount > 0 ? pendingOrdersCount : null,
-      badgeColor: 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30',
-      roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
+      id: 'financeiro',
+      title: 'FINANCEIRO',
+      items: [
+        {
+          id: 'finance',
+          label: 'Fechamentos',
+          icon: FileSpreadsheet,
+          badge: 'Auditado',
+          badgeColor: 'bg-cyan-400/20 text-cyan-200 border border-cyan-300/30',
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+        {
+          id: 'cashflow',
+          label: 'Caixa e Vales',
+          icon: DollarSign,
+          badge: null,
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+      ],
     },
     {
-      id: 'mobile_app',
-      label: 'App Mobile Técnico',
-      icon: Smartphone,
-      badge: isTechnician ? 'Principal' : 'Simulador',
-      badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
-      roles: ['ADMIN', 'OPERATIONAL', 'TECHNICIAN'],
-    },
-    {
-      id: 'technicians',
-      label: 'Técnicos & PIX',
-      icon: Users,
-      badge: null,
-      roles: ['ADMIN', 'OPERATIONAL'],
-    },
-    {
-      id: 'stock',
-      label: 'Estoque & Insumos',
-      icon: PackageCheck,
-      badge: lowStockCount > 0 ? `${lowStockCount} alertas` : null,
-      badgeColor: 'bg-red-500/20 text-red-200 border border-red-400/30',
-      roles: ['ADMIN', 'OPERATIONAL'],
-    },
-    {
-      id: 'finance',
-      label: 'Financeiro Quinzenal',
-      icon: FileSpreadsheet,
-      badge: 'Auditado',
-      badgeColor: 'bg-cyan-400/20 text-cyan-200 border border-cyan-300/30',
-      roles: ['ADMIN', 'OPERATIONAL'],
-    },
-    {
-      id: 'cashflow',
-      label: 'Fluxo de Caixa & Vales',
-      icon: DollarSign,
-      badge: null,
-      roles: ['ADMIN', 'OPERATIONAL'],
-    },
-    {
-      id: 'import_orders',
-      label: 'Importação de Dados',
-      icon: UploadCloud,
-      badge: 'Porto .xlsx',
-      badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
-      roles: ['ADMIN'],
-    },
-    {
-      id: 'audit',
-      label: 'Trilha de Auditoria',
-      icon: ShieldCheck,
-      badge: 'RBAC',
-      badgeColor: 'bg-indigo-500/20 text-indigo-200 border border-indigo-400/30',
-      roles: ['ADMIN', 'OPERATIONAL'],
-    },
-    {
-      id: 'settings',
-      label: 'Configurações',
-      icon: Sliders,
-      badge: null,
-      roles: ['ADMIN'],
+      id: 'administracao',
+      title: 'ADMINISTRAÇÃO',
+      adminOnly: true,
+      items: [
+        {
+          id: 'import_orders',
+          label: 'Importar Planilhas',
+          icon: UploadCloud,
+          badge: 'Porto .xlsx',
+          badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
+          roles: ['ADMIN'],
+        },
+        {
+          id: 'audit',
+          label: 'Histórico de Ações',
+          icon: ShieldCheck,
+          badge: 'RBAC',
+          badgeColor: 'bg-indigo-500/20 text-indigo-200 border border-indigo-400/30',
+          roles: ['ADMIN'],
+        },
+        {
+          id: 'settings',
+          label: 'Configurações',
+          icon: Sliders,
+          badge: null,
+          roles: ['ADMIN'],
+        },
+      ],
     },
   ];
 
-  const userRole = safeUser.role || 'TECHNICIAN';
-  const navItems = allNavItems.filter((item) => item.roles.includes(userRole));
+  // Filtra os grupos e itens de acordo com as permissões do usuário
+  const visibleGroups = navGroups
+    .filter((group) => !group.adminOnly || isAdmin)
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.roles.includes(userRole)),
+    }))
+    .filter((group) => group.items.length > 0);
 
   const handleSelectTab = (tabId: string) => {
     setActiveTab(tabId);
@@ -204,62 +248,70 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* Navigation Links */}
-      <nav className={`mt-3 flex-1 ${collapsed ? 'px-2' : 'px-3'} space-y-1.5 overflow-y-auto`}>
-        {!collapsed && (
-          <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-200/50">
-            Navegação Principal
-          </div>
-        )}
-
-        {navItems.map((item) => {
-          const isActive = activeTab === item.id;
-          const Icon = item.icon;
-
-          return (
-            <button
-              id={`sidebar-nav-${item.id}`}
-              key={item.id}
-              onClick={() => handleSelectTab(item.id)}
-              title={collapsed ? item.label : undefined}
-              className={`w-full flex items-center ${
-                collapsed ? 'justify-center p-3' : 'justify-between px-3.5 py-2.5'
-              } rounded-lg text-xs font-semibold transition-all cursor-pointer relative group ${
-                isActive
-                  ? collapsed
-                    ? 'bg-white/20 text-white shadow-sm border-l-4 border-cyan-400 font-bold'
-                    : 'bg-white/20 text-white shadow-sm border-l-4 border-cyan-400 pl-2.5 font-bold'
-                  : 'text-slate-200 hover:text-white hover:bg-white/10 hover:translate-x-0.5'
-              }`}
-            >
-              <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'}`}>
-                <Icon
-                  className={`w-4 h-4 shrink-0 transition-colors ${
-                    isActive ? 'text-cyan-300' : 'text-slate-300 group-hover:text-white'
-                  }`}
-                />
-                {!collapsed && <span className="truncate text-xs">{item.label}</span>}
+      {/* Navigation Links agrupados por contexto */}
+      <nav className={`mt-2 flex-1 ${collapsed ? 'px-2' : 'px-3'} space-y-3 overflow-y-auto`}>
+        {visibleGroups.map((group, groupIdx) => (
+          <div key={group.id} className="space-y-1">
+            {/* Header de Grupo Visual */}
+            {!collapsed ? (
+              <div className="pt-2 pb-1 px-3 text-[10px] font-extrabold uppercase tracking-wider text-cyan-200/50 select-none">
+                {group.title}
               </div>
+            ) : (
+              groupIdx > 0 && <div className="border-t border-white/10 my-2 mx-1.5" />
+            )}
 
-              {!collapsed && item.badge && (
-                <span
-                  className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 ${
+            {/* Itens do Grupo */}
+            {group.items.map((item) => {
+              const isActive = activeTab === item.id;
+              const Icon = item.icon;
+
+              return (
+                <button
+                  id={`sidebar-nav-${item.id}`}
+                  key={item.id}
+                  onClick={() => handleSelectTab(item.id)}
+                  title={collapsed ? `${group.title} - ${item.label}` : undefined}
+                  className={`w-full flex items-center ${
+                    collapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                  } rounded-lg text-xs font-semibold transition-all cursor-pointer relative group ${
                     isActive
-                      ? 'bg-cyan-500 text-white'
-                      : item.badgeColor || 'bg-white/10 text-cyan-200'
+                      ? collapsed
+                        ? 'bg-white/20 text-white shadow-sm border-l-4 border-cyan-400 font-bold'
+                        : 'bg-white/20 text-white shadow-sm border-l-4 border-cyan-400 pl-2.5 font-bold'
+                      : 'text-slate-200 hover:text-white hover:bg-white/10 hover:translate-x-0.5'
                   }`}
                 >
-                  {item.badge}
-                </span>
-              )}
+                  <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-2.5'}`}>
+                    <Icon
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isActive ? 'text-cyan-300' : 'text-slate-300 group-hover:text-white'
+                      }`}
+                    />
+                    {!collapsed && <span className="truncate text-xs">{item.label}</span>}
+                  </div>
 
-              {/* Notification dot indicator when collapsed */}
-              {collapsed && item.badge && (
-                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-cyan-400"></span>
-              )}
-            </button>
-          );
-        })}
+                  {!collapsed && item.badge && (
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 ${
+                        isActive
+                          ? 'bg-cyan-500 text-white'
+                          : item.badgeColor || 'bg-white/10 text-cyan-200'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+
+                  {/* Notification dot indicator when collapsed */}
+                  {collapsed && item.badge && (
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-cyan-400"></span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Porto SLA High Density Widget */}
@@ -336,3 +388,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </>
   );
 };
+
