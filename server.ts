@@ -1650,8 +1650,30 @@ async function startServer() {
 
         // 2. Mapeamento das colunas
         const origemRaw = getField(row, ['Origem', 'Orig', 'Source', 'Protocolo']);
-        const tecnicoNomeRaw = row['Tecnico'] || row['Técnico'] || row['Prestador'] || row['Técnico Responsável'] || row['Tecnico Responsavel'] || getField(row, ['Tecnico', 'Técnico', 'Prestador', 'Técnico Responsável', 'Tecnico Responsavel', 'Nome Tecnico', 'Nome do Tecnico']) || '';
-        const techName = String(tecnicoNomeRaw).trim();
+        
+        // Busca flexível e case-insensitive para encontrar a coluna/chave do técnico na linha
+        let rawTechName = '';
+        const rowKeys = Object.keys(row);
+        for (const k of rowKeys) {
+          const normKey = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          if (
+            normKey.includes('tec') ||
+            normKey.includes('prestador') ||
+            normKey.includes('executant') ||
+            normKey.includes('colaborador') ||
+            normKey.includes('responsavel') ||
+            normKey.includes('funcionario')
+          ) {
+            if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
+              rawTechName = String(row[k]).trim();
+              break;
+            }
+          }
+        }
+        if (!rawTechName) {
+          rawTechName = String(row['Tecnico'] || row['Técnico'] || row['Prestador'] || row['Técnico Responsável'] || row['Tecnico Responsavel'] || getField(row, ['Tecnico', 'Técnico', 'Prestador', 'Técnico Responsável', 'Tecnico Responsavel', 'Nome Tecnico', 'Nome do Tecnico', 'Nome_Tecnico']) || '').trim();
+        }
+        const techName = rawTechName;
 
         // Sanitization: Ignora linhas vazias ou com palavras de totais
         if (shouldIgnoreRow(origemRaw, techName)) {
@@ -1672,18 +1694,24 @@ async function startServer() {
         let existingUser: any = null;
 
         if (cleanTechNameNorm) {
-          // Busca em cache / memória
+          // Busca em cache / memória por nome ou email
           existingUser = currentUsersList.find((u: any) => {
             const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            return uNameNorm === cleanTechNameNorm || uNameNorm.includes(cleanTechNameNorm) || cleanTechNameNorm.includes(uNameNorm);
+            const uEmailNorm = (u.email || '').trim().toLowerCase();
+            return (
+              uNameNorm === cleanTechNameNorm ||
+              (uNameNorm && cleanTechNameNorm && (uNameNorm.includes(cleanTechNameNorm) || cleanTechNameNorm.includes(uNameNorm))) ||
+              uEmailNorm === cleanTechNameNorm ||
+              uEmailNorm.startsWith(cleanTechNameNorm)
+            );
           });
 
-          // Busca no banco caso não tenha sido carregado em cache
+          // Busca no banco caso não tenha sido encontrado em cache
           if (!existingUser) {
             try {
               const [dbUserRows]: any = await db.query(
-                'SELECT * FROM users WHERE TRIM(LOWER(name)) = LOWER(?) OR name LIKE ? LIMIT 1',
-                [techName, `%${techName}%`]
+                'SELECT * FROM users WHERE TRIM(LOWER(name)) = LOWER(?) OR name LIKE ? OR TRIM(LOWER(email)) = LOWER(?) LIMIT 1',
+                [techName, `%${techName}%`, techName]
               );
               if (dbUserRows && dbUserRows.length > 0) {
                 existingUser = dbUserRows[0];
@@ -1697,10 +1725,10 @@ async function startServer() {
 
         let technicianId: string;
 
-        if (existingUser) {
-          technicianId = existingUser.id;
-        } else {
-          // Criar novo técnico dinamicamente se não existir
+        if (existingUser && existingUser.id) {
+          technicianId = String(existingUser.id);
+        } else if (cleanTechNameNorm) {
+          // Criar novo técnico dinamicamente se houver nome válido
           technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
           const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
           let finalEmail = `${slug}@ohigienizador.com.br`;
@@ -1751,6 +1779,10 @@ async function startServer() {
 
           techniciansCreatedCount++;
           createdTechniciansList.push({ id: newTech.id, name: newTech.name, email: newTech.email });
+        } else {
+          // Se não houver nome na linha, vincula ao primeiro técnico ativo do sistema
+          const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN');
+          technicianId = defaultTech ? String(defaultTech.id) : 'tech-1';
         }
 
         // 4. Lógica Financeira e Mapeamento da Ordem
@@ -1847,6 +1879,8 @@ async function startServer() {
         }
 
         // 6. Inserção no MariaDB com INSERT ... ON DUPLICATE KEY UPDATE
+        console.log("[DEBUG IMPORT] Técnico Lido:", rawTechName, "-> ID Resolvido:", technicianId);
+
         try {
           const insertOrderQuery = `
             INSERT INTO \`service_orders\` (
