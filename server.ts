@@ -1649,16 +1649,16 @@ async function startServer() {
         const row = rawRows[idx];
 
         // 2. Mapeamento das colunas
-        const origemRaw = getField(row, ['Origem', 'Orig', 'Source']);
-        const tecnicoRaw = getField(row, ['Tecnico', 'Técnico', 'Nome Tecnico', 'Nome do Tecnico', 'Prestador']);
+        const origemRaw = getField(row, ['Origem', 'Orig', 'Source', 'Protocolo']);
+        const tecnicoNomeRaw = row['Tecnico'] || row['Técnico'] || row['Prestador'] || row['Técnico Responsável'] || row['Tecnico Responsavel'] || getField(row, ['Tecnico', 'Técnico', 'Prestador', 'Técnico Responsável', 'Tecnico Responsavel', 'Nome Tecnico', 'Nome do Tecnico']) || '';
+        const techName = String(tecnicoNomeRaw).trim();
 
         // Sanitization: Ignora linhas vazias ou com palavras de totais
-        if (shouldIgnoreRow(origemRaw, tecnicoRaw)) {
+        if (shouldIgnoreRow(origemRaw, techName)) {
           ignoredRowsCount++;
           continue;
         }
 
-        const techName = String(tecnicoRaw).trim();
         const callNumberRaw = getField(row, ['IdChamado', 'Id Chamado', 'ID Chamado', 'Chamado', 'OS', 'Numero Chamado', 'Id_Chamado']) || `PS-IMP-${Date.now()}-${idx + 1}`;
         const dtVisitaRaw = getField(row, ['Dt.Visita', 'Dt Visita', 'Data Visita', 'Data', 'Dt_Visita', 'Data_Visita', 'Dt. Visita']);
         const tipoVisitaRaw = getField(row, ['Tipo Visita', 'Tipo de Visita', 'Tipo_Visita', 'Serviço', 'Servico', 'Categoria']) || 'Higienização de Estofados Porto Seguro';
@@ -1667,19 +1667,40 @@ async function startServer() {
         const pedagioRaw = getField(row, ['PEDAGIO', 'Pedagio', 'Pedágio', 'Valor Pedagio', 'Vl Pedagio']);
         const valorDaVistaRaw = getField(row, ['VALOR DA VISTA', 'Valor da Visita', 'Valor da Vista', 'Valor Visita', 'Valor', 'Vl Visita', 'Base Fee']);
 
-        // 3. Lógica de Criação Automática do Técnico (CRÍTICO)
-        const cleanTechNameNorm = techName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        let existingUser = currentUsersList.find((u: any) => {
-          const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          return uNameNorm === cleanTechNameNorm;
-        });
+        // 3. Lógica de Busca / Criação Automática do Técnico
+        const cleanTechNameNorm = techName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        let existingUser: any = null;
+
+        if (cleanTechNameNorm) {
+          // Busca em cache / memória
+          existingUser = currentUsersList.find((u: any) => {
+            const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            return uNameNorm === cleanTechNameNorm || uNameNorm.includes(cleanTechNameNorm) || cleanTechNameNorm.includes(uNameNorm);
+          });
+
+          // Busca no banco caso não tenha sido carregado em cache
+          if (!existingUser) {
+            try {
+              const [dbUserRows]: any = await db.query(
+                'SELECT * FROM users WHERE TRIM(LOWER(name)) = LOWER(?) OR name LIKE ? LIMIT 1',
+                [techName, `%${techName}%`]
+              );
+              if (dbUserRows && dbUserRows.length > 0) {
+                existingUser = dbUserRows[0];
+                currentUsersList.push(existingUser);
+              }
+            } catch (err) {
+              console.warn('[Import] Falha ao consultar técnico por nome no banco:', err);
+            }
+          }
+        }
 
         let technicianId: string;
 
         if (existingUser) {
           technicianId = existingUser.id;
         } else {
-          // Criar novo técnico dinamicamente
+          // Criar novo técnico dinamicamente se não existir
           technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
           const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
           let finalEmail = `${slug}@ohigienizador.com.br`;
@@ -1691,7 +1712,7 @@ async function startServer() {
 
           const newTech = {
             id: technicianId,
-            name: techName,
+            name: techName || 'Técnico Não Identificado',
             email: finalEmail,
             passwordHash: 'Porto@2026',
             role: 'TECHNICIAN',
