@@ -339,6 +339,40 @@ export const ApiService = {
     }
   },
 
+  async batchReassignTechnician(orderIds: string[], technicianId: string): Promise<{ success: boolean; count?: number; error?: string }> {
+    try {
+      const res = await fetch('/api/orders/batch-reassign', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ orderIds, technicianId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || `HTTP ${res.status}` };
+      }
+      return { success: Boolean(json.success), count: json.count, error: json.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async autoRepairOrders(technicianId?: string): Promise<{ success: boolean; count?: number; message?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/orders/auto-repair', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ technicianId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || `HTTP ${res.status}` };
+      }
+      return { success: Boolean(json.success), count: json.count, message: json.message, error: json.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
   // ==========================================
   // STOCK ITEMS
   // ==========================================

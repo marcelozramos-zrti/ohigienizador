@@ -117,6 +117,9 @@ interface AppContextType {
   exportOrdersCsv: () => void;
   exportCashFlowCsv: () => void;
   reloadAllData: () => Promise<void>;
+  reassignOrderTechnician: (orderId: string, technicianId: string) => Promise<void>;
+  batchReassignTechnician: (orderIds: string[], technicianId: string) => Promise<void>;
+  autoRepairOrders: (technicianId?: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -176,16 +179,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Filter out any obsolete legacy mock user IDs that start with tech- or user-
-          const validUsers = parsed.filter(
-            (u: User) => u.id && !u.id.startsWith('tech-') && !u.id.startsWith('user-')
-          );
+          const validUsers = parsed.filter((u: User) => u && u.id && u.name);
           if (validUsers.length > 0) {
+            const existingIds = new Set(validUsers.map((u: User) => u.id));
             const existingEmails = new Set(
               validUsers.map((u: User) => (u.email ? u.email.trim().toLowerCase() : ''))
             );
             const missingInitials = INITIAL_USERS.filter(
-              (u) => !existingEmails.has(u.email.trim().toLowerCase())
+              (u) => !existingIds.has(u.id) && !existingEmails.has(u.email.trim().toLowerCase())
             );
             return [...validUsers, ...missingInitials];
           }
@@ -1237,12 +1238,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ApiService.fetchStock(),
         ApiService.fetchMovements(),
       ]);
+      const safeUsersList = (dbUsers && dbUsers.length > 0) ? dbUsers : users;
       if (dbUsers && dbUsers.length > 0) setUsers(dbUsers);
-      if (dbOrders && dbOrders.length > 0) setOrders(dbOrders);
+
+      if (dbOrders && dbOrders.length > 0) {
+        const normalizedOrders = dbOrders.map((os) => {
+          let techName = os.technicianName;
+          let techId = os.technicianId;
+          if (techId && !techName) {
+            const matched = safeUsersList.find((u) => u.id === techId);
+            if (matched) techName = matched.name;
+          }
+          if (techName && !techId) {
+            const matched = safeUsersList.find((u) => u.name.toLowerCase() === techName?.toLowerCase());
+            if (matched) techId = matched.id;
+          }
+          return {
+            ...os,
+            technicianId: techId,
+            technicianName: techName,
+          };
+        });
+        setOrders(normalizedOrders);
+      }
       if (dbStock && dbStock.length > 0) setStock(dbStock);
       if (dbMovements && dbMovements.length > 0) setMovements(dbMovements);
     } catch (err) {
       console.warn('Erro ao recarregar dados do MariaDB:', err);
+    }
+  };
+
+  const reassignOrderTechnician = async (orderId: string, technicianId: string) => {
+    const tech = users.find((u) => u.id === technicianId) || INITIAL_USERS.find((u) => u.id === technicianId);
+    const techName = tech ? tech.name : 'Técnico';
+
+    setOrders((prev) =>
+      prev.map((os) => {
+        if (os.id === orderId) {
+          return {
+            ...os,
+            technicianId,
+            technicianName: techName,
+            status: os.status === 'PENDING' ? 'IN_PROGRESS' : os.status,
+          };
+        }
+        return os;
+      })
+    );
+
+    try {
+      await ApiService.updateOrder(orderId, {
+        technicianId,
+        technicianName: techName,
+      });
+      addToast(
+        'Técnico Vinculado',
+        `A OS foi atribuída com sucesso a ${techName}.`,
+        'success'
+      );
+    } catch {}
+  };
+
+  const batchReassignTechnician = async (orderIds: string[], technicianId: string) => {
+    if (!orderIds || orderIds.length === 0) return;
+    const tech = users.find((u) => u.id === technicianId) || INITIAL_USERS.find((u) => u.id === technicianId);
+    const techName = tech ? tech.name : 'Técnico';
+
+    setOrders((prev) =>
+      prev.map((os) => {
+        if (orderIds.includes(os.id)) {
+          return {
+            ...os,
+            technicianId,
+            technicianName: techName,
+            status: os.status === 'PENDING' ? 'IN_PROGRESS' : os.status,
+          };
+        }
+        return os;
+      })
+    );
+
+    try {
+      await ApiService.batchReassignTechnician(orderIds, technicianId);
+      addToast(
+        'Atribuição em Massa Concluída',
+        `${orderIds.length} ordens de serviço foram atribuídas a ${techName}.`,
+        'success'
+      );
+    } catch {}
+  };
+
+  const autoRepairOrders = async (targetTechnicianId?: string) => {
+    try {
+      const res = await ApiService.autoRepairOrders(targetTechnicianId);
+      await reloadAllData();
+      addToast(
+        'Auto-Vínculo Concluído',
+        res.message || 'Ordens não alocadas foram reparadas com sucesso.',
+        'success'
+      );
+    } catch (err: any) {
+      addToast('Erro no Auto-Vínculo', err.message || 'Falha ao vincular ordens.', 'error');
     }
   };
 
@@ -1309,6 +1405,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         exportOrdersCsv,
         exportCashFlowCsv,
         reloadAllData,
+        reassignOrderTechnician,
+        batchReassignTechnician,
+        autoRepairOrders,
       }}
     >
       {children}

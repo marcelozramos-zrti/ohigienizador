@@ -51,6 +51,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     generatePdfForTechnician,
     dispatchWhatsAppStatement,
     settleOrderPayment,
+    reassignOrderTechnician,
+    batchReassignTechnician,
+    autoRepairOrders,
+    reloadAllData,
     orders = [],
     users = [],
     movements = [],
@@ -60,6 +64,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'datagrid' | 'technicians' | 'summary'>('datagrid');
   const [selectedTechForWhatsApp, setSelectedTechForWhatsApp] = useState<TechnicianClosingSummary | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [batchTargetTechId, setBatchTargetTechId] = useState<string>('');
+  const [isBatchAssigning, setIsBatchAssigning] = useState<boolean>(false);
 
   // Filters state (Query Panel)
   const [filterTechnicianId, setFilterTechnicianId] = useState<string>('ALL');
@@ -79,6 +85,25 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
   const techniciansList = useMemo(() => {
     return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
   }, [safeUsers]);
+
+  // Unallocated Orders in the selected period
+  const unallocatedOrdersInPeriod = useMemo(() => {
+    return safeOrders.filter((os) => {
+      if (!os) return false;
+      if (
+        !isOrderInPeriod(os, {
+          referenceYear: selectedYear,
+          referenceMonth: selectedMonth,
+          periodNumber: selectedPeriod,
+        })
+      ) {
+        return false;
+      }
+      const matched = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+      const displayName = matched?.name || os.technicianName;
+      return !displayName || displayName === 'Não Alocado' || !os.technicianId || os.technicianId === 'tech-1';
+    });
+  }, [safeOrders, selectedYear, selectedMonth, selectedPeriod, safeUsers]);
 
   // Filtered Orders for the DataGrid (Visualização Operacional: Respeita o filtro de status selecionado no período)
   const filteredOrders = useMemo(() => {
@@ -102,7 +127,13 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
       }
 
       // 3. Filter by Technician
-      if (filterTechnicianId !== 'ALL' && os.technicianId !== filterTechnicianId) {
+      if (filterTechnicianId === 'UNASSIGNED') {
+        const matched = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+        const displayName = matched?.name || os.technicianName;
+        if (displayName && displayName !== 'Não Alocado' && os.technicianId && os.technicianId !== 'tech-1') {
+          return false;
+        }
+      } else if (filterTechnicianId !== 'ALL' && os.technicianId !== filterTechnicianId) {
         return false;
       }
 
@@ -476,6 +507,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
                   >
                     <option value="ALL">Todos os Técnicos</option>
+                    <option value="UNASSIGNED">⚠️ Ordens Não Alocadas ({unallocatedOrdersInPeriod.length})</option>
                     {techniciansList.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name} {t.hasSpecialTaxRule ? '(Regra 16% Impostos)' : ''}
@@ -606,6 +638,70 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             </div>
           </div>
 
+          {/* Banner de Ação Rápida para Ordens Não Alocadas */}
+          {unallocatedOrdersInPeriod.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 font-bold text-sm">
+                  ⚠️
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-amber-950">
+                    Atenção: Existem {unallocatedOrdersInPeriod.length} Ordem(ns) de Serviço Não Alocadas neste período
+                  </h4>
+                  <p className="text-[11px] text-amber-800">
+                    Ordens sem técnico vinculado não entram nos extratos individuais nem nos repasses quinzenais. Vincule-as abaixo:
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={batchTargetTechId}
+                  onChange={(e) => setBatchTargetTechId(e.target.value)}
+                  className="p-1.5 bg-white border border-amber-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                >
+                  <option value="">Selecione o Técnico Destino...</option>
+                  {techniciansList.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  disabled={!batchTargetTechId || isBatchAssigning}
+                  onClick={async () => {
+                    if (!batchTargetTechId) return;
+                    try {
+                      setIsBatchAssigning(true);
+                      const idsToAssign = unallocatedOrdersInPeriod.map((o) => o.id);
+                      await batchReassignTechnician(idsToAssign, batchTargetTechId);
+                    } finally {
+                      setIsBatchAssigning(false);
+                      setBatchTargetTechId('');
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isBatchAssigning ? 'Vinculando...' : `Atribuir Todas as ${unallocatedOrdersInPeriod.length} OSs`}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await autoRepairOrders();
+                  }}
+                  className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  title="Detecta e vincula automaticamente ordens órfãs ao técnico principal"
+                >
+                  Auto-Vincular
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* DataGrid Table with Complete Columns & Quitação Controls */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="p-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
@@ -682,6 +778,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     const isPaid = os.paymentStatus === 'PAID';
                     const isLoading = actionLoadingId === os.id;
 
+                    const matchedTech = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+                    const displayName = matchedTech?.name || os.technicianName || null;
+                    const isUnallocated = !displayName || displayName === 'Não Alocado';
+
                     return (
                       <tr
                         key={os.id || idx}
@@ -736,28 +836,51 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                           </span>
                         </td>
 
-                        {/* 8. Tecnico */}
+                        {/* 8. Tecnico (Smart Direct Selector & Badge) */}
                         <td className="py-2.5 px-3 font-bold text-slate-900 border-r border-slate-100 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
-                            <span>{os.technicianName || 'Não Alocado'}</span>
-                            {(() => {
-                              const techUser = safeUsers.find((u) => u.id === os.technicianId);
-                              const allowance =
-                                techUser?.baseCostAllowance !== undefined && techUser?.baseCostAllowance !== null
-                                  ? Number(techUser.baseCostAllowance)
-                                  : (techUser?.role === 'TECHNICIAN' ? 250 : null);
-                              if (allowance !== null && allowance !== undefined) {
-                                return (
-                                  <span
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                    title={`Ajuda de Custo cadastrada no perfil: R$ ${allowance.toFixed(2)}`}
-                                  >
-                                    +R${allowance.toFixed(0)}
-                                  </span>
-                                );
-                              }
-                              return null;
-                            })()}
+                            <select
+                              value={matchedTech?.id || os.technicianId || ''}
+                              onChange={async (e) => {
+                                const newTechId = e.target.value;
+                                if (newTechId) {
+                                  await reassignOrderTechnician(os.id, newTechId);
+                                }
+                              }}
+                              className={`text-[11px] font-bold py-1 px-2 rounded-lg border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
+                                isUnallocated
+                                  ? 'bg-amber-50 text-amber-900 border-amber-300 font-semibold ring-1 ring-amber-400/50'
+                                  : 'bg-slate-50 text-slate-900 border-slate-200 hover:bg-cyan-50 hover:border-cyan-300'
+                              }`}
+                              title="Clique para alterar ou vincular o técnico responsável desta OS"
+                            >
+                              {isUnallocated && <option value="">⚠️ Não Alocado (Selecione)</option>}
+                              {techniciansList.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}
+                                </option>
+                              ))}
+                            </select>
+
+                            {matchedTech && (
+                              (() => {
+                                const allowance =
+                                  matchedTech.baseCostAllowance !== undefined && matchedTech.baseCostAllowance !== null
+                                    ? Number(matchedTech.baseCostAllowance)
+                                    : (matchedTech.role === 'TECHNICIAN' ? 250 : null);
+                                if (allowance !== null && allowance !== undefined) {
+                                  return (
+                                    <span
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      title={`Ajuda de Custo cadastrada no perfil: R$ ${allowance.toFixed(2)}`}
+                                    >
+                                      +R${allowance.toFixed(0)}
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()
+                            )}
                           </div>
                         </td>
 

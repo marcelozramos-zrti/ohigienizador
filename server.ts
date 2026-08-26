@@ -1068,13 +1068,33 @@ async function startServer() {
       });
 
       const formatted = rows.map((o: any) => {
-        const rawTechId = o.technicianId || o.technician_id || null;
+        let rawTechId = o.technicianId || o.technician_id || null;
         let resolvedTechName = o.technicianName || o.technician_name || null;
 
-        // Se o LEFT JOIN não encontrar pelo ID, faz fallback na memória de usuários
-        if (!resolvedTechName && rawTechId) {
+        // Se o LEFT JOIN não encontrar pelo ID, faz fallback na memória/lista de usuários
+        if (rawTechId) {
           const userObj = memUsers.find((u) => u.id === rawTechId);
           if (userObj) {
+            resolvedTechName = userObj.name;
+          } else if (rawTechId === 'tech-1') {
+            // Re-mapeia ID legado tech-1 para o primeiro técnico ativo (Carlos Henrique Silva)
+            const firstTech = memUsers.find((u) => u.role === 'TECHNICIAN');
+            if (firstTech) {
+              rawTechId = firstTech.id;
+              resolvedTechName = firstTech.name;
+            }
+          }
+        }
+
+        // Se não tiver ID mas tiver nome gravado, busca o ID do usuário correspondente
+        if (!rawTechId && resolvedTechName) {
+          const cleanNameNorm = resolvedTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const userObj = memUsers.find((u) => {
+            const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            return uNameNorm === cleanNameNorm || (uNameNorm && cleanNameNorm && (uNameNorm.includes(cleanNameNorm) || cleanNameNorm.includes(uNameNorm)));
+          });
+          if (userObj) {
+            rawTechId = userObj.id;
             resolvedTechName = userObj.name;
           }
         }
@@ -1097,7 +1117,7 @@ async function startServer() {
           addressComplement: o.addressComplement || null,
           postalCode: o.postalCode || '',
           technicianId: rawTechId,
-          technicianName: resolvedTechName || (rawTechId ? 'Técnico' : null),
+          technicianName: resolvedTechName,
           status: o.status || 'PENDING',
           scheduledDate: o.scheduledDate || o.scheduled_date,
           startedAt: o.startedAt || o.started_at,
@@ -1495,6 +1515,135 @@ async function startServer() {
     }
   });
 
+  // Reatribuição em Massa de Técnico
+  app.post('/api/orders/batch-reassign', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Gestores e Administradores podem reatribuir técnicos.' });
+    }
+
+    const { orderIds, technicianId } = req.body || {};
+    if (!Array.isArray(orderIds) || orderIds.length === 0 || !technicianId) {
+      return res.status(400).json({ success: false, error: 'Lista de IDs de Ordens e ID do Técnico são obrigatórios.' });
+    }
+
+    // Localiza o usuário técnico
+    let targetTech = memUsers.find((u) => u.id === technicianId);
+    if (!targetTech) {
+      try {
+        const db = getDbPool();
+        const [rows]: any = await db.query('SELECT * FROM users WHERE id = ? LIMIT 1', [technicianId]);
+        if (rows && rows.length > 0) {
+          targetTech = rows[0];
+          memUsers.push(targetTech);
+        }
+      } catch {}
+    }
+
+    const techName = targetTech ? targetTech.name : 'Técnico';
+
+    // Atualiza na memória
+    let updatedCount = 0;
+    memOrders = memOrders.map((o) => {
+      if (orderIds.includes(o.id) || orderIds.includes(o.callNumber)) {
+        updatedCount++;
+        return {
+          ...o,
+          technicianId: technicianId,
+          technicianName: techName,
+        };
+      }
+      return o;
+    });
+
+    // Grava auditoria
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'SERVICE_ORDERS',
+      action: 'OS_TECHNICIAN_REASSIGN',
+      result: 'SUCCESS',
+      details: `Reatribuição em massa de ${orderIds.length} ordem(ns) para o técnico "${techName}" (ID: ${technicianId}) realizada por ${requester.name}.`,
+    });
+
+    try {
+      const db = getDbPool();
+      const placeholders = orderIds.map(() => '?').join(',');
+      await db.execute(
+        `UPDATE service_orders SET technician_id = ? WHERE id IN (${placeholders}) OR call_number IN (${placeholders})`,
+        [technicianId, ...orderIds, ...orderIds]
+      );
+      res.json({ success: true, count: updatedCount || orderIds.length, message: `${orderIds.length} ordens vinculadas a ${techName} com sucesso.` });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        return res.json({ success: true, count: updatedCount || orderIds.length, message: `${orderIds.length} ordens vinculadas na memória a ${techName}.` });
+      }
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Auto-reparo de Ordens de Serviço Órfãs / Não Alocadas
+  app.post('/api/orders/auto-repair', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Gestores e Administradores podem executar auto-reparo.' });
+    }
+
+    const { technicianId } = req.body || {};
+    let defaultTech = technicianId ? memUsers.find((u) => u.id === technicianId) : memUsers.find((u) => u.role === 'TECHNICIAN');
+    if (!defaultTech) defaultTech = memUsers[0];
+
+    const targetId = defaultTech ? defaultTech.id : 'u1';
+    const targetName = defaultTech ? defaultTech.name : 'Carlos Henrique Silva';
+
+    let repairedCount = 0;
+    const repairedIds: string[] = [];
+
+    memOrders = memOrders.map((o) => {
+      const isOrphan = !o.technicianId || o.technicianId === 'tech-1' || !o.technicianName || o.technicianName === 'Não Alocado' || o.technicianName === 'Técnico';
+      if (isOrphan) {
+        repairedCount++;
+        repairedIds.push(o.id);
+        return {
+          ...o,
+          technicianId: targetId,
+          technicianName: targetName,
+        };
+      }
+      return o;
+    });
+
+    if (repairedIds.length > 0) {
+      try {
+        const db = getDbPool();
+        const placeholders = repairedIds.map(() => '?').join(',');
+        await db.execute(
+          `UPDATE service_orders SET technician_id = ? WHERE id IN (${placeholders}) OR technician_id IS NULL OR technician_id = '' OR technician_id = 'tech-1'`,
+          [targetId, ...repairedIds]
+        );
+      } catch {}
+    }
+
+    await recordAudit({
+      userId: requester.id,
+      userName: requester.name,
+      userRole: requester.role,
+      ipAddress: req.ip,
+      module: 'SERVICE_ORDERS',
+      action: 'OS_UPDATE',
+      result: 'SUCCESS',
+      details: `Auto-reparo de integridade relacional: ${repairedCount} ordem(ns) vinculada(s) a "${targetName}".`,
+    });
+
+    res.json({
+      success: true,
+      count: repairedCount,
+      message: `${repairedCount} ordens de serviço foram vinculadas ao técnico ${targetName}.`,
+    });
+  });
+
   // =========================================================================
   // 5.1 MASS IMPORT OF PORTO SEGURO SERVICE ORDERS (.xlsx via multer & xlsx)
   // =========================================================================
@@ -1773,14 +1922,14 @@ async function startServer() {
 
         if (isGeneric) {
           // Se o nome for genérico (ex: "A HIGIENIZADORA", "O HIGIENIZADOR"), NUNCA cria usuário genérico.
-          // Prioriza o técnico contextual do arquivo ou o técnico padrão do sistema.
+          // Prioriza o técnico contextual do arquivo ou o técnico padrão do sistema (Carlos Henrique / Marcelo).
           if (fileContextTechnician && fileContextTechnician.id) {
             technicianId = String(fileContextTechnician.id);
             techName = fileContextTechnician.name;
           } else {
-            const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN');
-            technicianId = defaultTech ? String(defaultTech.id) : 'tech-1';
-            techName = defaultTech ? defaultTech.name : 'Técnico de Campo';
+            const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
+            technicianId = defaultTech ? String(defaultTech.id) : 'u1';
+            techName = defaultTech ? defaultTech.name : 'Carlos Henrique Silva';
           }
         } else {
           // Nome específico de técnico fornecido na linha da planilha
@@ -1878,11 +2027,13 @@ async function startServer() {
         }
 
         // Garantia absoluta de não-nulo
-        if (!technicianId) {
-          technicianId = fileContextTechnician ? String(fileContextTechnician.id) : 'tech-1';
+        if (!technicianId || technicianId === 'tech-1') {
+          const fallbackTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
+          technicianId = fileContextTechnician ? String(fileContextTechnician.id) : (fallbackTech ? String(fallbackTech.id) : 'u1');
         }
-        if (!techName) {
-          techName = fileContextTechnician ? fileContextTechnician.name : 'Técnico';
+        if (!techName || techName === 'Técnico') {
+          const fallbackTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
+          techName = fileContextTechnician ? fileContextTechnician.name : (fallbackTech ? fallbackTech.name : 'Carlos Henrique Silva');
         }
 
         // 4. Lógica Financeira e Mapeamento da Ordem

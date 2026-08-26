@@ -47,6 +47,7 @@ const MONTH_NAMES = [
 export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewOrder }) => {
   const {
     orders = [],
+    users = [],
     exportOrdersCsv,
     currentUser,
     selectedYear = 2026,
@@ -56,6 +57,9 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     selectedPeriod = 1,
     setSelectedPeriod,
     deleteServiceOrder,
+    reassignOrderTechnician,
+    batchReassignTechnician,
+    autoRepairOrders,
     addToast,
   } = useApp();
 
@@ -64,8 +68,24 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<ServiceOrder | null>(null);
+  const [batchTechId, setBatchTechId] = useState<string>('');
+  const [isBatchBusy, setIsBatchBusy] = useState<boolean>(false);
 
   const safeOrders = orders || [];
+  const safeUsers = users || [];
+  const techniciansList = useMemo(() => {
+    return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
+  }, [safeUsers]);
+
+  const unallocatedOrdersInPeriod = useMemo(() => {
+    return safeOrders.filter((os) => {
+      if (!os) return false;
+      if (!isOrderInPeriod(os, { referenceYear: selectedYear, referenceMonth: selectedMonth, periodNumber: selectedPeriod })) return false;
+      const matched = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+      const displayName = matched?.name || os.technicianName;
+      return !displayName || displayName === 'Não Alocado' || !os.technicianId || os.technicianId === 'tech-1';
+    });
+  }, [safeOrders, selectedYear, selectedMonth, selectedPeriod, safeUsers]);
 
   // Formatação amigável e precisa de Data / Hora para o DataGrid
   const formatScheduledDateTime = (dateStr?: string) => {
@@ -331,6 +351,70 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         </div>
       </div>
 
+      {/* Banner de Ação Rápida para Ordens Não Alocadas */}
+      {unallocatedOrdersInPeriod.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 font-bold text-sm">
+              ⚠️
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-950">
+                {unallocatedOrdersInPeriod.length} Ordem(ns) de Serviço Não Alocadas na {selectedPeriod}ª Qnz de {MONTH_NAMES[selectedMonth - 1]}/{selectedYear}
+              </h4>
+              <p className="text-[11px] text-amber-800">
+                Selecione o técnico para vincular todas as OSs de uma vez ou altere individualmente na tabela:
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={batchTechId}
+              onChange={(e) => setBatchTechId(e.target.value)}
+              className="p-1.5 bg-white border border-amber-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+            >
+              <option value="">Selecione o Técnico Destino...</option>
+              {techniciansList.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              disabled={!batchTechId || isBatchBusy}
+              onClick={async () => {
+                if (!batchTechId) return;
+                try {
+                  setIsBatchBusy(true);
+                  const idsToAssign = unallocatedOrdersInPeriod.map((o) => o.id);
+                  await batchReassignTechnician(idsToAssign, batchTechId);
+                } finally {
+                  setIsBatchBusy(false);
+                  setBatchTechId('');
+                }
+              }}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+            >
+              {isBatchBusy ? 'Vinculando...' : `Atribuir Todas as ${unallocatedOrdersInPeriod.length} OSs`}
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await autoRepairOrders();
+              }}
+              className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+              title="Detecta e vincula automaticamente ordens órfãs ao técnico principal"
+            >
+              Auto-Vincular
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Orders High Density DataGrid */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
@@ -374,6 +458,9 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
               ) : (
                 filteredOrders.map((os) => {
                   const scheduleInfo = formatScheduledDateTime(os.scheduledDate);
+                  const matchedTech = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+                  const displayName = matchedTech?.name || os.technicianName || null;
+                  const isUnallocated = !displayName || displayName === 'Não Alocado';
 
                   return (
                     <tr key={os.id} className="hover:bg-slate-50/80 transition-colors">
@@ -412,9 +499,29 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
                       {/* 4. Technician */}
                       <td className="py-3 px-3.5">
-                        <div className="font-semibold text-slate-800 flex items-center space-x-1 truncate max-w-[140px]" title={os.technicianName || 'Não Alocado'}>
-                          <User className="h-3 w-3 text-slate-400 shrink-0" />
-                          <span className="truncate">{os.technicianName || 'Não Alocado'}</span>
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={matchedTech?.id || os.technicianId || ''}
+                            onChange={async (e) => {
+                              const newTechId = e.target.value;
+                              if (newTechId) {
+                                await reassignOrderTechnician(os.id, newTechId);
+                              }
+                            }}
+                            className={`text-xs font-semibold py-1 px-2 rounded-lg border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
+                              isUnallocated
+                                ? 'bg-amber-50 text-amber-900 border-amber-300 ring-1 ring-amber-400/50'
+                                : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-cyan-50 hover:border-cyan-300'
+                            }`}
+                            title="Alterar técnico responsável"
+                          >
+                            {isUnallocated && <option value="">⚠️ Não Alocado (Selecione)</option>}
+                            {techniciansList.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </td>
 
