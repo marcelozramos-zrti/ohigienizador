@@ -1674,7 +1674,13 @@ async function startServer() {
         // Normalização de Status
         const cleanStatus = String(statusRaw || '').toLowerCase().trim();
         let finalStatus = 'COMPLETED';
-        if (cleanStatus.includes('canc') || cleanStatus.includes('recus') || cleanStatus.includes('imposs')) {
+        if (
+          cleanStatus.includes('canc') ||
+          cleanStatus.includes('recus') ||
+          cleanStatus.includes('imposs') ||
+          cleanStatus.includes('perdida') ||
+          cleanStatus.includes('ausente')
+        ) {
           finalStatus = 'CANCELLED';
         } else if (cleanStatus.includes('anda') || cleanStatus.includes('exec') || cleanStatus.includes('inici')) {
           finalStatus = 'IN_PROGRESS';
@@ -1684,6 +1690,11 @@ async function startServer() {
 
         const scheduledDateStr = parseDateValue(dtVisitaRaw);
         const callNumber = String(callNumberRaw).trim();
+
+        // A coluna Dt.Visita (scheduledDate) é a fonte da verdade.
+        // Se finalStatus for 'COMPLETED' ou 'CANCELLED', completedAt recebe o mesmo valor da data agendada (scheduledDateStr)
+        const completedAt = (finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED') ? scheduledDateStr : null;
+        const startedAt = (finalStatus === 'IN_PROGRESS' || finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED') ? scheduledDateStr : null;
 
         // Encontrar ou gerar ID de Ordem
         const existingOrder = memOrders.find((o) => o.callNumber === callNumber);
@@ -1717,6 +1728,8 @@ async function startServer() {
           technicianName: techName,
           status: finalStatus,
           scheduledDate: scheduledDateStr,
+          startedAt,
+          completedAt,
           kmTraveled,
           kmRateApplied,
           kmTotalCost,
@@ -1744,16 +1757,18 @@ async function startServer() {
               id, callNumber, portoSeguroProtocol, serviceCategory, baseServiceFee,
               customerName, customerCpf, customerPhone, city, uf, neighborhood,
               addressStreet, addressNumber, addressComplement, postalCode,
-              technicianId, status, scheduledDate, kmTraveled, kmRateApplied,
+              technicianId, status, scheduledDate, startedAt, completedAt, kmTraveled, kmRateApplied,
               kmTotalCost, tollCost, supportCost, totalTechnicianGross, faturamentoPorto,
               createdAt, updatedAt
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
               serviceCategory = VALUES(serviceCategory),
               baseServiceFee = VALUES(baseServiceFee),
               technicianId = VALUES(technicianId),
               status = VALUES(status),
               scheduledDate = VALUES(scheduledDate),
+              startedAt = VALUES(startedAt),
+              completedAt = VALUES(completedAt),
               kmTraveled = VALUES(kmTraveled),
               kmRateApplied = VALUES(kmRateApplied),
               kmTotalCost = VALUES(kmTotalCost),
@@ -1782,6 +1797,8 @@ async function startServer() {
             orderObj.technicianId,
             orderObj.status,
             new Date(orderObj.scheduledDate),
+            orderObj.startedAt ? new Date(orderObj.startedAt) : null,
+            orderObj.completedAt ? new Date(orderObj.completedAt) : null,
             orderObj.kmTraveled,
             orderObj.kmRateApplied,
             orderObj.kmTotalCost,
