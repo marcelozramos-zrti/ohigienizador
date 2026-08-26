@@ -1649,9 +1649,10 @@ async function startServer() {
 
           try {
             await db.execute(
-              `INSERT INTO users (id, name, email, passwordHash, role, document_cpf, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, createdAt, updatedAt)
-               VALUES (?, ?, ?, ?, 'TECHNICIAN', '000.000.000-00', 1, 0, 0, 0, ?, NOW(), NOW())
-               ON DUPLICATE KEY UPDATE name = VALUES(name), role = VALUES(role), isActive = 1`,
+              `INSERT INTO users (
+                id, name, email, passwordHash, role, isActive, documentCpf, phone, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, createdAt, updatedAt
+              ) VALUES (?, ?, ?, ?, 'TECHNICIAN', 1, '000.000.000-00', ?, 0, 0, 0, NOW(), NOW())
+              ON DUPLICATE KEY UPDATE name = VALUES(name), isActive = VALUES(isActive), updatedAt = NOW()`,
               [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
             );
           } catch (insertUserErr) {
@@ -1754,28 +1755,28 @@ async function startServer() {
         try {
           const insertOrderQuery = `
             INSERT INTO \`service_orders\` (
-              id, call_number, porto_seguro_protocol, service_category, base_service_fee,
-              customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
-              address_street, address_number, address_complement, postal_code,
-              technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied,
-              km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto,
+              id, callNumber, portoSeguroProtocol, serviceCategory, baseServiceFee,
+              customerName, customerCpf, customerPhone, city, uf, neighborhood,
+              addressStreet, addressNumber, addressComplement, postalCode,
+              technicianId, status, scheduledDate, startedAt, completedAt, kmTraveled, kmRateApplied,
+              kmTotalCost, tollCost, supportCost, totalTechnicianGross, faturamentoPorto,
               createdAt, updatedAt
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
-              service_category = VALUES(service_category),
-              base_service_fee = VALUES(base_service_fee),
-              technician_id = VALUES(technician_id),
+              serviceCategory = VALUES(serviceCategory),
+              baseServiceFee = VALUES(baseServiceFee),
+              technicianId = VALUES(technicianId),
               status = VALUES(status),
-              scheduled_date = VALUES(scheduled_date),
-              started_at = VALUES(started_at),
-              completed_at = VALUES(completed_at),
-              km_traveled = VALUES(km_traveled),
-              km_rate_applied = VALUES(km_rate_applied),
-              km_total_cost = VALUES(km_total_cost),
-              toll_cost = VALUES(toll_cost),
-              support_cost = VALUES(support_cost),
-              total_technician_gross = VALUES(total_technician_gross),
-              faturamento_porto = VALUES(faturamento_porto),
+              scheduledDate = VALUES(scheduledDate),
+              startedAt = VALUES(startedAt),
+              completedAt = VALUES(completedAt),
+              kmTraveled = VALUES(kmTraveled),
+              kmRateApplied = VALUES(kmRateApplied),
+              kmTotalCost = VALUES(kmTotalCost),
+              tollCost = VALUES(tollCost),
+              supportCost = VALUES(supportCost),
+              totalTechnicianGross = VALUES(totalTechnicianGross),
+              faturamentoPorto = VALUES(faturamentoPorto),
               updatedAt = NOW()
           `;
 
