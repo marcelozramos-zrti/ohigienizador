@@ -1836,7 +1836,12 @@ async function startServer() {
         // 5. Atualização em memória
         const memIdx = memOrders.findIndex((o) => o.callNumber === callNumber || o.id === orderId);
         if (memIdx >= 0) {
-          memOrders[memIdx] = { ...memOrders[memIdx], ...orderObj };
+          memOrders[memIdx] = {
+            ...memOrders[memIdx],
+            ...orderObj,
+            technicianId: technicianId,
+            technicianName: techName || (existingUser ? existingUser.name : (memOrders[memIdx].technicianName || 'Técnico')),
+          };
         } else {
           memOrders.unshift(orderObj);
         }
