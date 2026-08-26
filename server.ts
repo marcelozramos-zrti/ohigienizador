@@ -1628,6 +1628,19 @@ async function startServer() {
         return null;
       }
 
+      function isGenericCompanyName(name: string): boolean {
+        if (!name) return true;
+        const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        if (n === '' || n.length < 2) return true;
+        const genericTokens = [
+          'higienizador', 'higienizadora', 'a higienizadora', 'o higienizador',
+          'porto seguro', 'porto', 'prestador', 'empresa', 'matriz', 'central',
+          'nao alocado', 'nao informado', 'sem tecnico', 'padrao', 'sistema',
+          'atendimento', 'operacional', 'porto servicos', 'porto servico', 'servicos'
+        ];
+        return genericTokens.some((tok) => n === tok || n.includes(tok));
+      }
+
       let importedCount = 0;
       let ignoredRowsCount = 0;
       let techniciansCreatedCount = 0;
@@ -1644,6 +1657,67 @@ async function startServer() {
           currentUsersList = userRows;
         }
       } catch {}
+
+      // =======================================================================
+      // DIRETRIZ 1: Contexto Inteligente pelo Nome do Arquivo (Fallback Primário)
+      // =======================================================================
+      const originalFileName = file.originalname || '';
+      const cleanFileNameNorm = originalFileName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      let fileContextTechnician: any = null;
+
+      // 1.1 Varredura de usuários em memória/banco pelo nome/primeiro nome no arquivo
+      for (const u of currentUsersList) {
+        if (u.role === 'TECHNICIAN' || u.role === 'ADMIN') {
+          const firstName = (u.name || '').trim().split(' ')[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          const fullName = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          if (firstName && firstName.length >= 3 && cleanFileNameNorm.includes(firstName)) {
+            fileContextTechnician = u;
+            break;
+          }
+          if (fullName && fullName.length >= 3 && cleanFileNameNorm.includes(fullName)) {
+            fileContextTechnician = u;
+            break;
+          }
+        }
+      }
+
+      // 1.2 Se não encontrado em cache, busca SQL com LIKE em palavras do nome do arquivo
+      if (!fileContextTechnician) {
+        try {
+          const monthTokens = [
+            'ago', 'agosto', 'set', 'setembro', 'out', 'outubro', 'nov', 'novembro',
+            'dez', 'dezembro', 'jan', 'janeiro', 'fev', 'fevereiro', 'mar', 'marco',
+            'março', 'abr', 'abril', 'mai', 'maio', 'jun', 'junho', 'jul', 'julho',
+            'relatorio', 'planilha', 'porto', 'seguro', 'extrato', 'fechamento', 'visitas'
+          ];
+          const words = originalFileName
+            .replace(/\.[^/.]+$/, '')
+            .replace(/[^a-zA-Z0-9áàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+/g, ' ')
+            .split(/\s+/)
+            .filter((w) => w.length >= 3 && !monthTokens.includes(w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')));
+
+          for (const word of words) {
+            const [matchedUsers]: any = await db.query(
+              'SELECT * FROM users WHERE (name LIKE ? OR email LIKE ?) AND role = "TECHNICIAN" LIMIT 1',
+              [`%${word}%`, `%${word}%`]
+            );
+            if (matchedUsers && matchedUsers.length > 0) {
+              fileContextTechnician = matchedUsers[0];
+              if (!currentUsersList.some((u) => u.id === fileContextTechnician.id)) {
+                currentUsersList.push(fileContextTechnician);
+              }
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn('[Import] Erro ao buscar técnico pelo nome do arquivo:', err);
+        }
+      }
+
+      if (fileContextTechnician) {
+        console.log(`[Import] ✅ Contexto do arquivo "${originalFileName}" vinculado ao técnico: ${fileContextTechnician.name} (ID: ${fileContextTechnician.id})`);
+      }
 
       for (let idx = 0; idx < rawRows.length; idx++) {
         const row = rawRows[idx];
@@ -1673,10 +1747,9 @@ async function startServer() {
         if (!rawTechName) {
           rawTechName = String(row['Tecnico'] || row['Técnico'] || row['Prestador'] || row['Técnico Responsável'] || row['Tecnico Responsavel'] || getField(row, ['Tecnico', 'Técnico', 'Prestador', 'Técnico Responsável', 'Tecnico Responsavel', 'Nome Tecnico', 'Nome do Tecnico', 'Nome_Tecnico']) || '').trim();
         }
-        const techName = rawTechName;
 
         // Sanitization: Ignora linhas vazias ou com palavras de totais
-        if (shouldIgnoreRow(origemRaw, techName)) {
+        if (shouldIgnoreRow(origemRaw, rawTechName)) {
           ignoredRowsCount++;
           continue;
         }
@@ -1689,12 +1762,31 @@ async function startServer() {
         const pedagioRaw = getField(row, ['PEDAGIO', 'Pedagio', 'Pedágio', 'Valor Pedagio', 'Vl Pedagio']);
         const valorDaVistaRaw = getField(row, ['VALOR DA VISTA', 'Valor da Visita', 'Valor da Vista', 'Valor Visita', 'Valor', 'Vl Visita', 'Base Fee']);
 
-        // 3. Lógica de Busca / Criação Automática do Técnico
-        const cleanTechNameNorm = techName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        let existingUser: any = null;
+        // =====================================================================
+        // DIRETRIZ 2 & 3: Busca Relacional e Integridade Referencial Estrita
+        // =====================================================================
+        let technicianId: string = '';
+        let techName: string = '';
 
-        if (cleanTechNameNorm) {
-          // Busca em cache / memória por nome ou email
+        const cleanTechNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        const isGeneric = isGenericCompanyName(rawTechName);
+
+        if (isGeneric) {
+          // Se o nome for genérico (ex: "A HIGIENIZADORA", "O HIGIENIZADOR"), NUNCA cria usuário genérico.
+          // Prioriza o técnico contextual do arquivo ou o técnico padrão do sistema.
+          if (fileContextTechnician && fileContextTechnician.id) {
+            technicianId = String(fileContextTechnician.id);
+            techName = fileContextTechnician.name;
+          } else {
+            const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN');
+            technicianId = defaultTech ? String(defaultTech.id) : 'tech-1';
+            techName = defaultTech ? defaultTech.name : 'Técnico de Campo';
+          }
+        } else {
+          // Nome específico de técnico fornecido na linha da planilha
+          let existingUser: any = null;
+
+          // Busca em cache / memória
           existingUser = currentUsersList.find((u: any) => {
             const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
             const uEmailNorm = (u.email || '').trim().toLowerCase();
@@ -1711,7 +1803,7 @@ async function startServer() {
             try {
               const [dbUserRows]: any = await db.query(
                 'SELECT * FROM users WHERE TRIM(LOWER(name)) = LOWER(?) OR name LIKE ? OR TRIM(LOWER(email)) = LOWER(?) LIMIT 1',
-                [techName, `%${techName}%`, techName]
+                [rawTechName, `%${rawTechName}%`, rawTechName]
               );
               if (dbUserRows && dbUserRows.length > 0) {
                 existingUser = dbUserRows[0];
@@ -1721,68 +1813,76 @@ async function startServer() {
               console.warn('[Import] Falha ao consultar técnico por nome no banco:', err);
             }
           }
+
+          if (existingUser && existingUser.id) {
+            technicianId = String(existingUser.id);
+            techName = existingUser.name;
+          } else if (fileContextTechnician && fileContextTechnician.id) {
+            // Se houver técnico pelo arquivo, utiliza-o
+            technicianId = String(fileContextTechnician.id);
+            techName = fileContextTechnician.name;
+          } else {
+            // Criar novo técnico dinamicamente se houver nome válido não genérico
+            technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
+            let finalEmail = `${slug}@ohigienizador.com.br`;
+            let emailSuffix = 1;
+            while (currentUsersList.some((u: any) => (u.email || '').toLowerCase() === finalEmail.toLowerCase())) {
+              finalEmail = `${slug}${emailSuffix}@ohigienizador.com.br`;
+              emailSuffix++;
+            }
+
+            const newTech = {
+              id: technicianId,
+              name: rawTechName,
+              email: finalEmail,
+              passwordHash: 'Porto@2026',
+              role: 'TECHNICIAN',
+              documentCpf: '000.000.000-00',
+              phone: '(11) 99999-0000',
+              isActive: 1,
+              pixKeyType: 'CPF',
+              pixKey: '',
+              bankName: 'Porto Seguro Bank',
+              bankAgency: '',
+              bankAccount: '',
+              baseCostAllowance: 0,
+              hasSpecialTaxRule: 0,
+              specialTaxRate: 0,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            currentUsersList.push(newTech);
+            memUsers.push(newTech);
+
+            try {
+              await db.execute(
+                `INSERT INTO \`users\` (
+                  id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, document_cpf, createdAt, updatedAt
+                ) VALUES (
+                  ?, ?, ?, ?, 'TECHNICIAN', 1, 0, 0, 0, ?, '000.000.000-00', NOW(), NOW()
+                ) ON DUPLICATE KEY UPDATE 
+                  name = VALUES(name), 
+                  isActive = 1`,
+                [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
+              );
+            } catch (insertUserErr) {
+              console.warn('[Import] Falha ao inserir usuário no MariaDB:', insertUserErr);
+            }
+
+            techniciansCreatedCount++;
+            createdTechniciansList.push({ id: newTech.id, name: newTech.name, email: newTech.email });
+            techName = newTech.name;
+          }
         }
 
-        let technicianId: string;
-
-        if (existingUser && existingUser.id) {
-          technicianId = String(existingUser.id);
-        } else if (cleanTechNameNorm) {
-          // Criar novo técnico dinamicamente se houver nome válido
-          technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-          const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
-          let finalEmail = `${slug}@ohigienizador.com.br`;
-          let emailSuffix = 1;
-          while (currentUsersList.some((u: any) => (u.email || '').toLowerCase() === finalEmail.toLowerCase())) {
-            finalEmail = `${slug}${emailSuffix}@ohigienizador.com.br`;
-            emailSuffix++;
-          }
-
-          const newTech = {
-            id: technicianId,
-            name: techName || 'Técnico Não Identificado',
-            email: finalEmail,
-            passwordHash: 'Porto@2026',
-            role: 'TECHNICIAN',
-            documentCpf: '000.000.000-00',
-            phone: '(11) 99999-0000',
-            isActive: 1,
-            pixKeyType: 'CPF',
-            pixKey: '',
-            bankName: 'Porto Seguro Bank',
-            bankAgency: '',
-            bankAccount: '',
-            baseCostAllowance: 0,
-            hasSpecialTaxRule: 0,
-            specialTaxRate: 0,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          };
-
-          currentUsersList.push(newTech);
-          memUsers.push(newTech);
-
-          try {
-            await db.execute(
-              `INSERT INTO \`users\` (
-                id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, document_cpf, createdAt, updatedAt
-              ) VALUES (
-                ?, ?, ?, ?, 'TECHNICIAN', 1, 0, 0, 0, ?, '000.000.000-00', NOW(), NOW()
-              ) ON DUPLICATE KEY UPDATE 
-                name = VALUES(name), 
-                isActive = 1`,
-              [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
-            );
-          } catch (insertUserErr) {
-            console.warn('[Import] Falha ao inserir usuário no MariaDB:', insertUserErr);
-          }
-
-          techniciansCreatedCount++;
-          createdTechniciansList.push({ id: newTech.id, name: newTech.name, email: newTech.email });
-        } else {
-          // Se não houver nome na linha, vincula ao primeiro técnico ativo do sistema
-          const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN');
-          technicianId = defaultTech ? String(defaultTech.id) : 'tech-1';
+        // Garantia absoluta de não-nulo
+        if (!technicianId) {
+          technicianId = fileContextTechnician ? String(fileContextTechnician.id) : 'tech-1';
+        }
+        if (!techName) {
+          techName = fileContextTechnician ? fileContextTechnician.name : 'Técnico';
         }
 
         // 4. Lógica Financeira e Mapeamento da Ordem
@@ -1872,14 +1972,14 @@ async function startServer() {
             ...memOrders[memIdx],
             ...orderObj,
             technicianId: technicianId,
-            technicianName: techName || (existingUser ? existingUser.name : (memOrders[memIdx].technicianName || 'Técnico')),
+            technicianName: techName || (memOrders[memIdx].technicianName || 'Técnico'),
           };
         } else {
           memOrders.unshift(orderObj);
         }
 
         // 6. Inserção no MariaDB com INSERT ... ON DUPLICATE KEY UPDATE
-        console.log("[DEBUG IMPORT] Técnico Lido:", rawTechName, "-> ID Resolvido:", technicianId);
+        console.log(`[DEBUG IMPORT] Linha ${idx + 1} | Arquivo: "${originalFileName}" | Técnico Lido: "${rawTechName}" -> Técnico Final: "${techName}" | ID Resolvido: "${technicianId}"`);
 
         try {
           const insertOrderQuery = `
