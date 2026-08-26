@@ -1009,53 +1009,115 @@ async function startServer() {
   // =========================================================================
   // 5. SERVICE ORDERS API (GET, POST, PUT, DELETE) com Escopo OWN para Técnico
   // =========================================================================
-  app.get('/api/orders', async (req, res) => {
+  const getServiceOrdersHandler = async (req: express.Request, res: express.Response) => {
     const requester = await getRequester(req);
 
     try {
       const db = getDbPool();
-      const cols = await getTableColumnsMap('service_orders');
-      let orderClause = 'id DESC';
-      if (cols.has('scheduleddate')) orderClause = `\`${cols.get('scheduleddate')}\` DESC`;
-      else if (cols.has('scheduled_date')) orderClause = `\`${cols.get('scheduled_date')}\` DESC`;
 
-      const [rows]: any = await db.query(`SELECT * FROM \`service_orders\` ORDER BY ${orderClause}`);
-      const formatted = rows.map((o: any) => ({
-        ...o,
-        id: o.id,
-        callNumber: o.callNumber || o.call_number || o.numero_chamado || '',
-        portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
-        serviceCategory: o.serviceCategory || o.service_category || 'Higienização Padrão',
-        baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
-        customerName: o.customerName || o.customer_name || '',
-        customerCpf: o.customerCpf || o.customer_cpf || '',
-        customerPhone: o.customerPhone || o.customer_phone || null,
-        city: o.city || 'São Paulo',
-        uf: o.uf || 'SP',
-        neighborhood: o.neighborhood || '',
-        addressStreet: o.addressStreet || '',
-        addressNumber: o.addressNumber || '',
-        addressComplement: o.addressComplement || null,
-        postalCode: o.postalCode || '',
-        technicianId: o.technicianId || o.technician_id || null,
-        status: o.status || 'PENDING',
-        scheduledDate: o.scheduledDate || o.scheduled_date,
-        startedAt: o.startedAt || o.started_at,
-        completedAt: o.completedAt || o.completed_at,
-        kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
-        kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
-        kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
-        tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
-        supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
-        totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
-        faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
-        customerSignature: o.customerSignature || null,
-        executionNotes: o.executionNotes || null,
-        tollReceiptUrl: o.tollReceiptUrl || null,
-        paymentStatus: o.paymentStatus || o.payment_status || 'PENDING',
-        paymentDate: o.paymentDate || o.payment_date || null,
-        itemsUsed: [],
-      }));
+      // Query com LEFT JOIN na tabela users para trazer o nome real do técnico (technicianName)
+      // e aliases camelCase conforme esperado pelo React DataGrid
+      const query = `
+        SELECT 
+          so.*,
+          so.id AS id,
+          so.call_number AS callNumber,
+          so.porto_seguro_protocol AS portoSeguroProtocol,
+          so.service_category AS serviceCategory,
+          so.base_service_fee AS baseServiceFee,
+          so.customer_name AS customerName,
+          so.customer_cpf AS customerCpf,
+          so.customer_phone AS customerPhone,
+          so.city AS city,
+          so.uf AS uf,
+          so.neighborhood AS neighborhood,
+          so.address_street AS addressStreet,
+          so.address_number AS addressNumber,
+          so.address_complement AS addressComplement,
+          so.postal_code AS postalCode,
+          so.technician_id AS technicianId,
+          so.status AS status,
+          so.scheduled_date AS scheduledDate,
+          so.started_at AS startedAt,
+          so.completed_at AS completedAt,
+          so.km_traveled AS kmTraveled,
+          so.km_rate_applied AS kmRateApplied,
+          so.km_total_cost AS kmTotalCost,
+          so.toll_cost AS tollCost,
+          so.support_cost AS supportCost,
+          so.total_technician_gross AS totalTechnicianGross,
+          so.faturamento_porto AS faturamentoPorto,
+          so.payment_status AS paymentStatus,
+          so.payment_date AS paymentDate,
+          u.name AS technicianName
+        FROM \`service_orders\` so
+        LEFT JOIN \`users\` u ON so.technician_id = u.id
+        ORDER BY so.scheduled_date DESC, so.id DESC
+      `;
+
+      const [rows]: any = await db.query(query).catch(async () => {
+        // Fallback resiliente caso a tabela tenha colunas sem underscore
+        return await db.query(`
+          SELECT 
+            so.*,
+            u.name AS technicianName
+          FROM \`service_orders\` so
+          LEFT JOIN \`users\` u ON (so.technician_id = u.id OR so.technicianId = u.id)
+          ORDER BY so.id DESC
+        `);
+      });
+
+      const formatted = rows.map((o: any) => {
+        const rawTechId = o.technicianId || o.technician_id || null;
+        let resolvedTechName = o.technicianName || o.technician_name || null;
+
+        // Se o LEFT JOIN não encontrar pelo ID, faz fallback na memória de usuários
+        if (!resolvedTechName && rawTechId) {
+          const userObj = memUsers.find((u) => u.id === rawTechId);
+          if (userObj) {
+            resolvedTechName = userObj.name;
+          }
+        }
+
+        return {
+          ...o,
+          id: o.id,
+          callNumber: o.callNumber || o.call_number || o.numero_chamado || '',
+          portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
+          serviceCategory: o.serviceCategory || o.service_category || 'Higienização Padrão',
+          baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
+          customerName: o.customerName || o.customer_name || '',
+          customerCpf: o.customerCpf || o.customer_cpf || '',
+          customerPhone: o.customerPhone || o.customer_phone || null,
+          city: o.city || 'São Paulo',
+          uf: o.uf || 'SP',
+          neighborhood: o.neighborhood || '',
+          addressStreet: o.addressStreet || '',
+          addressNumber: o.addressNumber || '',
+          addressComplement: o.addressComplement || null,
+          postalCode: o.postalCode || '',
+          technicianId: rawTechId,
+          technicianName: resolvedTechName || (rawTechId ? 'Técnico' : null),
+          status: o.status || 'PENDING',
+          scheduledDate: o.scheduledDate || o.scheduled_date,
+          startedAt: o.startedAt || o.started_at,
+          completedAt: o.completedAt || o.completed_at,
+          kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
+          kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
+          kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
+          tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
+          supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
+          totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
+          faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
+          customerSignature: o.customerSignature || o.customer_signature || null,
+          executionNotes: o.executionNotes || o.execution_notes || null,
+          tollReceiptUrl: o.tollReceiptUrl || o.toll_receipt_url || null,
+          paymentStatus: o.paymentStatus || o.payment_status || 'PENDING',
+          paymentDate: o.paymentDate || o.payment_date || null,
+          itemsUsed: [],
+        };
+      });
+
       memOrders = formatted;
 
       // Escopo OWN para Técnicos de Campo: restringe estritamente às OS dele
@@ -1075,7 +1137,11 @@ async function startServer() {
       }
       res.status(500).json({ success: false, error: err.message });
     }
-  });
+  };
+
+  // Suporte tanto para /api/orders quanto para /api/service-orders
+  app.get('/api/orders', getServiceOrdersHandler);
+  app.get('/api/service-orders', getServiceOrdersHandler);
 
   app.post('/api/orders', async (req, res) => {
     const requester = await getRequester(req);
