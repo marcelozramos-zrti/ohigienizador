@@ -281,7 +281,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
   return (
     <div className="space-y-6">
       
-      {/* Header with Title and Period Selectors */}
+      {/* Header with Title and Global Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -297,67 +297,15 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
           </p>
         </div>
 
-        {/* Period Selector & Global Actions */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Period Toggle */}
-          <div className="flex bg-white rounded-lg p-1 border border-slate-200 shadow-xs">
-            <button
-              id="period-q1-btn"
-              onClick={() => setSelectedPeriod(1)}
-              className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                selectedPeriod === 1
-                  ? 'bg-[#003366] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              1ª Quinzena (01-15)
-            </button>
-            <button
-              id="period-q2-btn"
-              onClick={() => setSelectedPeriod(2)}
-              className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                selectedPeriod === 2
-                  ? 'bg-[#003366] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              2ª Quinzena (16-fim)
-            </button>
-          </div>
-
-          {/* Month Selector */}
-          <select
-            id="closing-month-select"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(Number(e.target.value))}
-            className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 shadow-xs cursor-pointer focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-          >
-            {monthNames.map((m, idx) => (
-              <option key={idx} value={idx + 1}>
-                {m}
-              </option>
-            ))}
-          </select>
-
-          {/* Year Selector */}
-          <select
-            id="closing-year-select"
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(Number(e.target.value))}
-            className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 shadow-xs cursor-pointer focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-          >
-            <option value={2025}>2025</option>
-            <option value={2026}>2026</option>
-            <option value={2027}>2027</option>
-          </select>
-
+        {/* Global Actions */}
+        <div className="flex items-center gap-2">
           {/* Lançar Vale */}
           <button
             id="open-new-advance-btn"
             onClick={onOpenNewAdvance}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-xs transition-all cursor-pointer"
+            className="flex items-center space-x-1.5 px-3.5 py-2 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-xs transition-all cursor-pointer"
           >
-            <PlusCircle className="h-3.5 w-3.5 text-cyan-300" />
+            <PlusCircle className="h-4 w-4 text-cyan-300" />
             <span>Lançar Vale</span>
           </button>
         </div>
@@ -512,78 +460,147 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              {/* Filtro por Técnico */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  Filtrar por Técnico
-                </label>
-                <select
-                  id="query-technician-select"
-                  value={filterTechnicianId}
-                  onChange={(e) => setFilterTechnicianId(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                >
-                  <option value="ALL">Todos os Técnicos</option>
-                  {techniciansList.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} {t.hasSpecialTaxRule ? '(Regra 16% Impostos)' : ''}
-                    </option>
-                  ))}
-                </select>
+            {/* Painel de Filtros em 2 Linhas */}
+            <div className="space-y-3">
+              {/* Linha 1: Dropdown de Técnico, Dropdown de Status da OS e um novo flex-container contendo os seletores de Quinzena, Mês e Ano */}
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                {/* Filtro por Técnico (4 cols) */}
+                <div className="md:col-span-4">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                    Filtrar por Técnico
+                  </label>
+                  <select
+                    id="query-technician-select"
+                    value={filterTechnicianId}
+                    onChange={(e) => setFilterTechnicianId(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  >
+                    <option value="ALL">Todos os Técnicos</option>
+                    {techniciansList.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} {t.hasSpecialTaxRule ? '(Regra 16% Impostos)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Filtro por Status da OS (3 cols) */}
+                <div className="md:col-span-3">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                    Status da OS
+                  </label>
+                  <select
+                    id="query-status-select"
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  >
+                    <option value="ALL">Todos os Status</option>
+                    <option value="COMPLETED">Finalizadas (COMPLETED) [Elegíveis Fechamento]</option>
+                    <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
+                    <option value="PENDING">Pendentes (PENDING)</option>
+                    <option value="CANCELLED">Canceladas (CANCELLED)</option>
+                  </select>
+                </div>
+
+                {/* Flex-container contendo os seletores de Quinzena, Mês e Ano (5 cols) */}
+                <div className="md:col-span-5">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                    Período (Quinzena, Mês, Ano)
+                  </label>
+                  <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+                    {/* Period Toggle */}
+                    <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200 shrink-0">
+                      <button
+                        id="period-q1-btn"
+                        type="button"
+                        onClick={() => setSelectedPeriod(1)}
+                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
+                          selectedPeriod === 1
+                            ? 'bg-[#003366] text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        1ª Qnz (01-15)
+                      </button>
+                      <button
+                        id="period-q2-btn"
+                        type="button"
+                        onClick={() => setSelectedPeriod(2)}
+                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
+                          selectedPeriod === 2
+                            ? 'bg-[#003366] text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        2ª Qnz (16-fim)
+                      </button>
+                    </div>
+
+                    {/* Month Selector */}
+                    <select
+                      id="closing-month-select"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                      className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none flex-1 min-w-[95px]"
+                    >
+                      {monthNames.map((m, idx) => (
+                        <option key={idx} value={idx + 1}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Year Selector */}
+                    <select
+                      id="closing-year-select"
+                      value={selectedYear}
+                      onChange={(e) => setSelectedYear(Number(e.target.value))}
+                      className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none w-20 shrink-0"
+                    >
+                      <option value={2025}>2025</option>
+                      <option value={2026}>2026</option>
+                      <option value={2027}>2027</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
-              {/* Filtro por Status da OS */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  Status da OS
-                </label>
-                <select
-                  id="query-status-select"
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                >
-                  <option value="ALL">Todos os Status</option>
-                  <option value="COMPLETED">Finalizadas (COMPLETED) [Elegíveis Fechamento]</option>
-                  <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
-                  <option value="PENDING">Pendentes (PENDING)</option>
-                  <option value="CANCELLED">Canceladas (CANCELLED)</option>
-                </select>
-              </div>
+              {/* Linha 2: Dropdown de Pagamento e o Input de "Busca Textual" (este input deve se esticar / flex-grow para preencher o resto do espaço à direita) */}
+              <div className="flex flex-col sm:flex-row gap-3 items-end">
+                {/* Filtro por Status de Quitação */}
+                <div className="w-full sm:w-64 shrink-0">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                    Status de Pagamento (Quitação)
+                  </label>
+                  <select
+                    id="query-payment-status-select"
+                    value={filterPaymentStatus}
+                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  >
+                    <option value="ALL">Todos (Pagos e Pendentes)</option>
+                    <option value="PAID">Apenas Pagos (PAGO)</option>
+                    <option value="PENDING">Apenas Pendentes (PENDENTE)</option>
+                  </select>
+                </div>
 
-              {/* Filtro por Status de Quitação */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  Status de Pagamento
-                </label>
-                <select
-                  id="query-payment-status-select"
-                  value={filterPaymentStatus}
-                  onChange={(e) => setFilterPaymentStatus(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                >
-                  <option value="ALL">Todos (Pagos e Pendentes)</option>
-                  <option value="PAID">Apenas Pagos (PAGO)</option>
-                  <option value="PENDING">Apenas Pendentes (PENDENTE)</option>
-                </select>
-              </div>
-
-              {/* Busca Textual */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  Busca Textual Rápida
-                </label>
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                  <input
-                    id="query-search-input"
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Nº chamado, cliente, bairro..."
-                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  />
+                {/* Busca Textual que estica com flex-grow */}
+                <div className="flex-1 w-full">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                    Busca Textual Rápida
+                  </label>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                    <input
+                      id="query-search-input"
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Nº chamado, cliente, bairro, cidade, técnico..."
+                      className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             </div>

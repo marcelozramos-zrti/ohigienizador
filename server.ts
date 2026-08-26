@@ -1754,28 +1754,29 @@ async function startServer() {
         try {
           const insertOrderQuery = `
             INSERT INTO \`service_orders\` (
-              id, callNumber, portoSeguroProtocol, serviceCategory, baseServiceFee,
-              customerName, customerCpf, customerPhone, city, uf, neighborhood,
-              addressStreet, addressNumber, addressComplement, postalCode,
-              technicianId, status, scheduledDate, startedAt, completedAt, kmTraveled, kmRateApplied,
-              kmTotalCost, tollCost, supportCost, totalTechnicianGross, faturamentoPorto,
-              createdAt, updatedAt
+              id, call_number, porto_seguro_protocol, service_category, base_service_fee,
+              customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
+              address_street, address_number, address_complement, postal_code,
+              technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied,
+              km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto,
+              created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
-              serviceCategory = VALUES(serviceCategory),
-              baseServiceFee = VALUES(baseServiceFee),
-              technicianId = VALUES(technicianId),
+              service_category = VALUES(service_category),
+              base_service_fee = VALUES(base_service_fee),
+              technician_id = VALUES(technician_id),
               status = VALUES(status),
-              scheduledDate = VALUES(scheduledDate),
-              startedAt = VALUES(startedAt),
-              completedAt = VALUES(completedAt),
-              kmTraveled = VALUES(kmTraveled),
-              kmRateApplied = VALUES(kmRateApplied),
-              kmTotalCost = VALUES(kmTotalCost),
-              tollCost = VALUES(tollCost),
-              totalTechnicianGross = VALUES(totalTechnicianGross),
-              faturamentoPorto = VALUES(faturamentoPorto),
-              updatedAt = NOW()
+              scheduled_date = VALUES(scheduled_date),
+              started_at = VALUES(started_at),
+              completed_at = VALUES(completed_at),
+              km_traveled = VALUES(km_traveled),
+              km_rate_applied = VALUES(km_rate_applied),
+              km_total_cost = VALUES(km_total_cost),
+              toll_cost = VALUES(toll_cost),
+              support_cost = VALUES(support_cost),
+              total_technician_gross = VALUES(total_technician_gross),
+              faturamento_porto = VALUES(faturamento_porto),
+              updated_at = NOW()
           `;
 
           await db.execute(insertOrderQuery, [
@@ -1796,7 +1797,7 @@ async function startServer() {
             orderObj.postalCode,
             orderObj.technicianId,
             orderObj.status,
-            new Date(orderObj.scheduledDate),
+            orderObj.scheduledDate ? new Date(orderObj.scheduledDate) : new Date(),
             orderObj.startedAt ? new Date(orderObj.startedAt) : null,
             orderObj.completedAt ? new Date(orderObj.completedAt) : null,
             orderObj.kmTraveled,
@@ -1807,8 +1808,8 @@ async function startServer() {
             orderObj.totalTechnicianGross,
             orderObj.faturamentoPorto,
           ]);
-        } catch (dbOrderErr) {
-          console.warn(`[Import] Falha ao persistir OS ${callNumber} no MariaDB:`, dbOrderErr);
+        } catch (err) {
+          console.error("Erro na OS", err);
         }
 
         importedCount++;
