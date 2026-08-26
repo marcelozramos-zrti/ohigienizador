@@ -1629,7 +1629,7 @@ async function startServer() {
             email: finalEmail,
             passwordHash: 'Porto@2026',
             role: 'TECHNICIAN',
-            documentCpf: '',
+            documentCpf: '000.000.000-00',
             phone: '(11) 99999-0000',
             isActive: 1,
             pixKeyType: 'CPF',
@@ -1649,8 +1649,8 @@ async function startServer() {
 
           try {
             await db.execute(
-              `INSERT INTO users (id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, createdAt, updatedAt)
-               VALUES (?, ?, ?, ?, 'TECHNICIAN', 1, 0, 0, 0, ?, NOW(), NOW())
+              `INSERT INTO users (id, name, email, passwordHash, role, document_cpf, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, createdAt, updatedAt)
+               VALUES (?, ?, ?, ?, 'TECHNICIAN', '000.000.000-00', 1, 0, 0, 0, ?, NOW(), NOW())
                ON DUPLICATE KEY UPDATE name = VALUES(name), role = VALUES(role), isActive = 1`,
               [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
             );
@@ -1759,7 +1759,7 @@ async function startServer() {
               address_street, address_number, address_complement, postal_code,
               technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied,
               km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto,
-              created_at, updated_at
+              createdAt, updatedAt
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
               service_category = VALUES(service_category),
@@ -1776,7 +1776,7 @@ async function startServer() {
               support_cost = VALUES(support_cost),
               total_technician_gross = VALUES(total_technician_gross),
               faturamento_porto = VALUES(faturamento_porto),
-              updated_at = NOW()
+              updatedAt = NOW()
           `;
 
           await db.execute(insertOrderQuery, [
