@@ -92,14 +92,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           roles: ['ADMIN', 'OPERATIONAL'],
         },
         {
-          id: 'stock',
-          label: 'Estoque',
-          icon: PackageCheck,
-          badge: lowStockCount > 0 ? `${lowStockCount} alertas` : null,
-          badgeColor: 'bg-red-500/20 text-red-200 border border-red-400/30',
-          roles: ['ADMIN', 'OPERATIONAL'],
-        },
-        {
           id: 'mobile_app',
           label: 'App Mobile Técnico',
           icon: Smartphone,
@@ -123,9 +115,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'cashflow',
-          label: 'Caixa e Vales',
+          label: 'Caixa',
           icon: DollarSign,
           badge: null,
+          roles: ['ADMIN', 'OPERATIONAL'],
+        },
+        {
+          id: 'stock',
+          label: 'Produtos',
+          icon: PackageCheck,
+          badge: lowStockCount > 0 ? `${lowStockCount} alertas` : null,
+          badgeColor: 'bg-red-500/20 text-red-200 border border-red-400/30',
           roles: ['ADMIN', 'OPERATIONAL'],
         },
       ],

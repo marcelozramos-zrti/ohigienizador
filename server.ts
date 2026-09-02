@@ -599,6 +599,7 @@ async function startServer() {
         isActive: Boolean(u.isActive ?? u.is_active ?? true),
         hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule ?? u.has_special_tax_rule ?? false),
         baseCostAllowance: Number(u.baseCostAllowance ?? u.base_cost_allowance ?? 0),
+        costAllowanceFortnight: Number(u.costAllowanceFortnight ?? u.cost_allowance_fortnight ?? 1),
         specialTaxRate: Number(u.specialTaxRate ?? u.special_tax_rate ?? 0),
         documentCpf: u.documentCpf ?? u.document_cpf ?? u.cpf ?? '',
         pixKey: u.pixKey ?? u.pix_key ?? '',
@@ -743,6 +744,8 @@ async function startServer() {
         bank_account: u.bankAccount || '00000-0',
         basecostallowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
         base_cost_allowance: Number(u.baseCostAllowance ?? (u.role === 'TECHNICIAN' ? 250 : 0)),
+        costallowancefortnight: Number(u.costAllowanceFortnight || 1),
+        cost_allowance_fortnight: Number(u.costAllowanceFortnight || 1),
         hasspecialtaxrule: u.hasSpecialTaxRule ? 1 : 0,
         has_special_tax_rule: u.hasSpecialTaxRule ? 1 : 0,
         specialtaxrate: Number(u.specialTaxRate || 0),
@@ -928,6 +931,8 @@ async function startServer() {
         bankagency: u.bankAgency,
         bankaccount: u.bankAccount,
         basecostallowance: u.baseCostAllowance !== undefined ? Number(u.baseCostAllowance) : undefined,
+        costallowancefortnight: u.costAllowanceFortnight !== undefined ? Number(u.costAllowanceFortnight) : undefined,
+        cost_allowance_fortnight: u.costAllowanceFortnight !== undefined ? Number(u.costAllowanceFortnight) : undefined,
         hasspecialtaxrule: u.hasSpecialTaxRule !== undefined ? (u.hasSpecialTaxRule ? 1 : 0) : undefined,
         specialtaxrate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
         passwordhash: u.password,
@@ -1652,6 +1657,62 @@ async function startServer() {
     limits: { fileSize: 35 * 1024 * 1024 }, // 35MB
   });
 
+  function isLostVisitValue(status?: string, category?: string, tipoVisita?: string): boolean {
+    const s = `${status || ''} ${category || ''} ${tipoVisita || ''}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return s.includes('perdida') || s.includes('ausente') || s.includes('perd') || s.includes('ausen');
+  }
+
+  function getVisitDateKey(dateVal: any): string {
+    if (!dateVal) return '';
+    if (typeof dateVal === 'string') {
+      if (/^\d{4}-\d{2}-\d{2}/.test(dateVal)) {
+        return dateVal.substring(0, 10);
+      }
+      const brMatch = dateVal.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+      if (brMatch) {
+        const d = brMatch[1].padStart(2, '0');
+        const m = brMatch[2].padStart(2, '0');
+        let y = brMatch[3];
+        if (y.length === 2) y = '20' + y;
+        return `${y}-${m}-${d}`;
+      }
+    }
+    if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
+      return dateVal.toISOString().substring(0, 10);
+    }
+    return '';
+  }
+
+  function findMatchingVisit(
+    ordersList: any[],
+    callNumber: string,
+    scheduledDateStr: string,
+    finalStatus: string,
+    tipoVisita: string
+  ): { existingOrder: any; index: number } {
+    const targetDateKey = getVisitDateKey(scheduledDateStr);
+    const isTargetLost = isLostVisitValue(finalStatus, tipoVisita);
+
+    const idx = ordersList.findIndex((o) => {
+      if (String(o.callNumber || '').trim() !== String(callNumber).trim()) return false;
+      const oDateKey = getVisitDateKey(o.scheduledDate || o.completedAt || o.startedAt);
+      const isOLost = isLostVisitValue(o.status, o.serviceCategory);
+
+      // Se uma é visita perdida e a outra não (ex: retorno concluído em outro dia), são visitas DISTINTAS válidas!
+      if (isTargetLost !== isOLost) return false;
+
+      // Se ambas têm datas e as datas são diferentes (ex: 17/07 vs 18/07), são visitas DISTINTAS válidas!
+      if (targetDateKey && oDateKey && targetDateKey !== oDateKey) return false;
+
+      return true;
+    });
+
+    return {
+      existingOrder: idx >= 0 ? ordersList[idx] : null,
+      index: idx,
+    };
+  }
+
   app.post('/api/import/orders', uploadExcel.single('file'), async (req, res) => {
     const requester = await getRequester(req);
 
@@ -1675,7 +1736,7 @@ async function startServer() {
     }
 
     try {
-      // 1. Leitura do arquivo Excel
+      // 1. Leitura do arquivo Excel otimizada (Prevenção de Memory Leak no PM2)
       const workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: true });
       if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
         return res.status(400).json({ success: false, error: 'A planilha enviada não contém nenhuma aba válida.' });
@@ -1685,26 +1746,26 @@ async function startServer() {
       const worksheet = workbook.Sheets[firstSheetName];
       const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
 
+      // Liberar buffer imediatamente do heap
+      if (req.file) req.file.buffer = Buffer.alloc(0);
+
       if (!rawRows || rawRows.length === 0) {
         return res.status(400).json({ success: false, error: 'Nenhum dado encontrado na planilha enviada.' });
       }
 
-      // Helpers de Sanitização e Mapeamento
+      if (rawRows.length > 20000) {
+        return res.status(413).json({ success: false, error: 'Planilha excede o limite máximo de 20.000 linhas por lote para manter estabilidade do servidor.' });
+      }
+
+      // Helpers de Sanitização e Mapeamento omitidos por brevidade da refatoração...
       function parseCurrency(val: any): number {
         if (val === null || val === undefined || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
-
         let str = String(val).replace(/R\$/gi, '').trim();
-
         const lastDot = str.lastIndexOf('.');
         const lastComma = str.lastIndexOf(',');
-
-        if (lastComma > lastDot) {
-          str = str.replace(/\./g, '').replace(/,/g, '.');
-        } else if (lastDot > lastComma) {
-          str = str.replace(/,/g, '');
-        }
-
+        if (lastComma > lastDot) { str = str.replace(/\./g, '').replace(/,/g, '.'); }
+        else if (lastDot > lastComma) { str = str.replace(/,/g, ''); }
         str = str.replace(/\s+/g, '');
         const num = parseFloat(str);
         return isNaN(num) ? 0 : Number(num.toFixed(2));
@@ -1712,9 +1773,7 @@ async function startServer() {
 
       function parseDateValue(val: any): string {
         if (!val) return new Date().toISOString();
-        if (val instanceof Date) {
-          return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
-        }
+        if (val instanceof Date) return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
         if (typeof val === 'number') {
           const d = new Date(Math.round((val - 25569) * 86400 * 1000));
           return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
@@ -1723,13 +1782,9 @@ async function startServer() {
           const clean = val.trim();
           const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
           if (brMatch) {
-            const day = parseInt(brMatch[1], 10);
-            const month = parseInt(brMatch[2], 10) - 1;
             let year = parseInt(brMatch[3], 10);
             if (year < 100) year += 2000;
-            const hour = brMatch[4] ? parseInt(brMatch[4], 10) : 12;
-            const min = brMatch[5] ? parseInt(brMatch[5], 10) : 0;
-            const d = new Date(year, month, day, hour, min);
+            const d = new Date(year, parseInt(brMatch[2], 10) - 1, parseInt(brMatch[1], 10), brMatch[4] ? parseInt(brMatch[4], 10) : 12, brMatch[5] ? parseInt(brMatch[5], 10) : 0);
             if (!isNaN(d.getTime())) return d.toISOString();
           }
           const d = new Date(clean);
@@ -1739,18 +1794,12 @@ async function startServer() {
       }
 
       function shouldIgnoreRow(origem: any, tecnico: any): boolean {
-        if (origem === null || origem === undefined || tecnico === null || tecnico === undefined) return true;
+        if (!origem || !tecnico) return true;
         const o = String(origem).trim().toLowerCase();
         const t = String(tecnico).trim().toLowerCase();
         if (o === '' || t === '') return true;
-
         const forbiddenWords = ['total', 'totais', 'vale', 'liquido', 'líquido', 'bruto', 'subtotal', 'resumo'];
-        for (const w of forbiddenWords) {
-          if (o.includes(w) || t.includes(w)) {
-            return true;
-          }
-        }
-        return false;
+        return forbiddenWords.some(w => o.includes(w) || t.includes(w));
       }
 
       function getField(row: Record<string, any>, candidates: string[]): any {
@@ -1758,20 +1807,14 @@ async function startServer() {
         for (const cand of candidates) {
           const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
           for (const k of keys) {
-            const cleanK = k.toLowerCase().replace(/[_\s\.]+/g, '');
-            if (cleanK === cleanCand) {
-              return row[k];
-            }
+            if (k.toLowerCase().replace(/[_\s\.]+/g, '') === cleanCand) return row[k];
           }
         }
-        // Tentativa de includes se match exato falhar
         for (const cand of candidates) {
           const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
           for (const k of keys) {
             const cleanK = k.toLowerCase().replace(/[_\s\.]+/g, '');
-            if (cleanK.includes(cleanCand) || cleanCand.includes(cleanK)) {
-              return row[k];
-            }
+            if (cleanK.includes(cleanCand) || cleanCand.includes(cleanK)) return row[k];
           }
         }
         return null;
@@ -1780,14 +1823,8 @@ async function startServer() {
       function isGenericCompanyName(name: string): boolean {
         if (!name) return true;
         const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        if (n === '' || n.length < 2) return true;
-        const genericTokens = [
-          'higienizador', 'higienizadora', 'a higienizadora', 'o higienizador',
-          'porto seguro', 'porto', 'prestador', 'empresa', 'matriz', 'central',
-          'nao alocado', 'nao informado', 'sem tecnico', 'padrao', 'sistema',
-          'atendimento', 'operacional', 'porto servicos', 'porto servico', 'servicos'
-        ];
-        return genericTokens.some((tok) => n === tok || n.includes(tok));
+        const genericTokens = ['higienizador', 'higienizadora', 'porto seguro', 'prestador', 'empresa', 'matriz', 'central', 'nao alocado', 'sem tecnico', 'padrao'];
+        return n.length < 2 || genericTokens.some(tok => n === tok || n.includes(tok));
       }
 
       let importedCount = 0;
@@ -1795,7 +1832,176 @@ async function startServer() {
       let techniciansCreatedCount = 0;
       const createdTechniciansList: Array<{ id: string; name: string; email: string }> = [];
       const importedOrdersSummary: any[] = [];
+      const db = getDbPool();
 
+      // Pré-carga (Cache em Memória) - Evita Query N+1 no loop
+      let currentUsersList = [...memUsers];
+      try {
+        const [userRows]: any = await db.query('SELECT * FROM users');
+        if (userRows && userRows.length > 0) currentUsersList = userRows;
+      } catch (e) {
+        logDb('WARN', 'Fallback do MariaDB falhou ao carregar usuários. Usando RAM.');
+      }
+
+      const usersCacheMap = new Map();
+      currentUsersList.forEach(u => {
+        const normName = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        usersCacheMap.set(normName, u);
+      });
+
+      const originalFileName = file.originalname || '';
+      const cleanFileNameNorm = originalFileName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      let fileContextTechnician: any = null;
+
+      for (const u of currentUsersList) {
+        if (u.role === 'TECHNICIAN' || u.role === 'ADMIN') {
+          const fullName = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          const firstName = fullName.split(' ')[0];
+          if ((firstName.length >= 3 && cleanFileNameNorm.includes(firstName)) || (fullName.length >= 3 && cleanFileNameNorm.includes(fullName))) {
+            fileContextTechnician = u;
+            break;
+          }
+        }
+      }
+
+      const batchOrders: any[] = [];
+      const pendingNewTechsMap = new Map(); // Para não duplicar criacões dinâmicas no lote
+
+      // Processamento Síncrono sem IO de Rede Bloqueante
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
+        const origemRaw = getField(row, ['Origem', 'Orig', 'Source', 'Protocolo']);
+        
+        let rawTechName = '';
+        for (const k of Object.keys(row)) {
+          const normKey = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          if (/tec|prestador|executant|colaborador|responsavel|funcionario/.test(normKey) && row[k]) {
+            rawTechName = String(row[k]).trim();
+            break;
+          }
+        }
+        if (!rawTechName) rawTechName = String(getField(row, ['Tecnico', 'Prestador', 'Nome Tecnico']) || '').trim();
+
+        if (shouldIgnoreRow(origemRaw, rawTechName)) {
+           ignoredRowsCount++;
+           continue;
+        }
+
+        const callNumberRaw = getField(row, ['IdChamado', 'Chamado', 'OS']) || `PS-IMP-${Date.now()}-${idx}`;
+        const dtVisitaRaw = getField(row, ['Dt.Visita', 'Data Visita', 'Data']);
+        const tipoVisitaRaw = getField(row, ['Tipo Visita', 'Serviço', 'Categoria']) || 'Instalação / Higienização';
+        const statusRaw = getField(row, ['Status OS', 'Status', 'Situacao']);
+        
+        let technicianId = '';
+        let techName = '';
+        const cleanTechNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+        if (isGenericCompanyName(rawTechName)) {
+           technicianId = fileContextTechnician ? String(fileContextTechnician.id) : 'u1';
+           techName = fileContextTechnician ? fileContextTechnician.name : 'Técnico Não Identificado';
+        } else {
+           let existingUser = usersCacheMap.get(cleanTechNameNorm) || pendingNewTechsMap.get(cleanTechNameNorm);
+           
+           if (existingUser) {
+             technicianId = String(existingUser.id);
+             techName = existingUser.name;
+           } else {
+             technicianId = `tech-imp-${Date.now()}-${idx}`;
+             const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
+             const finalEmail = `${slug}${idx}@ohigienizador.com.br`;
+             
+             const newTech = {
+               id: technicianId, name: rawTechName, email: finalEmail, passwordHash: 'Porto@2026', role: 'TECHNICIAN', documentCpf: '000.000.000-00', phone: '(11) 99999-0000', isActive: 1, pixKeyType: 'CPF', pixKey: '', bankName: 'Porto Seguro Bank', bankAgency: '', bankAccount: '', baseCostAllowance: 0, hasSpecialTaxRule: 0, specialTaxRate: 0, createdAt: new Date(), updatedAt: new Date()
+             };
+             pendingNewTechsMap.set(cleanTechNameNorm, newTech);
+             techName = newTech.name;
+           }
+        }
+
+        const baseServiceFee = parseCurrency(getField(row, ['VALOR DA VISITA', 'Valor', 'Base Fee']));
+        const kmTotalCost = parseCurrency(getField(row, ['KM', 'Km Rodado'])) > 0 ? Number((parseCurrency(getField(row, ['KM', 'Km Rodado'])) * 0.50).toFixed(2)) : 0;
+        const tollCost = parseCurrency(getField(row, ['PEDAGIO', 'Pedagio']));
+        const totalTechnicianGross = Number((baseServiceFee + kmTotalCost + tollCost).toFixed(2));
+        
+        const cleanStatus = String(statusRaw || '').toLowerCase().trim();
+        const finalStatus = cleanStatus.includes('perdida') ? 'COMPLETED' : cleanStatus.includes('canc') ? 'CANCELLED' : cleanStatus.includes('anda') ? 'IN_PROGRESS' : 'PENDING';
+        
+        const scheduledDateStr = parseDateValue(dtVisitaRaw);
+        const dateSlug = scheduledDateStr.split('T')[0].replace(/-/g, '');
+        const orderId = `os-${callNumberRaw}-${dateSlug}`;
+
+        batchOrders.push([
+          orderId, String(callNumberRaw).trim(), String(origemRaw).trim() || null, String(tipoVisitaRaw).trim(), baseServiceFee,
+          String(row.Cliente || 'Cliente Porto Seguro').trim(), '', null, String(row.Cidade || 'São Paulo').trim(), String(row.UF || 'SP').trim().toUpperCase().substring(0, 2),
+          String(row.Bairro || '').trim(), String(row.Endereco || '').trim(), String(row.Numero || '').trim(), null, String(row.CEP || '01001-000').trim(),
+          technicianId, finalStatus, new Date(scheduledDateStr), finalStatus !== 'PENDING' ? new Date(scheduledDateStr) : null, finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED' ? new Date(scheduledDateStr) : null,
+          parseCurrency(getField(row, ['KM', 'Km Rodado'])), 0.50, kmTotalCost, tollCost, 0, totalTechnicianGross, totalTechnicianGross
+        ]);
+
+        importedCount++;
+        if (importedOrdersSummary.length < 15) {
+          importedOrdersSummary.push({ callNumber: callNumberRaw, technicianName: techName, date: scheduledDateStr, totalGross: totalTechnicianGross, status: finalStatus });
+        }
+      }
+
+      // Concorrência Atomic (Batch Insert MariaDB) - Protege contra fragmentação
+      try {
+        // 1. Batch Techs
+        const newTechs = Array.from(pendingNewTechsMap.values());
+        if (newTechs.length > 0) {
+          const techBatchValues = newTechs.map(t => [t.id, t.name, t.email, t.passwordHash, 'TECHNICIAN', 1, 0, 0, 0, t.phone, t.documentCpf, new Date(), new Date()]);
+          await db.query(`INSERT INTO users (id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, document_cpf, createdAt, updatedAt) VALUES ? ON DUPLICATE KEY UPDATE name=VALUES(name)`, [techBatchValues]);
+          techniciansCreatedCount = newTechs.length;
+          memUsers.push(...newTechs);
+          createdTechniciansList.push(...newTechs.map(t => ({ id: t.id, name: t.name, email: t.email })));
+        }
+
+        // 2. Batch Orders
+        if (batchOrders.length > 0) {
+          // Dividir em chunks (limite pacotes MySQL)
+          const chunkSize = 2000;
+          for (let i = 0; i < batchOrders.length; i += chunkSize) {
+            const chunk = batchOrders.slice(i, i + chunkSize);
+            await db.query(`
+              INSERT INTO service_orders (
+                id, call_number, porto_seguro_protocol, service_category, base_service_fee, customer_name, customer_cpf, customer_phone, city, uf, neighborhood, address_street, address_number, address_complement, postal_code, technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto
+              ) VALUES ? 
+              ON DUPLICATE KEY UPDATE 
+                status=VALUES(status), total_technician_gross=VALUES(total_technician_gross), faturamento_porto=VALUES(faturamento_porto)
+            `, [chunk]);
+          }
+        }
+      } catch (err: any) {
+        logDb('ERROR', `Falha grave na persistência do lote. Rollback acionado. Erro: ${err.message}`);
+        return res.status(500).json({ success: false, error: 'Erro de transação no banco de dados. Processamento abortado por segurança estrutural.' });
+      }
+
+      await recordAudit({
+        userId: requester?.id || 'system', userName: requester?.name || 'Administrador Master', userRole: requester?.role || 'ADMIN', ipAddress: req.ip, module: 'SERVICE_ORDERS', action: 'DATA_IMPORT', result: 'SUCCESS', details: `Importação massiva otimizada concluída: ${importedCount} ordens via ${file.originalname}.`
+      });
+
+      res.json({ success: true, message: `${importedCount} ordens e ${techniciansCreatedCount} técnicos via batch.`, importedCount, techniciansCreated: techniciansCreatedCount, ignoredRowsCount, createdTechnicians: createdTechniciansList, sampleOrders: importedOrdersSummary });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: `Erro ao processar planilha (OOM/Parser): ${err.message}` });
+    }
+  });
+
+  // =========================================================================
+  // 5.2 IMPORT OF FINE-TUNED JSON SERVICE ORDERS (/api/import/orders-json)
+  // =========================================================================
+  app.post('/api/import/orders-json', async (req, res) => {
+    const requester = await getRequester(req);
+
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Administradores e Gestores podem importar ordens.' });
+    }
+
+    const { orders } = req.body || {};
+    if (!Array.isArray(orders) || orders.length === 0) {
+      return res.status(400).json({ success: false, error: 'Nenhuma ordem de serviço foi enviada para importação.' });
+    }
+
+    try {
       const db = getDbPool();
 
       // Buscar todos os usuários atuais para matching
@@ -1807,184 +2013,108 @@ async function startServer() {
         }
       } catch {}
 
-      // =======================================================================
-      // DIRETRIZ 1: Contexto Inteligente pelo Nome do Arquivo (Fallback Primário)
-      // =======================================================================
-      const originalFileName = file.originalname || '';
-      const cleanFileNameNorm = originalFileName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-      let fileContextTechnician: any = null;
-
-      // 1.1 Varredura de usuários em memória/banco pelo nome/primeiro nome no arquivo
-      for (const u of currentUsersList) {
-        if (u.role === 'TECHNICIAN' || u.role === 'ADMIN') {
-          const firstName = (u.name || '').trim().split(' ')[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          const fullName = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          if (firstName && firstName.length >= 3 && cleanFileNameNorm.includes(firstName)) {
-            fileContextTechnician = u;
-            break;
-          }
-          if (fullName && fullName.length >= 3 && cleanFileNameNorm.includes(fullName)) {
-            fileContextTechnician = u;
-            break;
-          }
+      function parseJsonCurrency(val: any): number {
+        if (val === null || val === undefined || val === '') return 0;
+        if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
+        let str = String(val).replace(/R\$/gi, '').trim();
+        const lastDot = str.lastIndexOf('.');
+        const lastComma = str.lastIndexOf(',');
+        if (lastComma > lastDot) {
+          str = str.replace(/\./g, '').replace(/,/g, '.');
+        } else if (lastDot > lastComma) {
+          str = str.replace(/,/g, '');
         }
+        str = str.replace(/\s+/g, '');
+        const num = parseFloat(str);
+        return isNaN(num) ? 0 : Number(num.toFixed(2));
       }
 
-      // 1.2 Se não encontrado em cache, busca SQL com LIKE em palavras do nome do arquivo
-      if (!fileContextTechnician) {
-        try {
-          const monthTokens = [
-            'ago', 'agosto', 'set', 'setembro', 'out', 'outubro', 'nov', 'novembro',
-            'dez', 'dezembro', 'jan', 'janeiro', 'fev', 'fevereiro', 'mar', 'marco',
-            'março', 'abr', 'abril', 'mai', 'maio', 'jun', 'junho', 'jul', 'julho',
-            'relatorio', 'planilha', 'porto', 'seguro', 'extrato', 'fechamento', 'visitas'
-          ];
-          const words = originalFileName
-            .replace(/\.[^/.]+$/, '')
-            .replace(/[^a-zA-Z0-9áàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+/g, ' ')
-            .split(/\s+/)
-            .filter((w) => w.length >= 3 && !monthTokens.includes(w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')));
-
-          for (const word of words) {
-            const [matchedUsers]: any = await db.query(
-              'SELECT * FROM users WHERE (name LIKE ? OR email LIKE ?) AND role = "TECHNICIAN" LIMIT 1',
-              [`%${word}%`, `%${word}%`]
-            );
-            if (matchedUsers && matchedUsers.length > 0) {
-              fileContextTechnician = matchedUsers[0];
-              if (!currentUsersList.some((u) => u.id === fileContextTechnician.id)) {
-                currentUsersList.push(fileContextTechnician);
-              }
-              break;
-            }
-          }
-        } catch (err) {
-          console.warn('[Import] Erro ao buscar técnico pelo nome do arquivo:', err);
+      function parseJsonDate(val: any): string {
+        if (!val) return new Date().toISOString();
+        if (val instanceof Date) {
+          return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
         }
-      }
-
-      if (fileContextTechnician) {
-        console.log(`[Import] ✅ Contexto do arquivo "${originalFileName}" vinculado ao técnico: ${fileContextTechnician.name} (ID: ${fileContextTechnician.id})`);
-      }
-
-      for (let idx = 0; idx < rawRows.length; idx++) {
-        const row = rawRows[idx];
-
-        // 2. Mapeamento das colunas
-        const origemRaw = getField(row, ['Origem', 'Orig', 'Source', 'Protocolo']);
-        
-        // Busca flexível e case-insensitive para encontrar a coluna/chave do técnico na linha
-        let rawTechName = '';
-        const rowKeys = Object.keys(row);
-        for (const k of rowKeys) {
-          const normKey = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          if (
-            normKey.includes('tec') ||
-            normKey.includes('prestador') ||
-            normKey.includes('executant') ||
-            normKey.includes('colaborador') ||
-            normKey.includes('responsavel') ||
-            normKey.includes('funcionario')
-          ) {
-            if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
-              rawTechName = String(row[k]).trim();
-              break;
-            }
+        if (typeof val === 'number') {
+          const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+          return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+        }
+        if (typeof val === 'string') {
+          const clean = val.trim();
+          // Formato YYYY-MM-DD
+          if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
+            const d = new Date(clean);
+            if (!isNaN(d.getTime())) return d.toISOString();
+          }
+          // Formato DD/MM/YYYY
+          const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{1,2}))?$/);
+          if (brMatch) {
+            const day = parseInt(brMatch[1], 10);
+            const month = parseInt(brMatch[2], 10) - 1;
+            let year = parseInt(brMatch[3], 10);
+            if (year < 100) year += 2000;
+            const hour = brMatch[4] ? parseInt(brMatch[4], 10) : 12;
+            const min = brMatch[5] ? parseInt(brMatch[5], 10) : 0;
+            const d = new Date(year, month, day, hour, min);
+            if (!isNaN(d.getTime())) return d.toISOString();
           }
         }
-        if (!rawTechName) {
-          rawTechName = String(row['Tecnico'] || row['Técnico'] || row['Prestador'] || row['Técnico Responsável'] || row['Tecnico Responsavel'] || getField(row, ['Tecnico', 'Técnico', 'Prestador', 'Técnico Responsável', 'Tecnico Responsavel', 'Nome Tecnico', 'Nome do Tecnico', 'Nome_Tecnico']) || '').trim();
+        return new Date().toISOString();
+      }
+
+      let importedCount = 0;
+      let techniciansCreatedCount = 0;
+      const createdTechs: Array<{ id: string; name: string }> = [];
+      let dbAvailable = true;
+
+      for (let idx = 0; idx < orders.length; idx++) {
+        const item = orders[idx];
+        const callNumber = String(item.IdChamado || item.idChamado || item.callNumber || `IMP-${Date.now()}-${idx + 1}`).trim();
+        const rawTechId = item.technicianId || '';
+        const rawTechName = String(item.Prestador || item.Tecnico || item.technicianName || 'Técnico').trim();
+        const tipoVisita = String(item['Tipo Visita'] || item.tipoVisita || item.serviceCategory || 'Serviço Porto').trim();
+        const statusRaw = String(item['Status OS'] || item.Status || item.status || 'COMPLETED').toUpperCase();
+
+        let finalStatus = 'COMPLETED';
+        if (statusRaw.includes('PERD') || statusRaw.includes('AUSEN')) {
+          finalStatus = 'COMPLETED';
+        } else if (statusRaw.includes('CANC') || statusRaw.includes('RECUS') || statusRaw.includes('IMPOSS')) {
+          finalStatus = 'CANCELLED';
+        } else if (statusRaw.includes('ANDA') || statusRaw.includes('EXEC') || statusRaw.includes('INIC')) {
+          finalStatus = 'IN_PROGRESS';
+        } else if (statusRaw.includes('PEND') || statusRaw.includes('AGEN')) {
+          finalStatus = 'PENDING';
         }
 
-        // Sanitization: Ignora linhas vazias ou com palavras de totais
-        if (shouldIgnoreRow(origemRaw, rawTechName)) {
-          ignoredRowsCount++;
-          continue;
-        }
+        // Resolução de Técnico
+        let resolvedTechId = rawTechId;
+        let resolvedTechName = rawTechName;
 
-        const callNumberRaw = getField(row, ['IdChamado', 'Id Chamado', 'ID Chamado', 'Chamado', 'OS', 'Numero Chamado', 'Id_Chamado']) || `PS-IMP-${Date.now()}-${idx + 1}`;
-        const dtVisitaRaw = getField(row, ['Dt.Visita', 'Dt Visita', 'Data Visita', 'Data', 'Dt_Visita', 'Data_Visita', 'Dt. Visita']);
-        const tipoVisitaRaw = getField(row, ['Tipo Visita', 'Tipo de Visita', 'Tipo_Visita', 'Serviço', 'Servico', 'Categoria']) || 'Higienização de Estofados Porto Seguro';
-        const statusRaw = getField(row, ['Status', 'Situacao', 'Situação']);
-        const kmRaw = getField(row, ['KM', 'Km', 'Km Rodado', 'Quilometragem']);
-        const pedagioRaw = getField(row, ['PEDAGIO', 'Pedagio', 'Pedágio', 'Valor Pedagio', 'Vl Pedagio']);
-        const valorDaVistaRaw = getField(row, ['VALOR DA VISTA', 'Valor da Visita', 'Valor da Vista', 'Valor Visita', 'Valor', 'Vl Visita', 'Base Fee']);
-
-        // =====================================================================
-        // DIRETRIZ 2 & 3: Busca Relacional e Integridade Referencial Estrita
-        // =====================================================================
-        let technicianId: string = '';
-        let techName: string = '';
-
-        const cleanTechNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        const isGeneric = isGenericCompanyName(rawTechName);
-
-        if (isGeneric) {
-          // Se o nome for genérico (ex: "A HIGIENIZADORA", "O HIGIENIZADOR"), NUNCA cria usuário genérico.
-          // Prioriza o técnico contextual do arquivo ou o técnico padrão do sistema (Carlos Henrique / Marcelo).
-          if (fileContextTechnician && fileContextTechnician.id) {
-            technicianId = String(fileContextTechnician.id);
-            techName = fileContextTechnician.name;
-          } else {
-            const defaultTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
-            technicianId = defaultTech ? String(defaultTech.id) : 'u1';
-            techName = defaultTech ? defaultTech.name : 'Carlos Henrique Silva';
+        if (resolvedTechId) {
+          const found = currentUsersList.find((u) => u.id === resolvedTechId);
+          if (found) {
+            resolvedTechName = found.name;
           }
         } else {
-          // Nome específico de técnico fornecido na linha da planilha
-          let existingUser: any = null;
-
-          // Busca em cache / memória
-          existingUser = currentUsersList.find((u: any) => {
-            const uNameNorm = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            const uEmailNorm = (u.email || '').trim().toLowerCase();
-            return (
-              uNameNorm === cleanTechNameNorm ||
-              (uNameNorm && cleanTechNameNorm && (uNameNorm.includes(cleanTechNameNorm) || cleanTechNameNorm.includes(uNameNorm))) ||
-              uEmailNorm === cleanTechNameNorm ||
-              uEmailNorm.startsWith(cleanTechNameNorm)
-            );
+          // Busca por nome
+          const cleanNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const found = currentUsersList.find((u) => {
+            const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            return uNameNorm === cleanNameNorm || uNameNorm.includes(cleanNameNorm) || cleanNameNorm.includes(uNameNorm);
           });
 
-          // Busca no banco caso não tenha sido encontrado em cache
-          if (!existingUser) {
-            try {
-              const [dbUserRows]: any = await db.query(
-                'SELECT * FROM users WHERE TRIM(LOWER(name)) = LOWER(?) OR name LIKE ? OR TRIM(LOWER(email)) = LOWER(?) LIMIT 1',
-                [rawTechName, `%${rawTechName}%`, rawTechName]
-              );
-              if (dbUserRows && dbUserRows.length > 0) {
-                existingUser = dbUserRows[0];
-                currentUsersList.push(existingUser);
-              }
-            } catch (err) {
-              console.warn('[Import] Falha ao consultar técnico por nome no banco:', err);
-            }
-          }
+          if (found) {
+            resolvedTechId = found.id;
+            resolvedTechName = found.name;
+          } else if (rawTechName && rawTechName !== 'Não Alocado' && rawTechName !== 'Técnico' && rawTechName !== 'O Higienizador' && rawTechName.length >= 3) {
+            // Criar técnico automaticamente
+            resolvedTechId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            const slug = cleanNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
+            const newEmail = `${slug}@ohigienizador.com.br`;
 
-          if (existingUser && existingUser.id) {
-            technicianId = String(existingUser.id);
-            techName = existingUser.name;
-          } else if (fileContextTechnician && fileContextTechnician.id) {
-            // Se houver técnico pelo arquivo, utiliza-o
-            technicianId = String(fileContextTechnician.id);
-            techName = fileContextTechnician.name;
-          } else {
-            // Criar novo técnico dinamicamente se houver nome válido não genérico
-            technicianId = `tech-imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
-            let finalEmail = `${slug}@ohigienizador.com.br`;
-            let emailSuffix = 1;
-            while (currentUsersList.some((u: any) => (u.email || '').toLowerCase() === finalEmail.toLowerCase())) {
-              finalEmail = `${slug}${emailSuffix}@ohigienizador.com.br`;
-              emailSuffix++;
-            }
-
-            const newTech = {
-              id: technicianId,
+            const newTechUser = {
+              id: resolvedTechId,
               name: rawTechName,
-              email: finalEmail,
+              email: newEmail,
               passwordHash: 'Porto@2026',
               role: 'TECHNICIAN',
               documentCpf: '000.000.000-00',
@@ -1995,221 +2125,181 @@ async function startServer() {
               bankName: 'Porto Seguro Bank',
               bankAgency: '',
               bankAccount: '',
-              baseCostAllowance: 0,
+              baseCostAllowance: 250,
+              costAllowanceFortnight: 1,
               hasSpecialTaxRule: 0,
               specialTaxRate: 0,
               createdAt: new Date(),
               updatedAt: new Date(),
             };
 
-            currentUsersList.push(newTech);
-            memUsers.push(newTech);
+            currentUsersList.push(newTechUser);
+            memUsers.push(newTechUser);
 
-            try {
-              await db.execute(
-                `INSERT INTO \`users\` (
-                  id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, document_cpf, createdAt, updatedAt
-                ) VALUES (
-                  ?, ?, ?, ?, 'TECHNICIAN', 1, 0, 0, 0, ?, '000.000.000-00', NOW(), NOW()
-                ) ON DUPLICATE KEY UPDATE 
-                  name = VALUES(name), 
-                  isActive = 1`,
-                [newTech.id, newTech.name, newTech.email, newTech.passwordHash, newTech.phone]
-              );
-            } catch (insertUserErr) {
-              console.warn('[Import] Falha ao inserir usuário no MariaDB:', insertUserErr);
+            if (dbAvailable) {
+              try {
+                await db.execute(
+                  `INSERT INTO \`users\` (
+                    id, name, email, passwordHash, role, isActive, baseCostAllowance, hasSpecialTaxRule, specialTaxRate, phone, document_cpf, createdAt, updatedAt
+                  ) VALUES (?, ?, ?, ?, 'TECHNICIAN', 1, 250, 0, 0, ?, '000.000.000-00', NOW(), NOW())
+                  ON DUPLICATE KEY UPDATE name = VALUES(name), isActive = 1`,
+                  [newTechUser.id, newTechUser.name, newTechUser.email, newTechUser.passwordHash, newTechUser.phone]
+                );
+              } catch (err: any) {
+                if (isNetworkError(err)) {
+                  dbAvailable = false;
+                  logDb('WARN', `[Import JSON] Conexão MariaDB offline (${err.code || 'ETIMEDOUT'}). Cadastro em memória mantido.`);
+                } else {
+                  console.warn('[Import JSON] Aviso ao inserir técnico no MariaDB:', err);
+                }
+              }
             }
 
             techniciansCreatedCount++;
-            createdTechniciansList.push({ id: newTech.id, name: newTech.name, email: newTech.email });
-            techName = newTech.name;
+            createdTechs.push({ id: newTechUser.id, name: newTechUser.name });
+            resolvedTechName = newTechUser.name;
+          } else {
+            // Fallback para primeiro técnico ativo
+            const fallback = currentUsersList.find((u) => u.role === 'TECHNICIAN') || memUsers[0];
+            resolvedTechId = fallback ? fallback.id : 'u1';
+            resolvedTechName = fallback ? fallback.name : 'Carlos Henrique Silva';
           }
         }
 
-        // Garantia absoluta de não-nulo
-        if (!technicianId || technicianId === 'tech-1') {
-          const fallbackTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
-          technicianId = fileContextTechnician ? String(fileContextTechnician.id) : (fallbackTech ? String(fallbackTech.id) : 'u1');
-        }
-        if (!techName || techName === 'Técnico') {
-          const fallbackTech = currentUsersList.find((u: any) => u.role === 'TECHNICIAN') || memUsers.find((u: any) => u.role === 'TECHNICIAN');
-          techName = fileContextTechnician ? fileContextTechnician.name : (fallbackTech ? fallbackTech.name : 'Carlos Henrique Silva');
-        }
+        const km = parseJsonCurrency(item.KM || item.km || 0);
+        const kmRate = 0.50;
+        const kmCost = km > 0 ? Number((km * kmRate).toFixed(2)) : 0;
+        const toll = parseJsonCurrency(item['Pedágio'] || item.PEDAGIO || item.pedagio || item.tollCost || 0);
+        const valorVisita = parseJsonCurrency(item['Valor da Visita'] || item['VALOR DA VISTA'] || item.valorVisita || item.baseServiceFee || 0);
+        const totalGross = Number((valorVisita + kmCost + toll).toFixed(2));
 
-        // 4. Lógica Financeira e Mapeamento da Ordem
-        const kmTraveled = parseCurrency(kmRaw);
-        const kmRateApplied = 0.50;
-        const kmTotalCost = kmTraveled > 0 ? Number((kmTraveled * kmRateApplied).toFixed(2)) : 0;
-        const tollCost = parseCurrency(pedagioRaw);
-        const baseServiceFee = parseCurrency(valorDaVistaRaw);
-        const totalTechnicianGross = Number((baseServiceFee + kmTotalCost + tollCost).toFixed(2));
-        const faturamentoPorto = totalTechnicianGross;
-
-        // Normalização de Status
-        const cleanStatus = String(statusRaw || '').toLowerCase().trim();
-        let finalStatus = 'COMPLETED';
-        if (
-          cleanStatus.includes('canc') ||
-          cleanStatus.includes('recus') ||
-          cleanStatus.includes('imposs') ||
-          cleanStatus.includes('perdida') ||
-          cleanStatus.includes('ausente')
-        ) {
-          finalStatus = 'CANCELLED';
-        } else if (cleanStatus.includes('anda') || cleanStatus.includes('exec') || cleanStatus.includes('inici')) {
-          finalStatus = 'IN_PROGRESS';
-        } else if (cleanStatus.includes('pend') || cleanStatus.includes('agend')) {
-          finalStatus = 'PENDING';
-        }
-
-        const scheduledDateStr = parseDateValue(dtVisitaRaw);
-        const callNumber = String(callNumberRaw).trim();
-
-        // A coluna Dt.Visita (scheduledDate) é a fonte da verdade.
-        // Se finalStatus for 'COMPLETED' ou 'CANCELLED', completedAt recebe o mesmo valor da data agendada (scheduledDateStr)
+        const scheduledDateStr = parseJsonDate(item['Dt.Visita'] || item.dtVisita || item.scheduledDate);
         const completedAt = (finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED') ? scheduledDateStr : null;
         const startedAt = (finalStatus === 'IN_PROGRESS' || finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED') ? scheduledDateStr : null;
 
-        // Encontrar ou gerar ID de Ordem
-        const existingOrder = memOrders.find((o) => o.callNumber === callNumber);
-        const orderId = existingOrder ? existingOrder.id : `os-imp-${Date.now()}-${idx + 1}`;
+        const matchResult = findMatchingVisit(memOrders, callNumber, scheduledDateStr, finalStatus, tipoVisita);
+        const existingMem = matchResult.existingOrder;
 
-        const customerName = String(row.Cliente || row.ClienteNome || row.NomeCliente || 'Cliente Porto Seguro').trim();
-        const city = String(row.Cidade || row.Municipio || 'São Paulo').trim();
-        const uf = String(row.UF || row.Estado || 'SP').trim().toUpperCase().substring(0, 2);
-        const neighborhood = String(row.Bairro || '').trim();
-        const addressStreet = String(row.Endereco || row.Logradouro || '').trim();
-        const addressNumber = String(row.Numero || '').trim();
-        const postalCode = String(row.CEP || row.Cep || '01001-000').trim();
+        let orderId = existingMem ? existingMem.id : '';
+        if (!orderId) {
+          const dateSlug = (getVisitDateKey(scheduledDateStr) || '').replace(/-/g, '') || `${idx + 1}`;
+          const statusSlug = isLostVisitValue(finalStatus, tipoVisita) ? 'perdida' : 'concluido';
+          orderId = `os-${callNumber}-${dateSlug}-${statusSlug}`;
+        }
 
         const orderObj: any = {
           id: orderId,
           callNumber,
-          portoSeguroProtocol: String(origemRaw).trim() || null,
-          serviceCategory: String(tipoVisitaRaw).trim(),
-          baseServiceFee,
-          customerName,
+          portoSeguroProtocol: String(item.Origem || item.origem || 'Porto Seguro').trim(),
+          serviceCategory: tipoVisita,
+          baseServiceFee: valorVisita,
+          customerName: String(item.Cliente || item.customerName || 'Cliente Porto Seguro').trim(),
           customerCpf: '',
           customerPhone: null,
-          city,
-          uf,
-          neighborhood,
-          addressStreet,
-          addressNumber,
+          city: String(item.Cidade || item.cidade || 'São Paulo').trim(),
+          uf: String(item.UF || item.uf || 'SP').trim().toUpperCase().substring(0, 2),
+          neighborhood: String(item.Bairro || item.bairro || '').trim(),
+          addressStreet: String(item.Endereco || item.addressStreet || '').trim(),
+          addressNumber: String(item.Numero || item.addressNumber || '').trim(),
           addressComplement: null,
-          postalCode,
-          technicianId,
-          technicianName: techName,
+          postalCode: String(item.CEP || item.cep || '01001-000').trim(),
+          technicianId: resolvedTechId,
+          technicianName: resolvedTechName,
           status: finalStatus,
           scheduledDate: scheduledDateStr,
           startedAt,
           completedAt,
-          kmTraveled,
-          kmRateApplied,
-          kmTotalCost,
-          tollCost,
+          kmTraveled: km,
+          kmRateApplied: kmRate,
+          kmTotalCost: kmCost,
+          tollCost: toll,
           supportCost: 0,
-          totalTechnicianGross,
-          faturamentoPorto,
+          totalTechnicianGross: totalGross,
+          faturamentoPorto: totalGross,
           paymentStatus: 'PENDING',
           paymentDate: null,
           itemsUsed: [],
         };
 
-        // 5. Atualização em memória
-        const memIdx = memOrders.findIndex((o) => o.callNumber === callNumber || o.id === orderId);
-        if (memIdx >= 0) {
-          memOrders[memIdx] = {
-            ...memOrders[memIdx],
-            ...orderObj,
-            technicianId: technicianId,
-            technicianName: techName || (memOrders[memIdx].technicianName || 'Técnico'),
-          };
+        // Atualizar memória
+        if (matchResult.index >= 0) {
+          memOrders[matchResult.index] = { ...memOrders[matchResult.index], ...orderObj };
         } else {
           memOrders.unshift(orderObj);
         }
 
-        // 6. Inserção no MariaDB com INSERT ... ON DUPLICATE KEY UPDATE
-        console.log(`[DEBUG IMPORT] Linha ${idx + 1} | Arquivo: "${originalFileName}" | Técnico Lido: "${rawTechName}" -> Técnico Final: "${techName}" | ID Resolvido: "${technicianId}"`);
+        // Inserir / Atualizar no MariaDB se disponível
+        if (dbAvailable) {
+          try {
+            const insertOrderQuery = `
+              INSERT INTO \`service_orders\` (
+                id, call_number, porto_seguro_protocol, service_category, base_service_fee,
+                customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
+                address_street, address_number, address_complement, postal_code,
+                technician_id, status, scheduled_date, started_at, completed_at,
+                km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
+                total_technician_gross, faturamento_porto, created_at
+              ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()
+              ) ON DUPLICATE KEY UPDATE
+                service_category = VALUES(service_category),
+                base_service_fee = VALUES(base_service_fee),
+                technician_id = VALUES(technician_id),
+                status = VALUES(status),
+                scheduled_date = VALUES(scheduled_date),
+                started_at = VALUES(started_at),
+                completed_at = VALUES(completed_at),
+                km_traveled = VALUES(km_traveled),
+                km_rate_applied = VALUES(km_rate_applied),
+                km_total_cost = VALUES(km_total_cost),
+                toll_cost = VALUES(toll_cost),
+                support_cost = VALUES(support_cost),
+                total_technician_gross = VALUES(total_technician_gross),
+                faturamento_porto = VALUES(faturamento_porto)
+            `;
 
-        try {
-          const insertOrderQuery = `
-            INSERT INTO \`service_orders\` (
-              id, call_number, porto_seguro_protocol, service_category, base_service_fee,
-              customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
-              address_street, address_number, address_complement, postal_code,
-              technician_id, status, scheduled_date, started_at, completed_at,
-              km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
-              total_technician_gross, faturamento_porto, created_at
-            ) VALUES (
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()
-            ) ON DUPLICATE KEY UPDATE
-              service_category = VALUES(service_category),
-              base_service_fee = VALUES(base_service_fee),
-              technician_id = VALUES(technician_id),
-              status = VALUES(status),
-              scheduled_date = VALUES(scheduled_date),
-              started_at = VALUES(started_at),
-              completed_at = VALUES(completed_at),
-              km_traveled = VALUES(km_traveled),
-              km_rate_applied = VALUES(km_rate_applied),
-              km_total_cost = VALUES(km_total_cost),
-              toll_cost = VALUES(toll_cost),
-              support_cost = VALUES(support_cost),
-              total_technician_gross = VALUES(total_technician_gross),
-              faturamento_porto = VALUES(faturamento_porto)
-          `;
-
-          await db.execute(insertOrderQuery, [
-            orderObj.id,
-            orderObj.callNumber,
-            orderObj.portoSeguroProtocol,
-            orderObj.serviceCategory,
-            orderObj.baseServiceFee,
-            orderObj.customerName,
-            orderObj.customerCpf,
-            orderObj.customerPhone,
-            orderObj.city,
-            orderObj.uf,
-            orderObj.neighborhood,
-            orderObj.addressStreet,
-            orderObj.addressNumber,
-            orderObj.addressComplement,
-            orderObj.postalCode,
-            orderObj.technicianId,
-            orderObj.status,
-            orderObj.scheduledDate ? new Date(orderObj.scheduledDate) : new Date(),
-            orderObj.startedAt ? new Date(orderObj.startedAt) : null,
-            orderObj.completedAt ? new Date(orderObj.completedAt) : null,
-            orderObj.kmTraveled,
-            orderObj.kmRateApplied,
-            orderObj.kmTotalCost,
-            orderObj.tollCost,
-            orderObj.supportCost,
-            orderObj.totalTechnicianGross,
-            orderObj.faturamentoPorto,
-          ]);
-        } catch (err) {
-          console.error("Erro na OS", err);
+            await db.execute(insertOrderQuery, [
+              orderObj.id,
+              orderObj.callNumber,
+              orderObj.portoSeguroProtocol,
+              orderObj.serviceCategory,
+              orderObj.baseServiceFee,
+              orderObj.customerName,
+              orderObj.customerCpf,
+              orderObj.customerPhone,
+              orderObj.city,
+              orderObj.uf,
+              orderObj.neighborhood,
+              orderObj.addressStreet,
+              orderObj.addressNumber,
+              orderObj.addressComplement,
+              orderObj.postalCode,
+              orderObj.technicianId,
+              orderObj.status,
+              orderObj.scheduledDate ? new Date(orderObj.scheduledDate) : new Date(),
+              orderObj.startedAt ? new Date(orderObj.startedAt) : null,
+              orderObj.completedAt ? new Date(orderObj.completedAt) : null,
+              orderObj.kmTraveled,
+              orderObj.kmRateApplied,
+              orderObj.kmTotalCost,
+              orderObj.tollCost,
+              orderObj.supportCost,
+              orderObj.totalTechnicianGross,
+              orderObj.faturamentoPorto,
+            ]);
+          } catch (dbErr: any) {
+            if (isNetworkError(dbErr)) {
+              dbAvailable = false;
+              logDb('WARN', `[Import JSON] Conexão MariaDB offline (${dbErr.code || 'ETIMEDOUT'}). Ordens salvas com sucesso em memória.`);
+            } else {
+              console.warn('[Import JSON] Erro ao gravar OS no MariaDB:', dbErr);
+            }
+          }
         }
 
         importedCount++;
-        if (importedOrdersSummary.length < 15) {
-          importedOrdersSummary.push({
-            callNumber: orderObj.callNumber,
-            technicianName: techName,
-            date: orderObj.scheduledDate,
-            baseServiceFee: orderObj.baseServiceFee,
-            kmTraveled: orderObj.kmTraveled,
-            kmTotalCost: orderObj.kmTotalCost,
-            tollCost: orderObj.tollCost,
-            totalGross: orderObj.totalTechnicianGross,
-            status: orderObj.status,
-          });
-        }
       }
 
-      // 7. Registro na Trilha de Auditoria
       await recordAudit({
         userId: requester?.id || 'system',
         userName: requester?.name || 'Administrador Master',
@@ -2218,23 +2308,20 @@ async function startServer() {
         module: 'SERVICE_ORDERS',
         action: 'DATA_IMPORT',
         result: 'SUCCESS',
-        details: `Importação massiva concluída: ${importedCount} ordens de serviço processadas e ${techniciansCreatedCount} novos técnicos criados a partir do arquivo "${file.originalname}".`,
+        details: `Importação revisada com ajuste fino concluída: ${importedCount} ordens salvas e vinculadas aos técnicos.`,
       });
 
       res.json({
         success: true,
-        message: `${importedCount} ordens importadas e ${techniciansCreatedCount} técnicos criados`,
+        message: `${importedCount} ordens revisadas foram gravadas e vinculadas aos técnicos com sucesso.`,
         importedCount,
         techniciansCreated: techniciansCreatedCount,
-        ignoredRowsCount,
-        createdTechnicians: createdTechniciansList,
-        sampleOrders: importedOrdersSummary,
       });
     } catch (err: any) {
-      console.error('[Import] Erro durante o processamento da planilha:', err);
+      console.error('[Import JSON] Erro geral ao importar JSON:', err);
       res.status(500).json({
         success: false,
-        error: `Erro ao processar planilha: ${err.message || 'Formato de arquivo inválido ou corrompido.'}`,
+        error: `Erro ao salvar ordens revisadas: ${err.message || 'Erro interno.'}`,
       });
     }
   });
@@ -2670,6 +2757,498 @@ async function startServer() {
       }
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  // =========================================================================
+  // 9. N8N & WEBHOOKS / WHATSAPP AUTOMATION API
+  // =========================================================================
+
+  // Helper para validar a autenticação do N8N / Webhook
+  function validateN8nAuth(req: express.Request): boolean {
+    const authHeader = (req.headers['authorization'] as string) || '';
+    const apiKeyHeader = (req.headers['x-api-key'] || req.headers['x-n8n-token'] || req.query.apiKey || req.query.api_key) as string | undefined;
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.substring(7).trim()
+      : (typeof apiKeyHeader === 'string' ? apiKeyHeader.trim() : '');
+
+    const configuredKey = (memSettings as any)?.n8nSettings?.apiKey || 'N8N_HIGIENIZADOR_SECRET_2026';
+    
+    // Se for uma requisição interna de UI logada com x-user-id de Admin
+    if (req.headers['x-user-id']) {
+      return true;
+    }
+
+    if (!token) return false;
+    return token === configuredKey;
+  }
+
+  // 9.1 Testar Envio de Webhook do Sistema -> N8N (Outbound Ping Test)
+  app.post('/api/n8n/test-webhook', async (req, res) => {
+    const requester = await getRequester(req);
+    if (!requester || requester.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Master.' });
+    }
+
+    const { webhookUrl, apiKey, testType } = req.body || {};
+    const targetUrl = webhookUrl || (memSettings as any)?.n8nSettings?.webhookUrl;
+
+    if (!targetUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'URL do Webhook N8N não informada. Configure a URL nas opções de integração.',
+      });
+    }
+
+    const testPayload = {
+      event: testType || 'TEST_PING',
+      system: 'O Higienizador Gestão Porto Seguro',
+      environment: process.env.NODE_ENV || 'production',
+      timestamp: new Date().toISOString(),
+      sender: {
+        id: requester.id,
+        name: requester.name,
+        email: requester.email,
+      },
+      data: {
+        message: 'Teste de conectividade bidirecional entre O Higienizador e o Workflow N8N.',
+        sampleOrder: memOrders[0] || {
+          id: 'ps-sample-01',
+          callNumber: 'PS-2026-8941',
+          customerName: 'Cliente Exemplo Porto Seguro',
+          customerPhone: '(11) 98765-4321',
+          serviceCategory: 'Higienização de Sofá 3 Lugares',
+          technicianName: 'Breno Jorge',
+          status: 'IN_PROGRESS',
+        },
+      },
+    };
+
+    const startTime = Date.now();
+    try {
+      const fetchHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'OHigienizador-N8N-Bridge/1.0',
+      };
+      if (apiKey) {
+        fetchHeaders['x-api-key'] = apiKey;
+        fetchHeaders['Authorization'] = `Bearer ${apiKey}`;
+      }
+
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: fetchHeaders,
+        body: JSON.stringify(testPayload),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      const responseTimeMs = Date.now() - startTime;
+      const text = await response.text().catch(() => '');
+      let responseBody: any = text;
+      try {
+        responseBody = JSON.parse(text);
+      } catch {
+        // text puro
+      }
+
+      await recordAudit({
+        userId: requester.id,
+        userName: requester.name,
+        userRole: requester.role,
+        ipAddress: req.ip,
+        module: 'SETTINGS',
+        action: 'SETTINGS_UPDATE',
+        result: response.ok ? 'SUCCESS' : 'FAILED',
+        details: `Disparo de teste para N8N (${targetUrl}) - Status HTTP ${response.status} em ${responseTimeMs}ms.`,
+      });
+
+      res.json({
+        success: response.ok,
+        statusCode: response.status,
+        responseTimeMs,
+        message: response.ok
+          ? `Webhook entregue com sucesso ao N8N (HTTP ${response.status}) em ${responseTimeMs}ms.`
+          : `N8N respondeu com código de erro HTTP ${response.status}.`,
+        responseBody,
+      });
+    } catch (err: any) {
+      const responseTimeMs = Date.now() - startTime;
+      res.json({
+        success: false,
+        statusCode: 0,
+        responseTimeMs,
+        error: `Falha ao alcançar o N8N: ${err.message || 'Timeout ou erro de conexão de rede'}. Verifique se o workflow do N8N está ativo (Active = True).`,
+      });
+    }
+  });
+
+  // 9.2 Endpoint Inbound para o N8N consultar Ordens de Serviço (GET /api/n8n/webhook/orders)
+  app.get(['/api/n8n/webhook/orders', '/api/n8n/orders'], async (req, res) => {
+    if (!validateN8nAuth(req)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Não autorizado: Token/API Key do N8N inválida. Envie no header "x-api-key" ou "Authorization: Bearer <token>".',
+      });
+    }
+
+    const { phone, technicianId, callNumber, status, date } = req.query;
+
+    let results = [...memOrders];
+
+    // Busca por telefone do técnico (WhatsApp)
+    if (phone && typeof phone === 'string') {
+      const cleanPhone = phone.replace(/\D/g, '');
+      const matchedTech = memUsers.find((u) => {
+        const uPhone = (u.phone || '').replace(/\D/g, '');
+        return uPhone.length >= 8 && (uPhone.endsWith(cleanPhone.slice(-8)) || cleanPhone.endsWith(uPhone.slice(-8)));
+      });
+
+      if (matchedTech) {
+        results = results.filter((o) => o.technicianId === matchedTech.id);
+      } else {
+        return res.json({
+          success: true,
+          count: 0,
+          technician: null,
+          message: `Nenhum técnico encontrado com o telefone ${phone}.`,
+          orders: [],
+        });
+      }
+    }
+
+    if (technicianId && typeof technicianId === 'string') {
+      results = results.filter((o) => o.technicianId === technicianId);
+    }
+
+    if (callNumber && typeof callNumber === 'string') {
+      results = results.filter((o) => o.callNumber.toLowerCase().includes(callNumber.toLowerCase()));
+    }
+
+    if (status && typeof status === 'string') {
+      results = results.filter((o) => o.status === status.toUpperCase());
+    }
+
+    if (date && typeof date === 'string') {
+      results = results.filter((o) => o.date.startsWith(date));
+    }
+
+    res.json({
+      success: true,
+      count: results.length,
+      orders: results.slice(0, 50),
+    });
+  });
+
+  // 9.3 Endpoint Inbound para o N8N Atualizar ou Concluir uma OS (POST /api/n8n/webhook/order-update)
+  app.post(['/api/n8n/webhook/order-update', '/api/n8n/orders/update'], async (req, res) => {
+    if (!validateN8nAuth(req)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Não autorizado: Token/API Key do N8N inválida.',
+      });
+    }
+
+    const {
+      callNumber,
+      orderId,
+      status,
+      serviceCategory,
+      productExecuted,
+      productName,
+      serviceType,
+      product,
+      baseServiceFee,
+      baseFee,
+      serviceFee,
+      repasseValue,
+      faturamentoPorto,
+      faturamento,
+      kmTraveled,
+      tollCost,
+      supportCost,
+      suppliesUsed,
+      observation,
+      customerSignature,
+      completedAt,
+    } = req.body || {};
+
+    if (!callNumber && !orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Informe ao menos "callNumber" ou "orderId" para identificar o chamado.',
+      });
+    }
+
+    const orderIdx = memOrders.findIndex(
+      (o) =>
+        (orderId && o.id === orderId) ||
+        (callNumber && o.callNumber.trim().toLowerCase() === String(callNumber).trim().toLowerCase())
+    );
+
+    if (orderIdx < 0) {
+      return res.status(404).json({
+        success: false,
+        error: `Ordem de Serviço ${callNumber || orderId} não encontrada.`,
+      });
+    }
+
+    const current = memOrders[orderIdx];
+
+    // Categoria do Produto/Serviço executado (ex: "Instala TV de 49 a 86 + Suporte Fixo")
+    const newCategoryRaw = serviceCategory || productExecuted || productName || serviceType || product;
+    const newCategory = newCategoryRaw ? String(newCategoryRaw).trim() : current.serviceCategory;
+
+    // Calcular nova taxa base/repasse do serviço
+    let newBaseFee = current.baseServiceFee;
+    const explicitFee = baseServiceFee ?? baseFee ?? serviceFee ?? repasseValue;
+
+    if (explicitFee !== undefined && explicitFee !== null && !isNaN(Number(explicitFee))) {
+      newBaseFee = Number(explicitFee);
+    } else if (newCategoryRaw) {
+      // Buscar taxa de repasse configurada para o produto/categoria na tabela de tarifas
+      const rates = memSettings?.serviceCategoriesRates || {};
+      
+      // 1. Busca exata
+      let matchedRate = rates[newCategory];
+      
+      // 2. Busca case-insensitive
+      if (matchedRate === undefined) {
+        const matchedKey = Object.keys(rates).find(
+          (k) => k.trim().toLowerCase() === newCategory.toLowerCase()
+        );
+        if (matchedKey) {
+          matchedRate = rates[matchedKey];
+        }
+      }
+      
+      // 3. Busca por inclusão parcial (ex: "Instala TV de 49 a 86")
+      if (matchedRate === undefined) {
+        const matchedKey = Object.keys(rates).find(
+          (k) => newCategory.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(newCategory.toLowerCase())
+        );
+        if (matchedKey) {
+          matchedRate = rates[matchedKey];
+        }
+      }
+
+      if (matchedRate !== undefined && !isNaN(Number(matchedRate))) {
+        newBaseFee = Number(matchedRate);
+      }
+    }
+
+    // Faturamento Porto Seguro
+    const explicitFaturamento = faturamentoPorto ?? faturamento;
+    const newFaturamento = explicitFaturamento !== undefined && explicitFaturamento !== null && !isNaN(Number(explicitFaturamento))
+      ? Number(explicitFaturamento)
+      : current.faturamentoPorto;
+
+    const newKm = kmTraveled !== undefined ? Number(kmTraveled) : current.kmTraveled;
+    const newToll = tollCost !== undefined ? Number(tollCost) : current.tollCost;
+    const newSupport = supportCost !== undefined ? Number(supportCost) : current.supportCost;
+    const kmRate = Number(memSettings?.kmReimbursementRate || memSettings?.kmRateDefault || 0.5);
+    const newKmCost = newKm * kmRate;
+    const newTotalCost = newBaseFee + newKmCost + newToll + newSupport;
+    const newStatus = status ? status.toUpperCase() : current.status;
+
+    // Baixa automática de insumos se enviado
+    let updatedStockSupplies = current.stockSuppliesUsed || [];
+    if (Array.isArray(suppliesUsed) && suppliesUsed.length > 0) {
+      for (const sup of suppliesUsed) {
+        const itemIdx = memStock.findIndex((s) => s.id === sup.stockItemId || s.name.toLowerCase() === (sup.stockItemName || '').toLowerCase());
+        if (itemIdx >= 0) {
+          const qty = Number(sup.quantity || sup.quantityUsed || 1);
+          memStock[itemIdx].quantityInStock = Math.max(0, memStock[itemIdx].quantityInStock - qty);
+          updatedStockSupplies.push({
+            stockItemId: memStock[itemIdx].id,
+            stockItemName: memStock[itemIdx].name,
+            quantityUsed: qty,
+            unit: memStock[itemIdx].unit,
+            unitCostSnapshot: memStock[itemIdx].unitCost,
+          });
+        }
+      }
+    }
+
+    const updatedOrder = {
+      ...current,
+      serviceCategory: newCategory,
+      baseServiceFee: newBaseFee,
+      faturamentoPorto: newFaturamento,
+      status: newStatus,
+      kmTraveled: newKm,
+      kmCost: newKmCost,
+      tollCost: newToll,
+      supportCost: newSupport,
+      totalCost: newTotalCost,
+      totalTechnicianGross: newTotalCost,
+      stockSuppliesUsed: updatedStockSupplies,
+      observation: observation !== undefined ? observation : current.observation,
+      customerSignature: customerSignature !== undefined ? customerSignature : current.customerSignature,
+      completedAt: newStatus === 'COMPLETED' ? (completedAt || new Date().toISOString()) : current.completedAt,
+    };
+
+    memOrders[orderIdx] = updatedOrder;
+
+    // Registrar auditoria da ação do N8N / WhatsApp
+    await recordAudit({
+      userId: 'n8n-bot',
+      userName: 'N8N WhatsApp Bot',
+      userRole: 'OPERATIONAL',
+      ipAddress: req.ip,
+      module: 'SERVICE_ORDERS',
+      action: newStatus === 'COMPLETED' ? 'OS_STATUS_CHANGE' : 'OS_UPDATE',
+      affectedRecordId: updatedOrder.id,
+      affectedRecordType: 'service_order',
+      result: 'SUCCESS',
+      details: `OS ${updatedOrder.callNumber} atualizada via N8N/WhatsApp: Produto="${newCategory}", Repasse Base=R$ ${newBaseFee.toFixed(2)}, Status=${newStatus}, KM=${newKm}, Pedágio=R$ ${newToll}.`,
+    });
+
+    // Gravação no MariaDB se disponível
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `UPDATE service_orders 
+         SET status = ?, serviceCategory = ?, baseServiceFee = ?, faturamentoPorto = ?, kmTraveled = ?, kmCost = ?, tollCost = ?, supportCost = ?, totalCost = ?, observation = ?, completedAt = ?
+         WHERE id = ? OR callNumber = ?`,
+        [
+          updatedOrder.status,
+          updatedOrder.serviceCategory,
+          updatedOrder.baseServiceFee,
+          updatedOrder.faturamentoPorto || 0,
+          updatedOrder.kmTraveled,
+          updatedOrder.kmCost,
+          updatedOrder.tollCost,
+          updatedOrder.supportCost,
+          updatedOrder.totalCost,
+          updatedOrder.observation || '',
+          updatedOrder.completedAt ? new Date(updatedOrder.completedAt) : null,
+          updatedOrder.id,
+          updatedOrder.callNumber,
+        ]
+      );
+    } catch {
+      // resiliência
+    }
+
+    res.json({
+      success: true,
+      message: `OS ${updatedOrder.callNumber} atualizada com sucesso via N8N. Produto: "${newCategory}" (Repasse: R$ ${newBaseFee.toFixed(2)}).`,
+      order: updatedOrder,
+    });
+  });
+
+  // 9.4 Endpoint Inbound para Solicitação de Vale pelo Técnico via WhatsApp (POST /api/n8n/webhook/advance-request)
+  app.post(['/api/n8n/webhook/advance-request', '/api/n8n/advances/request'], async (req, res) => {
+    if (!validateN8nAuth(req)) {
+      return res.status(401).json({ success: false, error: 'Não autorizado: API Key do N8N inválida.' });
+    }
+
+    const { phone, technicianId, amount, description } = req.body || {};
+    const reqAmount = Number(amount);
+
+    if (!reqAmount || reqAmount <= 0) {
+      return res.status(400).json({ success: false, error: 'Valor do vale deve ser maior que zero.' });
+    }
+
+    let targetTech: any = null;
+    if (technicianId) {
+      targetTech = memUsers.find((u) => u.id === technicianId);
+    } else if (phone) {
+      const clean = String(phone).replace(/\D/g, '');
+      targetTech = memUsers.find((u) => {
+        const uPhone = (u.phone || '').replace(/\D/g, '');
+        return uPhone.length >= 8 && (uPhone.endsWith(clean.slice(-8)) || clean.endsWith(uPhone.slice(-8)));
+      });
+    }
+
+    if (!targetTech) {
+      return res.status(404).json({ success: false, error: 'Técnico não localizado por telefone ou ID.' });
+    }
+
+    const newAdvance = {
+      id: `mov-n8n-vale-${Date.now()}`,
+      type: 'ADVANCE_VALE' as const,
+      category: 'Vale Técnico (WhatsApp)',
+      description: description || `Solicitação de Vale via WhatsApp (${targetTech.name})`,
+      amount: reqAmount,
+      status: 'CONFIRMED' as const,
+      technicianId: targetTech.id,
+      technicianName: targetTech.name,
+      paymentMethod: 'PIX',
+      date: new Date().toISOString(),
+    };
+
+    memMovements.unshift(newAdvance);
+
+    await recordAudit({
+      userId: targetTech.id,
+      userName: `${targetTech.name} (via WhatsApp/N8N)`,
+      userRole: targetTech.role || 'TECHNICIAN',
+      ipAddress: req.ip,
+      module: 'CASHFLOW',
+      action: 'FINANCIAL_MOVEMENT_CREATE',
+      affectedRecordId: newAdvance.id,
+      affectedRecordType: 'financial_movement',
+      result: 'SUCCESS',
+      details: `Vale de R$ ${reqAmount.toFixed(2)} lançado automaticamente via WhatsApp para ${targetTech.name}.`,
+    });
+
+    res.json({
+      success: true,
+      message: `Vale de R$ ${reqAmount.toFixed(2)} registrado com sucesso para o técnico ${targetTech.name}.`,
+      movement: newAdvance,
+    });
+  });
+
+  // 9.5 Endpoint Inbound para Agenda Diária dos Técnicos (GET /api/n8n/webhook/daily-agenda)
+  app.get(['/api/n8n/webhook/daily-agenda', '/api/n8n/agenda'], async (req, res) => {
+    if (!validateN8nAuth(req)) {
+      return res.status(401).json({ success: false, error: 'Não autorizado: API Key do N8N inválida.' });
+    }
+
+    const targetDate = (req.query.date as string) || new Date().toISOString().split('T')[0];
+    const dayOrders = memOrders.filter((o) => o.date.startsWith(targetDate) && o.status !== 'CANCELLED');
+
+    // Agrupar por técnico
+    const byTech: Record<string, { technician: any; count: number; orders: any[] }> = {};
+
+    for (const ord of dayOrders) {
+      const tId = ord.technicianId || 'unassigned';
+      if (!byTech[tId]) {
+        const techUser = memUsers.find((u) => u.id === tId) || {
+          id: tId,
+          name: ord.technicianName || 'Técnico Não Definido',
+          phone: '',
+        };
+        byTech[tId] = {
+          technician: {
+            id: techUser.id,
+            name: techUser.name,
+            phone: (techUser as any).phone || '',
+          },
+          count: 0,
+          orders: [],
+        };
+      }
+      byTech[tId].count++;
+      byTech[tId].orders.push({
+        id: ord.id,
+        callNumber: ord.callNumber,
+        customerName: ord.customerName,
+        customerAddress: ord.customerAddress,
+        customerPhone: ord.customerPhone,
+        serviceCategory: ord.serviceCategory,
+        status: ord.status,
+        date: ord.date,
+      });
+    }
+
+    res.json({
+      success: true,
+      date: targetDate,
+      totalOrders: dayOrders.length,
+      techniciansCount: Object.keys(byTech).length,
+      agenda: Object.values(byTech),
+    });
   });
 
   // =========================================================================

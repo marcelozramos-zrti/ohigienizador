@@ -25,7 +25,7 @@ interface EditServiceOrderModalProps {
 }
 
 export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ order, onClose }) => {
-  const { updateServiceOrder, deleteServiceOrder, users = [], settings } = useApp();
+  const { updateServiceOrder, deleteServiceOrder, users = [], settings, addToast } = useApp();
 
   const safeUsers = users || [];
   const technicians = safeUsers.filter((u) => u && u.role === 'TECHNICIAN');
@@ -61,9 +61,10 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
   const [faturamentoPorto, setFaturamentoPorto] = useState<number>(order.faturamentoPorto ?? (order.baseServiceFee * 1.6));
   const [executionNotes, setExecutionNotes] = useState<string>(order.executionNotes || '');
 
-  // Deletion confirm state
+  // Deletion confirm state & validation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   // Live calculation of technician gross payout
   const kmTotalCost = Number((kmTraveled * kmRateApplied).toFixed(2));
@@ -83,7 +84,31 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName || !customerCpf || !addressStreet) return;
+    setValidationError(null);
+
+    // Basic required check
+    if (!customerName || !customerCpf || !addressStreet) {
+      const msg = 'Por favor, preencha o Nome do Cliente, CPF e Endereço.';
+      setValidationError(msg);
+      addToast('Campos Obrigatórios', msg, 'error');
+      return;
+    }
+
+    // Regra de Negócio: Finalização apenas com todos os campos preenchidos
+    if (status === 'COMPLETED') {
+      const missingFields: string[] = [];
+      if (!technicianId || technicianId === 'tech-1') missingFields.push('Técnico Responsável (Não Alocado)');
+      if (!serviceCategory) missingFields.push('Categoria do Serviço');
+      if (!baseServiceFee || Number(baseServiceFee) <= 0) missingFields.push('Taxa Base de Serviço (R$)');
+      if (kmTraveled === undefined || kmTraveled === null) missingFields.push('Quilometragem/Deslocamento');
+
+      if (missingFields.length > 0) {
+        const errorMsg = `Não é possível finalizar (COMPLETED) a OS. Preencha os seguintes campos obrigatórios: ${missingFields.join(', ')}.`;
+        setValidationError(errorMsg);
+        addToast('Regra de Negócio Violada', errorMsg, 'warning');
+        return;
+      }
+    }
 
     setIsSaving(true);
 
@@ -193,6 +218,17 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
 
         {/* Form Body */}
         <form onSubmit={handleSave} className="p-6 space-y-5 text-xs">
+          
+          {/* Validation Error Banner */}
+          {validationError && (
+            <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start space-x-2.5 text-amber-900 text-xs animate-in fade-in">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <strong className="block font-bold">Validação de Regra de Negócio:</strong>
+                <span>{validationError}</span>
+              </div>
+            </div>
+          )}
           
           {/* SECTION 1: Technician Assignment & Status */}
           <div className="p-4 bg-cyan-50/50 rounded-xl border border-cyan-200/80 space-y-3">

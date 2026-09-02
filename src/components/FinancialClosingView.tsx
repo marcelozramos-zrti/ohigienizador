@@ -143,19 +143,35 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
         return false;
       }
 
-      // 5. Search Query (Call number, customer, city, neighborhood, service, tech)
+      // 5. Search Query (PowerQuery multi-criteria ; support)
       if (searchQuery.trim() !== '') {
-        const query = searchQuery.toLowerCase();
-        const matchesCall = os.callNumber?.toLowerCase().includes(query);
-        const matchesCustomer = os.customerName?.toLowerCase().includes(query);
-        const matchesCity = os.city?.toLowerCase().includes(query);
-        const matchesNeighborhood = os.neighborhood?.toLowerCase().includes(query);
-        const matchesCategory = os.serviceCategory?.toLowerCase().includes(query);
-        const matchesTech = os.technicianName?.toLowerCase().includes(query);
+        const terms = searchQuery
+          .toLowerCase()
+          .split(';')
+          .map((t) => t.trim())
+          .filter(Boolean);
 
-        if (!matchesCall && !matchesCustomer && !matchesCity && !matchesNeighborhood && !matchesCategory && !matchesTech) {
-          return false;
-        }
+        const orderText = [
+          os.callNumber,
+          os.customerName,
+          os.city,
+          os.uf,
+          os.neighborhood,
+          os.serviceCategory,
+          os.technicianName,
+          os.status,
+          os.paymentStatus === 'PAID' ? 'pago' : 'pendente',
+          os.scheduledDate,
+          os.completedAt,
+          String(os.baseServiceFee || 0),
+          String(os.kmTraveled || 0),
+          os.isVisitFeeOnly ? 'visita' : 'atendimento',
+        ]
+          .join(' ')
+          .toLowerCase();
+
+        const matchesAllTerms = terms.every((term) => orderText.includes(term));
+        if (!matchesAllTerms) return false;
       }
 
       return true;
@@ -171,7 +187,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     searchQuery,
   ]);
 
-  const currentPeriodLabel = `${selectedPeriod}ª Quinzena (${monthNames[selectedMonth - 1] || 'Agosto'}/${selectedYear})`;
+  const currentPeriodLabel =
+    selectedPeriod === 0
+      ? `Todas as Quinzenas (${monthNames[selectedMonth - 1] || 'Agosto'}/${selectedYear})`
+      : `${selectedPeriod}ª Quinzena (${monthNames[selectedMonth - 1] || 'Agosto'}/${selectedYear})`;
 
   // Handle Quitação ("Dar Baixa" / "Reverter")
   const handleTogglePayment = async (orderId: string, currentStatus?: 'PAID' | 'PENDING') => {
@@ -196,11 +215,14 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
   // Cálculos financeiros dinâmicos e reativos para os KPI Cards
   const dynamicFinancialMetrics = useMemo(() => {
-    // 1. Ordens concluídas no período de referência (Mês, Ano e Quinzena)
+    // 1. Ordens concluídas no período de referência (Mês, Ano e Quinzena) - inclui visitas perdidas que são remuneradas
     const periodCompletedOrders = safeOrders.filter(
       (os) =>
         os &&
-        os.status === 'COMPLETED' &&
+        (os.status === 'COMPLETED' ||
+          (os as any).statusOS === 'COMPLETED' ||
+          os.status === 'VISITA_PERDIDA' ||
+          (os.serviceCategory && os.serviceCategory.toLowerCase().includes('perdida'))) &&
         isOrderInPeriod(os, {
           referenceYear: selectedYear,
           referenceMonth: selectedMonth,
@@ -216,12 +238,25 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
       : periodCompletedOrders;
 
     // Faturamento Porto
-    const totalFaturamentoPorto = kpiOrders.reduce((sum, os) => sum + (os.faturamentoPorto || 0), 0);
+    const totalFaturamentoPorto = kpiOrders.reduce((sum, os) => {
+      const fat = os.faturamentoPorto;
+      if (fat !== undefined && fat !== null && fat > 0) return sum + fat;
+      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+      let base = Number(os.baseServiceFee ?? 0);
+      if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+        base = 20;
+      }
+      return sum + base + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+    }, 0);
 
     // Soma das ordens de serviço (Base + KM + Pedágio + Suporte)
     const totalOrdersAmount = kpiOrders.reduce((acc, os) => {
       const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
-      return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+      let base = Number(os.baseServiceFee ?? 0);
+      if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+        base = 20;
+      }
+      return acc + base + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
     }, 0);
 
     let totalCostAllowances = 0;
@@ -306,106 +341,353 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
   const technicianSummaries = currentClosing?.technicianSummaries || [];
 
+  const availableOrderPeriods = useMemo(() => {
+    const counts: Record<string, { year: number; month: number; period: 1 | 2; count: number; monthName: string }> = {};
+    safeOrders.forEach((os) => {
+      const dateStr = os.completedAt || os.scheduledDate || os.startedAt || '';
+      if (dateStr) {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+          const y = d.getFullYear();
+          const m = d.getMonth() + 1;
+          const day = d.getDate();
+          const p: 1 | 2 = day <= 15 ? 1 : 2;
+          const key = `${y}-${m}-${p}`;
+          if (!counts[key]) {
+            counts[key] = {
+              year: y,
+              month: m,
+              period: p,
+              count: 0,
+              monthName: monthNames[m - 1] || `Mês ${m}`,
+            };
+          }
+          counts[key].count++;
+        }
+      }
+    });
+    return Object.values(counts).sort((a, b) => b.year - a.year || b.month - a.month || b.period - a.period);
+  }, [safeOrders]);
+
   const paidOrdersCount = filteredOrders.filter((o) => o.paymentStatus === 'PAID').length;
   const pendingOrdersCount = filteredOrders.length - paidOrdersCount;
 
   return (
     <div className="space-y-6">
-      
-      {/* Header with Title and Global Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-[#003366] tracking-tight">
-              Fechamento Financeiro & DataGrid
-            </h1>
-            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-cyan-100 text-cyan-800 border border-cyan-300">
-              Regras Porto Seguro
+      {/* Period Notice Banner if current period is empty but orders exist in other periods */}
+      {filteredOrders.length === 0 && availableOrderPeriods.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-100 text-amber-800 rounded-lg shrink-0">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-amber-900">
+                Nenhuma ordem encontrada para o período selecionado ({currentPeriodLabel}).
+              </p>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                Existem ordens registradas em outros períodos. Clique abaixo para alternar rapidamente:
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {availableOrderPeriods.map((ap) => (
+              <button
+                key={`${ap.year}-${ap.month}-${ap.period}`}
+                onClick={() => {
+                  setSelectedYear(ap.year);
+                  setSelectedMonth(ap.month);
+                  setSelectedPeriod(ap.period);
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                {ap.period}ª Qz {ap.monthName}/{ap.year} ({ap.count} OS)
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 5 High-Density Executive Financial KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* Card 1: Receita Faturada Porto Seguro */}
+        <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-2xs hover:shadow-md transition-all cursor-pointer">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Faturamento Porto</span>
+            <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-[#003366] font-mono">
+              R$ {dynamicFinancialMetrics.totalFaturamentoPorto.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Cálculo auditado: KM a R$ 0,50/km, pedágios 1:1, ajuda de custo parametrizada por técnico, vales e regra fiscal (16%).
-          </p>
+          <div className="mt-1 text-[10px] text-emerald-700 font-medium truncate">
+            Seguradora Porto
+          </div>
         </div>
 
-        {/* Global Actions */}
-        <div className="flex items-center gap-2">
-          {/* Lançar Vale */}
+        {/* Card 2: Total de Chamados no Período */}
+        <div
+          onClick={() => setFilterStatus(filterStatus === 'COMPLETED' ? 'ALL' : 'COMPLETED')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            filterStatus === 'COMPLETED' ? 'border-cyan-500 ring-2 ring-cyan-400/30 bg-cyan-50/20' : 'border-slate-200'
+          }`}
+          title="Clique para filtrar Chamados no Período"
+        >
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Chamados no Período</span>
+            <div className="p-1.5 rounded-lg bg-cyan-50 text-[#003366]">
+              <Layers className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-2xl font-black text-slate-900">{filteredOrders.length}</span>
+            <span className="text-[10px] text-slate-500 font-medium">ordens</span>
+          </div>
+          <div className="mt-1 text-[10px] text-slate-500 font-medium truncate">
+            {paidOrdersCount} Pagos • {pendingOrdersCount} Pendentes
+          </div>
+        </div>
+
+        {/* Card 3: Repasses Brutos aos Técnicos */}
+        <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-2xs hover:shadow-md transition-all cursor-pointer">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Repasses Técnicos</span>
+            <div className="p-1.5 rounded-lg bg-blue-50 text-[#003366]">
+              <Users className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-slate-800 font-mono">
+              R$ {dynamicFinancialMetrics.totalTechnicianGross.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="mt-1 text-[10px] text-slate-500 font-medium truncate">
+            Base + KM + Ajuda Custo
+          </div>
+        </div>
+
+        {/* Card 4: Deduções: Vales + Retenção 16% */}
+        <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-2xs hover:shadow-md transition-all cursor-pointer">
+          <div className="flex items-center justify-between text-red-700 mb-1">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Deduções (Vales/Impostos)</span>
+            <div className="p-1.5 rounded-lg bg-red-100 text-red-800">
+              <TrendingDown className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-red-600 font-mono">
+              -R$ {(dynamicFinancialMetrics.totalAdvancesDeducted + dynamicFinancialMetrics.totalTaxesDeducted).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="mt-1 text-[10px] text-red-700 font-medium truncate">
+            Vales e Retenção 16%
+          </div>
+        </div>
+
+        {/* Card 5: Total Líquido a Transferir PIX */}
+        <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-2xs hover:shadow-md transition-all cursor-pointer">
+          <div className="flex items-center justify-between text-emerald-700 mb-1">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Líquido a Transferir</span>
+            <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-emerald-600 font-mono">
+              R$ {dynamicFinancialMetrics.totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="mt-1 text-[10px] text-emerald-700 font-medium truncate">
+            Pronto para PIX
+          </div>
+        </div>
+      </div>
+
+      {/* Query Filter Panel - Posicionado ANTES da barra de sub-abas e exportação */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-cyan-600" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              Painel de Filtros e Busca (Query)
+            </h3>
+          </div>
           <button
-            id="open-new-advance-btn"
-            onClick={onOpenNewAdvance}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-xs transition-all cursor-pointer"
+            onClick={() => {
+              setFilterTechnicianId('ALL');
+              setFilterStatus('ALL');
+              setFilterPaymentStatus('ALL');
+              setSearchQuery('');
+            }}
+            className="text-[11px] text-cyan-700 hover:underline font-bold cursor-pointer"
           >
-            <PlusCircle className="h-4 w-4 text-cyan-300" />
-            <span>Lançar Vale</span>
+            Limpar Filtros
           </button>
         </div>
+
+        {/* Painel de Filtros em 2 Linhas */}
+        <div className="space-y-3">
+          {/* Linha 1: Dropdown de Técnico, Dropdown de Status da OS e Seletores de Quinzena, Mês e Ano */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            {/* Filtro por Técnico (4 cols) */}
+            <div className="md:col-span-4">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Filtrar por Técnico
+              </label>
+              <select
+                id="query-technician-select"
+                value={filterTechnicianId}
+                onChange={(e) => setFilterTechnicianId(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              >
+                <option value="ALL">Todos os Técnicos</option>
+                <option value="UNASSIGNED">⚠️ Ordens Não Alocadas ({unallocatedOrdersInPeriod.length})</option>
+                {techniciansList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} {t.hasSpecialTaxRule ? '(Regra 16% Impostos)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filtro por Status da OS (3 cols) */}
+            <div className="md:col-span-3">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Status da OS
+              </label>
+              <select
+                id="query-status-select"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              >
+                <option value="ALL">Todos os Status</option>
+                <option value="COMPLETED">Finalizadas (COMPLETED) [Elegíveis Fechamento]</option>
+                <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
+                <option value="PENDING">Pendentes (PENDING)</option>
+                <option value="CANCELLED">Canceladas (CANCELLED)</option>
+              </select>
+            </div>
+
+            {/* Seletores de Quinzena, Mês e Ano (5 cols) */}
+            <div className="md:col-span-5">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Período (Quinzena, Mês, Ano)
+              </label>
+              <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+                {/* Period Toggle */}
+                <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200 shrink-0">
+                  <button
+                    id="period-q1-btn"
+                    type="button"
+                    onClick={() => setSelectedPeriod(1)}
+                    className={`px-2 py-1 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
+                      selectedPeriod === 1
+                        ? 'bg-[#003366] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    1ª Qnz (01-15)
+                  </button>
+                  <button
+                    id="period-q2-btn"
+                    type="button"
+                    onClick={() => setSelectedPeriod(2)}
+                    className={`px-2 py-1 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
+                      selectedPeriod === 2
+                        ? 'bg-[#003366] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    2ª Qnz (16-fim)
+                  </button>
+                  <button
+                    id="period-all-btn"
+                    type="button"
+                    onClick={() => setSelectedPeriod(0)}
+                    className={`px-2 py-1 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
+                      selectedPeriod === 0
+                        ? 'bg-[#003366] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Todas
+                  </button>
+                </div>
+
+                {/* Month Selector */}
+                <select
+                  id="closing-month-select"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none flex-1 min-w-[95px]"
+                >
+                  {monthNames.map((m, idx) => (
+                    <option key={idx} value={idx + 1}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Year Selector */}
+                <select
+                  id="closing-year-select"
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none w-20 shrink-0"
+                >
+                  <option value={2025}>2025</option>
+                  <option value={2026}>2026</option>
+                  <option value={2027}>2027</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Linha 2: Dropdown de Pagamento e Input de Busca Textual Rápida */}
+          <div className="flex flex-col sm:flex-row gap-3 items-end">
+            {/* Filtro por Status de Quitação */}
+            <div className="w-full sm:w-64 shrink-0">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Status de Pagamento (Quitação)
+              </label>
+              <select
+                id="query-payment-status-select"
+                value={filterPaymentStatus}
+                onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              >
+                <option value="ALL">Todos (Pagos e Pendentes)</option>
+                <option value="PAID">Apenas Pagos (PAGO)</option>
+                <option value="PENDING">Apenas Pendentes (PENDENTE)</option>
+              </select>
+            </div>
+
+            {/* Busca Textual que estica com flex-grow */}
+            <div className="flex-1 w-full">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Busca Textual Rápida (PowerQuery)
+              </label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <input
+                  id="query-search-input"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Nº chamado, cliente, bairro, cidade, técnico... (separe por ;)"
+                  className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* 4 High-Density Executive Financial KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Receita Faturada Porto Seguro */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Faturamento Bruto Porto
-          </p>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-[#003366] font-mono">
-              R$ {dynamicFinancialMetrics.totalFaturamentoPorto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-            <span className="text-xs text-green-600 font-semibold bg-green-50 px-1.5 py-0.5 rounded border border-green-100">
-              Seguradora
-            </span>
-          </div>
-        </div>
-
-        {/* Repasses Brutos aos Técnicos */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Repasses Técnicos (+ Ajuda Custo)
-          </p>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-slate-800 font-mono">
-              R$ {dynamicFinancialMetrics.totalTechnicianGross.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-            <span className="text-xs text-slate-500 font-medium">
-              Base + KM + Ajuda de Custo
-            </span>
-          </div>
-        </div>
-
-        {/* Deduções: Vales + Retenção 16% */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Deduções (Vales + Impostos)
-          </p>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-red-600 font-mono">
-              -R$ {(dynamicFinancialMetrics.totalAdvancesDeducted + dynamicFinancialMetrics.totalTaxesDeducted).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-            <span className="text-[10px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-bold border border-red-100">
-              Abatimentos
-            </span>
-          </div>
-        </div>
-
-        {/* Total Líquido a Transferir PIX */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-            Total Líquido a Transferir (PIX)
-          </p>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-black text-emerald-600 font-mono">
-              R$ {dynamicFinancialMetrics.totalNetPayout.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-            <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-              Pronto PIX
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Subtabs Switcher: DataGrid vs Extrato Consolidado */}
+      {/* Subtabs Switcher: DataGrid vs Extrato Consolidado + Botão Exportar CSV */}
       <div className="flex items-center justify-between border-b border-slate-200 pb-2">
         <div className="flex items-center space-x-2">
           <button
@@ -418,7 +700,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             }`}
           >
             <FileSpreadsheet className="w-4 h-4 text-cyan-300" />
-            <span>DataGrid de Resultados (17 Colunas)</span>
+            <span>DataGrid</span>
             <span className="ml-1.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[10px]">
               {filteredOrders.length}
             </span>
@@ -434,7 +716,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
             }`}
           >
             <Users className="w-4 h-4 text-cyan-300" />
-            <span>Extratos por Técnico & WhatsApp</span>
+            <span>Extrato</span>
             <span className="ml-1.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[10px]">
               {technicianSummaries.length}
             </span>
@@ -465,178 +747,9 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
         </div>
       </div>
 
-      {/* SUBTAB 1: DataGrid Completo com Painel de Query / Filtros e Controle de Quitação */}
+      {/* SUBTAB 1: DataGrid Completo */}
       {activeSubTab === 'datagrid' && (
         <div className="space-y-4">
-          
-          {/* Query Filter Panel */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-cyan-600" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  Painel de Filtros e Busca (Query)
-                </h3>
-              </div>
-              <button
-                onClick={() => {
-                  setFilterTechnicianId('ALL');
-                  setFilterStatus('ALL');
-                  setFilterPaymentStatus('ALL');
-                  setSearchQuery('');
-                }}
-                className="text-[11px] text-cyan-700 hover:underline font-bold cursor-pointer"
-              >
-                Limpar Filtros
-              </button>
-            </div>
-
-            {/* Painel de Filtros em 2 Linhas */}
-            <div className="space-y-3">
-              {/* Linha 1: Dropdown de Técnico, Dropdown de Status da OS e um novo flex-container contendo os seletores de Quinzena, Mês e Ano */}
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                {/* Filtro por Técnico (4 cols) */}
-                <div className="md:col-span-4">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Filtrar por Técnico
-                  </label>
-                  <select
-                    id="query-technician-select"
-                    value={filterTechnicianId}
-                    onChange={(e) => setFilterTechnicianId(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  >
-                    <option value="ALL">Todos os Técnicos</option>
-                    <option value="UNASSIGNED">⚠️ Ordens Não Alocadas ({unallocatedOrdersInPeriod.length})</option>
-                    {techniciansList.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} {t.hasSpecialTaxRule ? '(Regra 16% Impostos)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Filtro por Status da OS (3 cols) */}
-                <div className="md:col-span-3">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Status da OS
-                  </label>
-                  <select
-                    id="query-status-select"
-                    value={filterStatus}
-                    onChange={(e) => setFilterStatus(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  >
-                    <option value="ALL">Todos os Status</option>
-                    <option value="COMPLETED">Finalizadas (COMPLETED) [Elegíveis Fechamento]</option>
-                    <option value="IN_PROGRESS">Em Andamento (IN_PROGRESS)</option>
-                    <option value="PENDING">Pendentes (PENDING)</option>
-                    <option value="CANCELLED">Canceladas (CANCELLED)</option>
-                  </select>
-                </div>
-
-                {/* Flex-container contendo os seletores de Quinzena, Mês e Ano (5 cols) */}
-                <div className="md:col-span-5">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Período (Quinzena, Mês, Ano)
-                  </label>
-                  <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-                    {/* Period Toggle */}
-                    <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200 shrink-0">
-                      <button
-                        id="period-q1-btn"
-                        type="button"
-                        onClick={() => setSelectedPeriod(1)}
-                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
-                          selectedPeriod === 1
-                            ? 'bg-[#003366] text-white shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        1ª Qnz (01-15)
-                      </button>
-                      <button
-                        id="period-q2-btn"
-                        type="button"
-                        onClick={() => setSelectedPeriod(2)}
-                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer whitespace-nowrap ${
-                          selectedPeriod === 2
-                            ? 'bg-[#003366] text-white shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        2ª Qnz (16-fim)
-                      </button>
-                    </div>
-
-                    {/* Month Selector */}
-                    <select
-                      id="closing-month-select"
-                      value={selectedMonth}
-                      onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                      className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none flex-1 min-w-[95px]"
-                    >
-                      {monthNames.map((m, idx) => (
-                        <option key={idx} value={idx + 1}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-
-                    {/* Year Selector */}
-                    <select
-                      id="closing-year-select"
-                      value={selectedYear}
-                      onChange={(e) => setSelectedYear(Number(e.target.value))}
-                      className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs cursor-pointer focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none w-20 shrink-0"
-                    >
-                      <option value={2025}>2025</option>
-                      <option value={2026}>2026</option>
-                      <option value={2027}>2027</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Linha 2: Dropdown de Pagamento e o Input de "Busca Textual" (este input deve se esticar / flex-grow para preencher o resto do espaço à direita) */}
-              <div className="flex flex-col sm:flex-row gap-3 items-end">
-                {/* Filtro por Status de Quitação */}
-                <div className="w-full sm:w-64 shrink-0">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Status de Pagamento (Quitação)
-                  </label>
-                  <select
-                    id="query-payment-status-select"
-                    value={filterPaymentStatus}
-                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  >
-                    <option value="ALL">Todos (Pagos e Pendentes)</option>
-                    <option value="PAID">Apenas Pagos (PAGO)</option>
-                    <option value="PENDING">Apenas Pendentes (PENDENTE)</option>
-                  </select>
-                </div>
-
-                {/* Busca Textual que estica com flex-grow */}
-                <div className="flex-1 w-full">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Busca Textual Rápida
-                  </label>
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                    <input
-                      id="query-search-input"
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Nº chamado, cliente, bairro, cidade, técnico..."
-                      className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
 
           {/* Banner de Ação Rápida para Ordens Não Alocadas */}
           {unallocatedOrdersInPeriod.length > 0 && (
@@ -938,18 +1051,18 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                         {/* 17. Total */}
                         <td className="py-2.5 px-3 font-black text-[#003366] bg-cyan-50/80 text-right whitespace-nowrap font-mono border-r border-slate-100">
                           <div>R$ {totalOs.toFixed(2)}</div>
-                          {os.status !== 'COMPLETED' && (
+                          {os.status === 'CANCELLED' && !os.serviceCategory?.toLowerCase().includes('perdida') && (
                             <div className="text-[8px] font-bold text-amber-600 tracking-tight uppercase">
-                              R$ 0,00 Fechamento
+                              Cancelado (R$ 0,00)
                             </div>
                           )}
                         </td>
 
                         {/* 18. Status Pagto */}
                         <td className="py-2.5 px-3 border-r border-slate-100 whitespace-nowrap text-center">
-                          {os.status !== 'COMPLETED' ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200" title="Chamado não concluído não é elegível para pagamento">
-                              Não Elegível
+                          {os.status === 'CANCELLED' && !os.serviceCategory?.toLowerCase().includes('perdida') ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200" title="Chamado cancelado não é elegível para pagamento">
+                              Cancelado
                             </span>
                           ) : isPaid ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
@@ -1122,7 +1235,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   const displayCostAllowance =
                     summary.fixedCostAllowance !== undefined && summary.fixedCostAllowance !== null
                       ? Number(summary.fixedCostAllowance)
-                      : 250.0;
+                      : 0.0;
 
                   return (
                     <tr key={summary.technicianId} className="hover:bg-slate-50/70 transition-colors">
@@ -1147,8 +1260,19 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                       </td>
 
                       {/* Ajuda de Custo */}
-                      <td className="py-3.5 px-4 text-slate-800 font-mono">
-                        +R$ {displayCostAllowance.toFixed(2)}
+                      <td className="py-3.5 px-4">
+                        <div className="font-mono font-bold text-slate-800">
+                          {displayCostAllowance > 0 ? `+R$ ${displayCostAllowance.toFixed(2)}` : 'R$ 0,00'}
+                        </div>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border inline-block mt-0.5 ${
+                          displayCostAllowance > 0
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-slate-100 text-slate-500 border-slate-200'
+                        }`}>
+                          {displayCostAllowance > 0
+                            ? `Creditada (${summary.costAllowanceFortnight || 1}ª Qz)`
+                            : `Paga na ${summary.costAllowanceFortnight || 1}ª Qz`}
+                        </span>
                       </td>
 
                       {/* Total Gross */}

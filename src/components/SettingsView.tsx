@@ -26,15 +26,25 @@ import {
   Activity,
   Users,
   Network,
+  Workflow,
+  Bot,
+  Zap,
+  Send,
+  Radio,
+  ArrowRightLeft,
+  Sparkles,
+  ExternalLink,
+  HelpCircle,
+  Smartphone,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ApiService } from '../services/apiService';
-import { DatabaseSettings } from '../types';
+import { DatabaseSettings, N8nSettings } from '../types';
 
 export const SettingsView: React.FC = () => {
   const { settings, updateSettings, addToast, currentUser, users, orders } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'FINANCIAL' | 'DATABASE' | 'WHATSAPP'>('FINANCIAL');
+  const [activeTab, setActiveTab] = useState<'FINANCIAL' | 'DATABASE' | 'WHATSAPP' | 'N8N'>('FINANCIAL');
 
   const rates = settings?.serviceCategoriesRates || {};
 
@@ -99,6 +109,69 @@ export const SettingsView: React.FC = () => {
   const [showSqlSchemaModal, setShowSqlSchemaModal] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
+  // N8N & Webhooks State
+  const [n8nEnabled, setN8nEnabled] = useState(settings?.n8nSettings?.enabled ?? true);
+  const [n8nWebhookUrl, setN8nWebhookUrl] = useState(settings?.n8nSettings?.webhookUrl || 'https://n8n.ohigienizador.com.br/webhook/higienizador-events');
+  const [n8nApiKey, setN8nApiKey] = useState(settings?.n8nSettings?.apiKey || 'N8N_HIGIENIZADOR_SECRET_2026');
+  const [showN8nApiKey, setShowN8nApiKey] = useState(false);
+  const [n8nEvents, setN8nEvents] = useState(
+    settings?.n8nSettings?.events || {
+      onOrderCreated: true,
+      onOrderAssigned: true,
+      onOrderCompleted: true,
+      onDailySummary: true,
+      onStockAlert: true,
+      onBiweeklyClosing: true,
+      onAdvanceRequested: true,
+    }
+  );
+
+  const [isTestingN8n, setIsTestingN8n] = useState(false);
+  const [n8nTestResult, setN8nTestResult] = useState<{
+    success: boolean;
+    statusCode?: number;
+    responseTimeMs?: number;
+    message?: string;
+    responseBody?: any;
+    error?: string;
+  } | null>(null);
+
+  const [copiedN8nKey, setCopiedN8nKey] = useState(false);
+  const [copiedEndpointUrl, setCopiedEndpointUrl] = useState<string | null>(null);
+
+  const generateNewApiKey = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = 'N8N_SEC_';
+    for (let i = 0; i < 24; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setN8nApiKey(result);
+    addToast('Nova Chave Gerada', 'Clique em "Salvar Alterações" no topo para persistir a nova chave.', 'info');
+  };
+
+  const handleTestN8nWebhook = async () => {
+    setIsTestingN8n(true);
+    setN8nTestResult(null);
+    try {
+      const res = await ApiService.testN8nWebhook({
+        webhookUrl: n8nWebhookUrl,
+        apiKey: n8nApiKey,
+        testType: 'TEST_PING',
+      });
+      setN8nTestResult(res);
+      if (res.success) {
+        addToast('Conexão N8N Estabelecida', res.message || 'Webhook recebido com sucesso pelo N8N!', 'success');
+      } else {
+        addToast('Atenção no N8N', res.error || 'N8N retornou erro ou workflow inativo.', 'warning');
+      }
+    } catch (err: any) {
+      setN8nTestResult({ success: false, error: err.message });
+      addToast('Erro no Teste N8N', err.message, 'error');
+    } finally {
+      setIsTestingN8n(false);
+    }
+  };
+
   // Live MariaDB Logs & Schema Diagnostics
   const [dbLogs, setDbLogs] = useState<Array<{ id: string; timestamp: string; level: 'INFO' | 'WARN' | 'ERROR'; message: string; query?: string; details?: any }>>([]);
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
@@ -143,7 +216,7 @@ export const SettingsView: React.FC = () => {
         ApiService.getDbLogs().then((logs) => {
           if (logs && logs.length > 0) setDbLogs(logs);
         }).catch(() => {});
-      }, 3000);
+      }, 15000);
       return () => clearInterval(interval);
     }
   }, [activeTab]);
@@ -212,6 +285,16 @@ export const SettingsView: React.FC = () => {
       lastSyncTimestamp: new Date().toISOString(),
     };
 
+    const updatedN8nSettings: N8nSettings = {
+      enabled: n8nEnabled,
+      webhookUrl: n8nWebhookUrl,
+      apiKey: n8nApiKey,
+      events: n8nEvents,
+      lastPingStatus: n8nTestResult?.success ? 'SUCCESS' : n8nTestResult ? 'ERROR' : 'IDLE',
+      lastPingAt: new Date().toISOString(),
+      lastPingResponse: n8nTestResult?.message || n8nTestResult?.error,
+    };
+
     updateSettings({
       kmReimbursementRate: Number(kmRate),
       kmRateDefault: Number(kmRate),
@@ -236,11 +319,12 @@ export const SettingsView: React.FC = () => {
         'Visita Perdida': Number(visitaPerdidaRate),
       },
       databaseSettings: updatedDbSettings,
+      n8nSettings: updatedN8nSettings,
     });
 
     addToast(
       'Configurações Salvas',
-      'Parâmetros do Motor Financeiro, Banco MariaDB (192.168.15.246) e WhatsApp atualizados.',
+      'Parâmetros do Motor Financeiro, Banco MariaDB (192.168.15.246), WhatsApp e N8N Webhooks atualizados.',
       'success'
     );
   };
@@ -434,30 +518,170 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
     CONSTRAINT \`fk_fin_closing\` FOREIGN KEY (\`biweeklyClosingId\`) REFERENCES \`biweekly_closings\` (\`id\`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = (text: string, label: string = 'Texto') => {
     navigator.clipboard.writeText(text);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2500);
-    addToast('Script Copiado', 'Script DDL MariaDB copiado para a área de transferência.', 'info');
+    if (label === 'Script DDL MariaDB') {
+      setCopiedSql(true);
+      setTimeout(() => setCopiedSql(false), 2500);
+      addToast('Script Copiado', 'Script DDL MariaDB copiado para a área de transferência.', 'info');
+    } else {
+      addToast('Copiado', `${label} copiado para a área de transferência.`, 'info');
+    }
   };
+
+  const currentHost = typeof window !== 'undefined' ? window.location.origin : 'https://seu-sistema.com';
+
+  const n8nInboundEndpoints = [
+    {
+      title: 'Atualizar / Finalizar OS e Produto Executado (Técnico fecha pelo WhatsApp)',
+      method: 'POST',
+      path: '/api/n8n/webhook/order-update',
+      fullUrl: `${currentHost}/api/n8n/webhook/order-update`,
+      desc: 'Recebe o número do chamado (ou ID), o produto executado (ex: "Instala TV de 49 a 86 + Suporte Fixo"), novo status (ex: COMPLETED), KM rodado, pedágio e insumos. O sistema recalcula o valor de repasse ao técnico com base no produto.',
+      sampleJson: JSON.stringify(
+        {
+          callNumber: 'PS-2026-8941',
+          productExecuted: 'Instala TV de 49 a 86 + Suporte Fixo',
+          status: 'COMPLETED',
+          kmTraveled: 45,
+          tollCost: 12.5,
+          supportCost: 0,
+          baseServiceFee: 60.0,
+          faturamentoPorto: 180.0,
+          suppliesUsed: [
+            { stockItemId: 'stk-1', quantityUsed: 2 }
+          ],
+          observation: 'Instalação da TV realizada com sucesso no painel do cliente. Suporte fixo testado.',
+          completedAt: new Date().toISOString()
+        },
+        null,
+        2
+      ),
+    },
+    {
+      title: 'Consultar Chamados do Técnico (WhatsApp Bot)',
+      method: 'GET',
+      path: '/api/n8n/webhook/orders?phone={{ $json.phone }}',
+      fullUrl: `${currentHost}/api/n8n/webhook/orders?phone=11987654321`,
+      desc: 'O N8N envia o número de WhatsApp do técnico e recebe a lista de chamados atribuídos a ele em tempo real.',
+      sampleJson: JSON.stringify(
+        {
+          phone: '11987654321',
+          status: 'IN_PROGRESS'
+        },
+        null,
+        2
+      ),
+    },
+    {
+      title: 'Solicitar Vale / Adiantamento (Técnico pelo WhatsApp)',
+      method: 'POST',
+      path: '/api/n8n/webhook/advance-request',
+      fullUrl: `${currentHost}/api/n8n/webhook/advance-request`,
+      desc: 'Permite ao técnico solicitar um vale combustível/alimentação diretamente pelo WhatsApp. Entra como lançamento de vale com auditoria.',
+      sampleJson: JSON.stringify(
+        {
+          phone: '11987654321',
+          amount: 150.0,
+          description: 'Adiantamento combustível para rota São Paulo -> Santos'
+        },
+        null,
+        2
+      ),
+    },
+    {
+      title: 'Agenda Diária Matinal (Broadcast de OSs do Dia)',
+      method: 'GET',
+      path: '/api/n8n/webhook/daily-agenda?date={{ $today }}',
+      fullUrl: `${currentHost}/api/n8n/webhook/daily-agenda`,
+      desc: 'Retorna todas as OSs do dia agrupadas por técnico para que o N8N envie a mensagem de "Bom dia e sua rota de hoje" às 07:30.',
+      sampleJson: JSON.stringify(
+        {
+          date: '2026-08-29'
+        },
+        null,
+        2
+      ),
+    },
+  ];
+
+  const sampleN8nWorkflowJson = JSON.stringify(
+    {
+      name: "O Higienizador - WhatsApp Bot & Sync",
+      nodes: [
+        {
+          parameters: {
+            httpMethod: "POST",
+            path: "higienizador-events",
+            responseMode: "onReceived",
+            options: {}
+          },
+          name: "Webhook Inbound (Do Sistema)",
+          type: "n8n-nodes-base.webhook",
+          typeVersion: 1,
+          position: [250, 300]
+        },
+        {
+          parameters: {
+            dataType: "string",
+            value1: "={{ $json.event }}",
+            rules: {
+              rules: [
+                { value2: "OS_CREATED", output: 0 },
+                { value2: "OS_COMPLETED", output: 1 },
+                { value2: "DAILY_SUMMARY", output: 2 }
+              ]
+            }
+          },
+          name: "Switch de Eventos",
+          type: "n8n-nodes-base.switch",
+          typeVersion: 1,
+          position: [480, 300]
+        },
+        {
+          parameters: {
+            method: "POST",
+            url: "https://api.evolution.ohigienizador.com.br/message/sendText/Higienizador-Producao-01",
+            sendHeaders: true,
+            headerParameters: {
+              parameters: [
+                { name: "apikey", value: "EVO_SEC_88941_HIGIENIZADOR_2026" }
+              ]
+            },
+            sendBody: true,
+            bodyParameters: {
+              parameters: [
+                { name: "number", value: "={{ $json.data.technicianPhone }}" },
+                { name: "text", value: "=🔔 Nova OS Atribuída: {{ $json.data.callNumber }}\\nCliente: {{ $json.data.customerName }}\\nEndereço: {{ $json.data.customerAddress }}" }
+              ]
+            }
+          },
+          name: "Enviar WhatsApp Evolution",
+          type: "n8n-nodes-base.httpRequest",
+          typeVersion: 4.1,
+          position: [750, 200]
+        }
+      ]
+    },
+    null,
+    2
+  );
 
   return (
     <form onSubmit={handleSave} className="space-y-6">
-      {/* Header */}
+      {/* Top Action Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl sm:text-2xl font-black text-[#003366] tracking-tight">
-              Configurações & Infraestrutura
-            </h1>
-            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px] uppercase tracking-wider flex items-center space-x-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>MariaDB (192.168.15.246)</span>
+        <div className="flex items-center space-x-2">
+          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[11px] uppercase tracking-wider flex items-center space-x-1.5 border border-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Banco MariaDB Ativo (192.168.15.246)</span>
+          </span>
+          {n8nEnabled && (
+            <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full font-bold text-[11px] uppercase tracking-wider flex items-center space-x-1.5 border border-indigo-200">
+              <Workflow className="w-3 h-3 text-indigo-600" />
+              <span>N8N Webhook Ativo</span>
             </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Gerencie o banco de dados MariaDB na VM interna, PM2, parâmetros do motor financeiro e WhatsApp.
-          </p>
+          )}
         </div>
 
         {currentUser.role === 'ADMIN' && (
@@ -511,6 +735,20 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
         >
           <MessageSquare className="h-4 w-4 text-emerald-600" />
           <span>WhatsApp & Mensageria</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('N8N')}
+          className={`flex items-center space-x-2 py-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'N8N'
+              ? 'border-indigo-600 text-indigo-900 bg-indigo-50/60 rounded-t-lg shadow-2xs'
+              : 'border-transparent text-slate-500 hover:text-indigo-700 hover:bg-indigo-50/30'
+          }`}
+        >
+          <Workflow className="h-4 w-4 text-indigo-600" />
+          <span>N8N & Automação Webhook</span>
+          <span className="px-1.5 py-0.2 bg-indigo-600 text-white rounded text-[9px] font-bold">API / Bot</span>
         </button>
       </div>
 
@@ -1142,6 +1380,348 @@ CREATE TABLE IF NOT EXISTS \`financial_movements\` (
                   Tags: <code className="bg-slate-100 px-1 rounded">&#123;NOME_TECNICO&#125;</code>, <code className="bg-slate-100 px-1 rounded">&#123;PERIODO_QUINZENA&#125;</code>, <code className="bg-slate-100 px-1 rounded">&#123;VALOR_LIQUIDO&#125;</code>, <code className="bg-slate-100 px-1 rounded">&#123;CHAVE_PIX&#125;</code>, <code className="bg-slate-100 px-1 rounded">&#123;TOTAL_OS&#125;</code>.
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: N8N & WEBHOOKS / AUTOMATION */}
+      {activeTab === 'N8N' && (
+        <div className="space-y-6">
+          {/* Card 1: Arquitetura & Sugestão Técnica */}
+          <div className="bg-gradient-to-br from-indigo-900 via-[#003366] to-slate-900 rounded-2xl p-6 text-white shadow-md border border-indigo-800/50 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/30 border border-indigo-400/40 flex items-center justify-center text-indigo-300">
+                  <Workflow className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                    <span>Arquitetura de Integração N8N + WhatsApp</span>
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full text-[10px] uppercase tracking-wider font-bold">
+                      Recomendada
+                    </span>
+                  </h2>
+                  <p className="text-xs text-indigo-200">
+                    Comunicação bidirecional e assíncrona para bots de WhatsApp, rotinas diárias e atualização de tickets.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <label className="relative inline-flex items-center cursor-pointer bg-white/10 px-3 py-1.5 rounded-lg border border-white/20">
+                  <input
+                    type="checkbox"
+                    checked={n8nEnabled}
+                    onChange={(e) => setN8nEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-8 h-4 bg-slate-600 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[8px] after:left-[14px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                  <span className="ml-2 text-xs font-bold text-white">
+                    {n8nEnabled ? 'Webhooks Ativos' : 'Webhooks Pausados'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Diagrama Visual de Fluxo */}
+            <div className="bg-black/30 backdrop-blur-xs rounded-xl p-4 border border-white/10">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-center text-xs">
+                <div className="bg-white/5 p-3 rounded-lg border border-white/10 space-y-1.5">
+                  <div className="font-bold text-cyan-300 flex items-center justify-center space-x-1.5">
+                    <Database className="w-4 h-4" />
+                    <span>1. O Higienizador (Sistema)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300">
+                    Gera eventos em tempo real (Nova OS, Fechamento, Alerta de Estoque) e dispara <strong>Webhooks POST</strong> para o N8N.
+                  </p>
+                </div>
+
+                <div className="bg-indigo-600/30 p-3 rounded-lg border border-indigo-400/30 space-y-1.5">
+                  <div className="font-bold text-indigo-300 flex items-center justify-center space-x-1.5">
+                    <Workflow className="w-4 h-4" />
+                    <span>2. N8N (Orquestrador)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300">
+                    Processa regras de negócio, formata mensagens, conecta com WhatsApp (Evolution/Z-API) e com a IA do bot.
+                  </p>
+                </div>
+
+                <div className="bg-emerald-600/20 p-3 rounded-lg border border-emerald-400/30 space-y-1.5">
+                  <div className="font-bold text-emerald-300 flex items-center justify-center space-x-1.5">
+                    <Smartphone className="w-4 h-4" />
+                    <span>3. Técnico no WhatsApp</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300">
+                    Recebe agenda matinal, consulta OSs e responde comandos (ex: <em>"Finalizar OS 8941 45km"</em>) alimentando o sistema.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Webhook de Saída (Sistema -> N8N) */}
+          <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-5 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Send className="h-4 w-4 text-indigo-600" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Webhook Outbound (Sistema ➔ N8N)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Configure a URL do webhook criado no seu N8N para receber notificações automáticas do sistema.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTestN8nWebhook}
+                disabled={isTestingN8n || !n8nWebhookUrl}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg shadow-xs transition-all cursor-pointer"
+              >
+                <Zap className={`w-3.5 h-3.5 text-amber-300 ${isTestingN8n ? 'animate-bounce' : ''}`} />
+                <span>{isTestingN8n ? 'Disparando Ping...' : 'Disparar Webhook de Teste'}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-700 block">
+                  URL do Webhook no N8N:
+                </label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={n8nWebhookUrl}
+                    onChange={(e) => setN8nWebhookUrl(e.target.value)}
+                    placeholder="https://n8n.seuservidor.com/webhook/higienizador-events"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-900"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400">
+                  Insira o endpoint gerado no nó "Webhook" do N8N (Método POST).
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-700 block">
+                  Token Secreto de Autenticação (API Key / Bearer):
+                </label>
+                <div className="flex items-center space-x-2">
+                  <div className="relative flex-1">
+                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type={showN8nApiKey ? 'text' : 'password'}
+                      value={n8nApiKey}
+                      onChange={(e) => setN8nApiKey(e.target.value)}
+                      placeholder="N8N_SEC_..."
+                      className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-900 font-bold"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowN8nApiKey(!showN8nApiKey)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      {showN8nApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={generateNewApiKey}
+                    className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-all cursor-pointer whitespace-nowrap"
+                    title="Gerar nova chave aleatória"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      copyToClipboard(n8nApiKey, 'API Key');
+                      setCopiedN8nKey(true);
+                      setTimeout(() => setCopiedN8nKey(false), 2000);
+                    }}
+                    className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-all cursor-pointer whitespace-nowrap"
+                    title="Copiar chave"
+                  >
+                    {copiedN8nKey ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400">
+                  Enviado no header <code className="bg-slate-100 px-1 rounded">x-api-key</code> e <code className="bg-slate-100 px-1 rounded">Authorization: Bearer</code>.
+                </span>
+              </div>
+            </div>
+
+            {/* Eventos Gatilho */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <label className="text-[11px] font-bold text-slate-700 block">
+                Selecione os Eventos que Devem Disparar o Webhook para o N8N:
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                {[
+                  { key: 'onOrderCreated', label: 'Nova OS Criada / Importada', desc: 'Dispara quando novos chamados entram no sistema.' },
+                  { key: 'onOrderAssigned', label: 'OS Atribuída ao Técnico', desc: 'Avisa o técnico no WhatsApp que ele recebeu um serviço.' },
+                  { key: 'onOrderCompleted', label: 'OS Concluída / Fechada', desc: 'Dispara quando o status da OS muda para finalizado.' },
+                  { key: 'onDailySummary', label: 'Agenda Matinal Diária', desc: 'Disparo agendado para envio de rota às 07:30.' },
+                  { key: 'onStockAlert', label: 'Alerta de Estoque Crítico', desc: 'Notifica quando insumos atingem nível de ressuprimento.' },
+                  { key: 'onBiweeklyClosing', label: 'Fechamento Quinzenal', desc: 'Envia extrato oficial e comprovante para os técnicos.' },
+                  { key: 'onAdvanceRequested', label: 'Solicitação de Vale / Adiantamento', desc: 'Notifica gestores para aprovação de adiantamentos.' },
+                ].map((item) => (
+                  <label
+                    key={item.key}
+                    className="flex items-start space-x-2.5 p-2.5 bg-slate-50 hover:bg-slate-100/80 rounded-lg border border-slate-200 cursor-pointer transition-all"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={(n8nEvents as any)[item.key] ?? true}
+                      onChange={(e) =>
+                        setN8nEvents({
+                          ...n8nEvents,
+                          [item.key]: e.target.checked,
+                        })
+                      }
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">{item.label}</div>
+                      <div className="text-[10px] text-slate-500 leading-tight">{item.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Resultado do Teste de Ping */}
+            {n8nTestResult && (
+              <div
+                className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                  n8nTestResult.success
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-200'
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold">
+                  <div className="flex items-center space-x-2">
+                    {n8nTestResult.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-amber-600" />
+                    )}
+                    <span>{n8nTestResult.message || n8nTestResult.error}</span>
+                  </div>
+                  {n8nTestResult.responseTimeMs !== undefined && (
+                    <span className="font-mono bg-white/80 px-2 py-0.5 rounded border text-[11px]">
+                      HTTP {n8nTestResult.statusCode || 0} • {n8nTestResult.responseTimeMs}ms
+                    </span>
+                  )}
+                </div>
+
+                {n8nTestResult.responseBody && (
+                  <div className="bg-black/10 p-2 rounded text-[11px] font-mono overflow-x-auto max-h-24">
+                    <strong>Resposta do N8N:</strong>{' '}
+                    {typeof n8nTestResult.responseBody === 'object'
+                      ? JSON.stringify(n8nTestResult.responseBody)
+                      : String(n8nTestResult.responseBody)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Card 3: Endpoints Inbound (N8N / WhatsApp Bot -> Sistema) */}
+          <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-4 text-xs">
+            <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
+              <Radio className="h-4 w-4 text-indigo-600" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">
+                  Endpoints Inbound da API (N8N / WhatsApp Bot ➔ Sistema)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  URLs prontas para você usar nos nós de <strong>HTTP Request</strong> do N8N para consultar dados ou atualizar tickets.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {n8nInboundEndpoints.map((ep, idx) => (
+                <div key={idx} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
+                          ep.method === 'POST' ? 'bg-indigo-600 text-white' : 'bg-emerald-600 text-white'
+                        }`}
+                      >
+                        {ep.method}
+                      </span>
+                      <span className="font-bold text-slate-900 text-xs">{ep.title}</span>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          copyToClipboard(ep.fullUrl, 'URL do Endpoint');
+                          setCopiedEndpointUrl(ep.path);
+                          setTimeout(() => setCopiedEndpointUrl(null), 2000);
+                        }}
+                        className="flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 font-bold text-[11px] rounded border border-slate-300 transition-all cursor-pointer"
+                      >
+                        {copiedEndpointUrl === ep.path ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        <span>{copiedEndpointUrl === ep.path ? 'Copiado!' : 'Copiar URL'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-2 rounded-lg border border-slate-200 font-mono text-[11px] text-indigo-900 font-semibold break-all">
+                    {ep.fullUrl}
+                  </div>
+
+                  <p className="text-slate-600 text-[11px] leading-relaxed">{ep.desc}</p>
+
+                  <div className="bg-slate-900 rounded-lg p-3 text-slate-200 font-mono text-[10px] overflow-x-auto space-y-1">
+                    <div className="text-slate-400 text-[9px] uppercase tracking-wider font-bold">
+                      Exemplo de Payload JSON (Nó HTTP Request do N8N):
+                    </div>
+                    <pre className="text-cyan-300">{ep.sampleJson}</pre>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Card 4: Template do Workflow N8N */}
+          <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-3 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Code className="h-4 w-4 text-indigo-600" />
+                <h3 className="text-sm font-bold text-slate-800">
+                  Modelo de Workflow JSON para Importar no N8N
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(sampleN8nWorkflowJson, 'Template JSON do N8N')}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs rounded-lg border border-indigo-200 transition-all cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Copiar Workflow para N8N</span>
+              </button>
+            </div>
+
+            <p className="text-slate-600 text-[11px]">
+              No N8N, basta pressionar <strong>Ctrl + V</strong> (ou ir em <em>Workflows ➔ Import from JSON</em>) para criar a estrutura inicial pronta com Webhook Inbound, Switch de Eventos e Nó de WhatsApp Evolution.
+            </p>
+
+            <div className="bg-slate-900 rounded-xl p-4 text-slate-200 font-mono text-[10px] max-h-48 overflow-y-auto leading-relaxed">
+              <pre className="text-slate-300">{sampleN8nWorkflowJson}</pre>
             </div>
           </div>
         </div>

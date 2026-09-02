@@ -579,11 +579,21 @@ export const ApiService = {
         body: formData,
       });
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        const rawText = await res.text().catch(() => '');
         return {
           success: false,
-          error: json.error || `Erro ao importar arquivo (Status ${res.status})`,
+          error: `Resposta inválida do servidor (HTTP ${res.status}): ${rawText.slice(0, 100) || 'Sem dados'}`,
+        };
+      }
+
+      if (!res.ok || !json?.success) {
+        return {
+          success: false,
+          error: json?.error || `Erro ao importar arquivo (Status ${res.status})`,
         };
       }
       return json;
@@ -594,4 +604,72 @@ export const ApiService = {
       };
     }
   },
+
+  async importOrdersJson(orders: any[]): Promise<{
+    success: boolean;
+    message?: string;
+    importedCount?: number;
+    techniciansCreated?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/import/orders-json', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ orders }),
+      });
+
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        const rawText = await res.text().catch(() => '');
+        return {
+          success: false,
+          error: `Resposta inválida do servidor (HTTP ${res.status}): ${rawText.slice(0, 100) || 'Sem dados'}`,
+        };
+      }
+
+      if (!res.ok || !json?.success) {
+        return {
+          success: false,
+          error: json?.error || `Erro ao salvar ordens (Status ${res.status})`,
+        };
+      }
+      return json;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Falha de comunicação ao salvar ordens revisadas.',
+      };
+    }
+  },
+
+  // ==========================================
+  // N8N & WEBHOOKS INTEGRATION
+  // ==========================================
+  async testN8nWebhook(config: { webhookUrl: string; apiKey?: string; testType?: string }): Promise<{
+    success: boolean;
+    statusCode?: number;
+    responseTimeMs?: number;
+    message?: string;
+    responseBody?: any;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/n8n/test-webhook', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Falha ao testar comunicação com o endpoint do N8N.',
+      };
+    }
+  },
 };
+

@@ -56,6 +56,7 @@ export class FinancialEngine {
       totalTollCost: fs.totalTollReimbursement,
       totalSupportCost: fs.totalSupportReimbursement,
       fixedCostAllowance: fs.fixedCostAllowance,
+      costAllowanceFortnight: technician.costAllowanceFortnight || 1,
 
       grossTotal: fs.grossTotal,
       advancesDeduction: fs.advancesAndDiscounts,

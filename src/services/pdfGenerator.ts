@@ -182,17 +182,23 @@ export class PdfStatementGenerator {
 
     // Soma das OS
     const sumOfOrders = (summary.totalBaseFee || 0) + (summary.totalKmCost || 0) + (summary.totalTollCost || 0) + (summary.totalSupportCost || 0);
+    const costAllowanceValue = summary.fixedCostAllowance !== undefined && summary.fixedCostAllowance !== null
+      ? Number(summary.fixedCostAllowance)
+      : 0.0;
+    const costAllowanceLabel = summary.costAllowanceFortnight
+      ? `(+) Ajuda Custo (${summary.costAllowanceFortnight}ª Qz):`
+      : '(+) Ajuda de Custo Mensal:';
 
     doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(51, 65, 85);
     doc.text('(+) Soma das OS (Serviços + KM + Pedágios):', 20, boxY + 8);
-    doc.text('(+) Ajuda de Custo Fixa:', 20, boxY + 15);
+    doc.text(costAllowanceLabel, 20, boxY + 15);
 
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(textDark[0], textDark[1], textDark[2]);
     doc.text(`R$ ${sumOfOrders.toFixed(2)}`, 88, boxY + 8, { align: 'right' });
-    doc.text(`R$ ${(summary.fixedCostAllowance || 250.0).toFixed(2)}`, 88, boxY + 15, { align: 'right' });
+    doc.text(`R$ ${costAllowanceValue.toFixed(2)}`, 88, boxY + 15, { align: 'right' });
 
     // (=) Total Bruto
     doc.setDrawColor(203, 213, 225);

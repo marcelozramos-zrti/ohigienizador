@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS `users` (
 
 -- 2. TABELA DE ORDENS DE SERVIÇO (OS)
 CREATE TABLE IF NOT EXISTS `service_orders` (
-    `id` VARCHAR(36) NOT NULL,
-    `callNumber` VARCHAR(50) NOT NULL UNIQUE,
+    `id` VARCHAR(80) NOT NULL,
+    `callNumber` VARCHAR(50) NOT NULL,
     `portoSeguroProtocol` VARCHAR(50) NULL,
     `serviceCategory` VARCHAR(80) NOT NULL,
     `baseServiceFee` DECIMAL(10, 2) NOT NULL DEFAULT 0.00,

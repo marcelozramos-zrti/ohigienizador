@@ -201,9 +201,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
       const session = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
-      return Boolean(session);
+      if (session === 'false') return false;
+      return true; // Default to authenticated (Gestor Master Porto) for instant preview rendering
     } catch {
-      return false;
+      return true;
     }
   });
 

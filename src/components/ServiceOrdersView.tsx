@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Search,
   PlusCircle,
@@ -19,30 +19,32 @@ import {
   Calendar,
   DollarSign,
   AlertTriangle,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
+  ClipboardList,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ServiceOrder } from '../types';
-import { isOrderInPeriod, parseDateComponents } from '../services/closingService';
+import { parseDateComponents } from '../services/closingService';
 import { EditServiceOrderModal } from './EditServiceOrderModal';
 
 interface ServiceOrdersViewProps {
   onOpenNewOrder: () => void;
 }
 
-const MONTH_NAMES = [
-  'Janeiro',
-  'Fevereiro',
-  'Março',
-  'Abril',
-  'Maio',
-  'Junho',
-  'Julho',
-  'Agosto',
-  'Setembro',
-  'Outubro',
-  'Novembro',
-  'Dezembro',
-];
+type SortField =
+  | 'callNumber'
+  | 'customerName'
+  | 'serviceCategory'
+  | 'technicianName'
+  | 'scheduledDate'
+  | 'kmTraveled'
+  | 'totalTechnicianGross'
+  | 'tollCost'
+  | 'supportCost'
+  | 'status';
 
 export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewOrder }) => {
   const {
@@ -50,12 +52,6 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     users = [],
     exportOrdersCsv,
     currentUser,
-    selectedYear = 2026,
-    setSelectedYear,
-    selectedMonth = 8,
-    setSelectedMonth,
-    selectedPeriod = 1,
-    setSelectedPeriod,
     deleteServiceOrder,
     reassignOrderTechnician,
     batchReassignTechnician,
@@ -63,8 +59,18 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     addToast,
   } = useApp();
 
+  // Filters State - All on a summarized single line
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [technicianFilter, setTechnicianFilter] = useState<string>('ALL');
+  const [startDateFilter, setStartDateFilter] = useState<string>('');
+  const [endDateFilter, setEndDateFilter] = useState<string>('');
+
+  // Sorting State (Excel-like column header sorting)
+  const [sortField, setSortField] = useState<SortField>('scheduledDate');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // Modals
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<ServiceOrder | null>(null);
@@ -73,19 +79,53 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
   const safeOrders = orders || [];
   const safeUsers = users || [];
+
   const techniciansList = useMemo(() => {
     return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
   }, [safeUsers]);
 
-  const unallocatedOrdersInPeriod = useMemo(() => {
+  // Handler para alternar ordenação de colunas (estilo Excel)
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Renderiza a seta de ordenação visual na coluna do DataGrid
+  const renderSortIndicator = (field: SortField) => {
+    if (sortField !== field) {
+      return <ArrowUpDown className="h-3 w-3 ml-1 text-slate-300 inline-block group-hover:text-slate-500 transition-colors" />;
+    }
+    return sortDirection === 'asc' ? (
+      <ArrowUp className="h-3 w-3 ml-1 text-[#003366] inline-block font-bold" />
+    ) : (
+      <ArrowDown className="h-3 w-3 ml-1 text-[#003366] inline-block font-bold" />
+    );
+  };
+
+  const handleClearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('ALL');
+    setTechnicianFilter('ALL');
+    setStartDateFilter('');
+    setEndDateFilter('');
+  };
+
+  const unallocatedOrders = useMemo(() => {
     return safeOrders.filter((os) => {
       if (!os) return false;
-      if (!isOrderInPeriod(os, { referenceYear: selectedYear, referenceMonth: selectedMonth, periodNumber: selectedPeriod })) return false;
-      const matched = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+      const matched = safeUsers.find(
+        (u) =>
+          u.id === os.technicianId ||
+          (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase())
+      );
       const displayName = matched?.name || os.technicianName;
       return !displayName || displayName === 'Não Alocado' || !os.technicianId || os.technicianId === 'tech-1';
     });
-  }, [safeOrders, selectedYear, selectedMonth, selectedPeriod, safeUsers]);
+  }, [safeOrders, safeUsers]);
 
   // Formatação amigável e precisa de Data / Hora para o DataGrid
   const formatScheduledDateTime = (dateStr?: string) => {
@@ -98,7 +138,6 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         const year = parsed.year;
         const datePart = `${day}/${month}/${year}`;
 
-        // Extrai horário se presente no formato ISO ou string
         let timePart = '';
         if (typeof dateStr === 'string') {
           if (dateStr.includes('T')) {
@@ -133,39 +172,122 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     }
   };
 
-  // Filtragem automática por Período (Ano, Mês, Quinzena), Busca Textual e Status
+  // 1. Filtragem unificada com suporte a busca estilo PowerQuery
   const filteredOrders = useMemo(() => {
     return safeOrders.filter((os) => {
       if (!os) return false;
 
-      // 1. Filtro Global de Período (Ano -> Mês -> Quinzena)
-      const inPeriod = isOrderInPeriod(os, {
-        referenceYear: selectedYear,
-        referenceMonth: selectedMonth,
-        periodNumber: selectedPeriod,
-      });
+      // Filtro de Busca Textual estilo PowerQuery (Suporta múltiplos critérios separados por ';')
+      if (searchTerm.trim()) {
+        const tokens = searchTerm
+          .split(';')
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean);
 
-      if (!inPeriod) return false;
+        if (tokens.length > 0) {
+          const { date: formattedDate, time: formattedTime } = formatScheduledDateTime(os.scheduledDate);
+          const isoDateStr = os.scheduledDate ? os.scheduledDate.split('T')[0] : ''; // YYYY-MM-DD
 
-      // 2. Filtro de Busca Textual
-      const matchesSearch =
-        !searchTerm.trim() ||
-        (os.callNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (os.customerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (os.customerCpf || '').includes(searchTerm) ||
-        (os.city || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (os.neighborhood || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (os.technicianName && os.technicianName.toLowerCase().includes(searchTerm.toLowerCase()));
+          let statusText = '';
+          if (os.status === 'PENDING') statusText = 'pendente';
+          else if (os.status === 'IN_PROGRESS') statusText = 'em andamento em rota';
+          else if (os.status === 'COMPLETED') statusText = 'finalizada concluida concluída';
+          else if (os.status === 'CANCELLED') statusText = 'cancelada';
 
-      if (!matchesSearch) return false;
+          const searchableFields = [
+            (os.callNumber || '').toLowerCase(),
+            (os.customerName || '').toLowerCase(),
+            (os.customerCpf || '').toLowerCase(),
+            (os.city || '').toLowerCase(),
+            (os.neighborhood || '').toLowerCase(),
+            (os.addressStreet || '').toLowerCase(),
+            (os.serviceCategory || '').toLowerCase(),
+            (os.technicianName || '').toLowerCase(),
+            statusText,
+            formattedDate.toLowerCase(), // e.g. "15/08/2026"
+            formattedTime.toLowerCase(), // e.g. "14:30"
+            isoDateStr,                  // e.g. "2026-08-15"
+          ];
 
-      // 3. Filtro de Status
-      const matchesStatus = statusFilter === 'ALL' || os.status === statusFilter;
-      if (!matchesStatus) return false;
+          // Todas as cláusulas (tokens) devem ser satisfeitas no mesmo registro (AND)
+          const matchesAllTokens = tokens.every((token) => {
+            return searchableFields.some((field) => field.includes(token));
+          });
+
+          if (!matchesAllTokens) return false;
+        }
+      }
+
+      // Filtro de Status (suporta PENDING, IN_PROGRESS, COMPLETED, CANCELLED e NOT_COMPLETED para OS não finalizadas)
+      if (statusFilter === 'NOT_COMPLETED') {
+        if (os.status === 'COMPLETED') return false;
+      } else if (statusFilter !== 'ALL' && os.status !== statusFilter) {
+        return false;
+      }
+
+      // Filtro de Técnico
+      if (technicianFilter !== 'ALL') {
+        if (technicianFilter === 'UNALLOCATED') {
+          const matched = safeUsers.find(
+            (u) =>
+              u.id === os.technicianId ||
+              (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase())
+          );
+          const displayName = matched?.name || os.technicianName;
+          if (displayName && displayName !== 'Não Alocado' && os.technicianId && os.technicianId !== 'tech-1') {
+            return false;
+          }
+        } else if (os.technicianId !== technicianFilter) {
+          return false;
+        }
+      }
+
+      // Filtro de Data Personalizado (Início e Fim)
+      if (startDateFilter || endDateFilter) {
+        const osDateStr = os.scheduledDate ? os.scheduledDate.split('T')[0] : '';
+        if (startDateFilter && osDateStr && osDateStr < startDateFilter) return false;
+        if (endDateFilter && osDateStr && osDateStr > endDateFilter) return false;
+      }
 
       return true;
     });
-  }, [safeOrders, selectedYear, selectedMonth, selectedPeriod, searchTerm, statusFilter]);
+  }, [safeOrders, searchTerm, statusFilter, technicianFilter, startDateFilter, endDateFilter, safeUsers]);
+
+  // 2. Ordenação das Colunas (Excel-like Sorting)
+  const sortedOrders = useMemo(() => {
+    const sorted = [...filteredOrders];
+    sorted.sort((a, b) => {
+      let valA: any = a[sortField];
+      let valB: any = b[sortField];
+
+      if (sortField === 'callNumber') {
+        valA = Number(a.callNumber) || a.callNumber || '';
+        valB = Number(b.callNumber) || b.callNumber || '';
+      } else if (sortField === 'scheduledDate') {
+        valA = a.scheduledDate || '';
+        valB = b.scheduledDate || '';
+      } else if (sortField === 'technicianName') {
+        valA = a.technicianName || 'Não Alocado';
+        valB = b.technicianName || 'Não Alocado';
+      } else if (
+        sortField === 'kmTraveled' ||
+        sortField === 'totalTechnicianGross' ||
+        sortField === 'tollCost' ||
+        sortField === 'supportCost'
+      ) {
+        valA = Number(valA || 0);
+        valB = Number(valB || 0);
+      } else {
+        valA = String(valA || '').toLowerCase();
+        valB = String(valB || '').toLowerCase();
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [filteredOrders, sortField, sortDirection]);
 
   const handleDeleteConfirm = () => {
     if (orderToDelete) {
@@ -208,151 +330,334 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     }
   };
 
+  const formatDateBR = (dateStr: string) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  // Métricas do Dashboard Informativo do Gestor (Cobrança em Tempo Real)
+  const orderStats = useMemo(() => {
+    const total = safeOrders.length;
+    let pending = 0;
+    let inProgress = 0;
+    let completed = 0;
+    let cancelled = 0;
+    let unallocated = 0;
+
+    safeOrders.forEach((os) => {
+      if (!os) return;
+      if (os.status === 'PENDING') pending++;
+      else if (os.status === 'IN_PROGRESS') inProgress++;
+      else if (os.status === 'COMPLETED') completed++;
+      else if (os.status === 'CANCELLED') cancelled++;
+
+      if (!os.technicianId || os.technicianName === 'Não Alocado' || os.technicianId === 'tech-1') {
+        unallocated++;
+      }
+    });
+
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const remainingToClose = pending + inProgress;
+
+    return { total, pending, inProgress, completed, cancelled, unallocated, completionRate, remainingToClose };
+  }, [safeOrders]);
+
   return (
     <div className="space-y-6">
-      {/* Header with Title, Period Selectors & Actions */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-xl sm:text-2xl font-bold text-[#003366] tracking-tight">
-              Ordens de Serviço • Porto Seguro
-            </h1>
-            <span className="inline-flex items-center px-2 py-0.5 bg-cyan-50 text-cyan-800 text-[11px] font-bold rounded-md border border-cyan-200">
-              {filteredOrders.length} chamados no período
-            </span>
+      {/* Executive Status Dashboard - Quadros Informativos de Cobrança em Tempo Real */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* Total de Chamados */}
+        <div
+          onClick={() => setStatusFilter('ALL')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            statusFilter === 'ALL'
+              ? 'border-cyan-500 ring-2 ring-cyan-400/30 bg-cyan-50/20'
+              : 'border-slate-200 hover:border-cyan-300'
+          }`}
+          title="Clique para ver Todos os Chamados"
+        >
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Total Geral</span>
+            <div className="p-1.5 rounded-lg bg-slate-100 text-slate-700">
+              <ClipboardList className="w-4 h-4" />
+            </div>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Monitoramento de chamados, rotas por KM, pedágios, custos de suporte e baixa de insumos.
-          </p>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-black text-slate-900">{orderStats.total}</span>
+            <span className="text-[10px] font-semibold text-slate-500">chamados</span>
+          </div>
+          <div className="mt-1 text-[10px] text-slate-500 font-medium truncate">
+            Base completa cadastrada
+          </div>
         </div>
 
-        {/* Global Period Selectors & Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-          {/* Seletor Interativo: Quinzena */}
-          <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-xs">
-            <button
-              id="orders-period-q1-btn"
-              type="button"
-              onClick={() => setSelectedPeriod(1)}
-              className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                selectedPeriod === 1
-                  ? 'bg-[#003366] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-              title="Filtrar chamados da 1ª Quinzena (dias 01 a 15)"
-            >
-              1ª Qnz (01-15)
-            </button>
-            <button
-              id="orders-period-q2-btn"
-              type="button"
-              onClick={() => setSelectedPeriod(2)}
-              className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                selectedPeriod === 2
-                  ? 'bg-[#003366] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-              title="Filtrar chamados da 2ª Quinzena (dias 16 ao fim)"
-            >
-              2ª Qnz (16-fim)
-            </button>
+        {/* Pendentes */}
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'PENDING' ? 'ALL' : 'PENDING')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            statusFilter === 'PENDING'
+              ? 'border-amber-500 ring-2 ring-amber-400/30 bg-amber-50/30'
+              : 'border-slate-200 hover:border-amber-300'
+          }`}
+          title="Clique para filtrar Chamados Pendentes"
+        >
+          <div className="flex items-center justify-between text-amber-700 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Pendentes</span>
+            <div className="p-1.5 rounded-lg bg-amber-100 text-amber-800">
+              <Clock className="w-4 h-4" />
+            </div>
           </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-black text-amber-900">{orderStats.pending}</span>
+            <span className="text-[10px] font-bold text-amber-700">não iniciadas</span>
+          </div>
+          <div className="mt-1 text-[10px] text-amber-700 font-medium truncate">
+            Aguardando atendimento
+          </div>
+        </div>
 
-          {/* Seletor Interativo: Mês */}
-          <select
-            id="orders-month-select"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(Number(e.target.value))}
-            className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 shadow-xs cursor-pointer focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-            title="Selecionar Mês de Referência"
-          >
-            {MONTH_NAMES.map((m, idx) => (
-              <option key={idx} value={idx + 1}>
-                {m}
-              </option>
-            ))}
-          </select>
+        {/* Em Andamento */}
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'IN_PROGRESS' ? 'ALL' : 'IN_PROGRESS')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            statusFilter === 'IN_PROGRESS'
+              ? 'border-blue-500 ring-2 ring-blue-400/30 bg-blue-50/30'
+              : 'border-slate-200 hover:border-blue-300'
+          }`}
+          title="Clique para filtrar Chamados em Andamento"
+        >
+          <div className="flex items-center justify-between text-blue-700 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-blue-800">Em Andamento</span>
+            <div className="p-1.5 rounded-lg bg-blue-100 text-blue-800">
+              <Car className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-black text-blue-900">{orderStats.inProgress}</span>
+            <span className="text-[10px] font-bold text-blue-700">em atendimento</span>
+          </div>
+          <div className="mt-1 text-[10px] text-blue-700 font-medium truncate">
+            Técnico em rota / atendimento
+          </div>
+        </div>
 
-          {/* Seletor Interativo: Ano */}
-          <select
-            id="orders-year-select"
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(Number(e.target.value))}
-            className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 shadow-xs cursor-pointer focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-            title="Selecionar Ano de Referência"
-          >
-            <option value={2025}>2025</option>
-            <option value={2026}>2026</option>
-            <option value={2027}>2027</option>
-          </select>
+        {/* Finalizadas */}
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'COMPLETED' ? 'ALL' : 'COMPLETED')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            statusFilter === 'COMPLETED'
+              ? 'border-emerald-500 ring-2 ring-emerald-400/30 bg-emerald-50/30'
+              : 'border-slate-200 hover:border-emerald-300'
+          }`}
+          title="Clique para filtrar Chamados Finalizados"
+        >
+          <div className="flex items-center justify-between text-emerald-700 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">Finalizadas</span>
+            <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-black text-emerald-900">{orderStats.completed}</span>
+            <span className="text-[10px] font-bold text-emerald-700">{orderStats.completionRate}% total</span>
+          </div>
+          <div className="mt-1 text-[10px] text-emerald-700 font-medium truncate">
+            Concluídas com sucesso
+          </div>
+        </div>
 
-          {/* Exportar CSV */}
-          <button
-            id="orders-export-csv-btn"
-            onClick={exportOrdersCsv}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 shadow-xs transition-all cursor-pointer"
-            title="Exportar listagem de ordens de serviço em formato CSV"
-          >
-            <FileDown className="h-4 w-4 text-slate-600" />
-            <span className="hidden sm:inline">Exportar CSV</span>
-          </button>
-
-          {/* Nova OS Porto */}
-          {currentUser.role !== 'TECHNICIAN' && (
-            <button
-              id="orders-new-os-btn"
-              onClick={onOpenNewOrder}
-              className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer"
-              title="Abrir formulário de nova Ordem de Serviço Porto Seguro"
-            >
-              <PlusCircle className="h-4 w-4 text-cyan-400" />
-              <span>Nova OS</span>
-            </button>
-          )}
+        {/* Painel do Gestor - Cobrança de Fechamento */}
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'NOT_COMPLETED' ? 'ALL' : 'NOT_COMPLETED')}
+          className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
+            statusFilter === 'NOT_COMPLETED'
+              ? 'border-purple-500 ring-2 ring-purple-400/30 bg-purple-50/30'
+              : orderStats.remainingToClose > 0
+              ? 'border-amber-300 hover:border-amber-400 bg-amber-50/20'
+              : 'border-emerald-200 bg-emerald-50/20'
+          }`}
+          title="Clique para filtrar Chamados Não Finalizados"
+        >
+          <div className="flex items-center justify-between text-slate-700 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800">Meta do Gestor</span>
+            <div className={`p-1.5 rounded-lg ${orderStats.remainingToClose > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+              <Shield className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className={`text-2xl font-black ${orderStats.remainingToClose > 0 ? 'text-amber-900' : 'text-emerald-900'}`}>
+              {orderStats.remainingToClose}
+            </span>
+            <span className="text-[10px] font-bold text-slate-600">a fechar</span>
+          </div>
+          <div className="mt-1 text-[10px] font-bold truncate">
+            {orderStats.remainingToClose > 0 ? (
+              <span className="text-amber-800 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block" />
+                Cobrar preenchimento!
+              </span>
+            ) : (
+              <span className="text-emerald-700 font-bold">
+                🎉 100% Finalizadas no Dia!
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Filters Bar: Search & Status Tabs */}
-      <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3.5">
-        {/* Search Input */}
-        <div className="relative w-full md:w-96">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+      {/* Filters & Actions Box */}
+      <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-xs space-y-2.5">
+        {/* Linha 1: Filtros de Status, Técnico, Período e Botões de Ação */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Status Filter Select */}
+            <div className="flex items-center space-x-1.5 shrink-0">
+              <label className="text-[11px] font-semibold text-slate-500 hidden sm:inline">Status:</label>
+              <select
+                id="orders-status-filter-select"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none cursor-pointer"
+              >
+                <option value="ALL">Todos os Status</option>
+                <option value="NOT_COMPLETED">⚠️ Não Finalizadas</option>
+                <option value="PENDING">Pendentes</option>
+                <option value="IN_PROGRESS">Em Andamento</option>
+                <option value="COMPLETED">Finalizadas</option>
+                <option value="CANCELLED">Canceladas</option>
+              </select>
+            </div>
+
+            {/* Technician Filter Select */}
+            <div className="flex items-center space-x-1.5 shrink-0">
+              <label className="text-[11px] font-semibold text-slate-500 hidden sm:inline">Técnico:</label>
+              <select
+                id="orders-tech-filter-select"
+                value={technicianFilter}
+                onChange={(e) => setTechnicianFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none cursor-pointer"
+              >
+                <option value="ALL">Todos os Técnicos</option>
+                <option value="UNALLOCATED">⚠️ Apenas Não Alocados</option>
+                {techniciansList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Period Filter: Início */}
+            <div className="relative inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-cyan-50/50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-cyan-300 transition-all group shrink-0">
+              <Calendar className="h-4 w-4 text-cyan-700 group-hover:scale-110 transition-transform shrink-0 pointer-events-none" />
+              <span className="text-xs font-bold text-slate-700 group-hover:text-cyan-900 select-none pointer-events-none">
+                Início{startDateFilter ? `: ${formatDateBR(startDateFilter)}` : ''}
+              </span>
+              <input
+                type="date"
+                value={startDateFilter}
+                onChange={(e) => setStartDateFilter(e.target.value)}
+                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                title="Clique para selecionar a Data Inicial"
+              />
+              {startDateFilter && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setStartDateFilter('');
+                  }}
+                  className="z-20 p-0.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-200 transition-colors cursor-pointer"
+                  title="Limpar Data Inicial"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Period Filter: Fim */}
+            <div className="relative inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-cyan-50/50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-cyan-300 transition-all group shrink-0">
+              <Calendar className="h-4 w-4 text-cyan-700 group-hover:scale-110 transition-transform shrink-0 pointer-events-none" />
+              <span className="text-xs font-bold text-slate-700 group-hover:text-cyan-900 select-none pointer-events-none">
+                Fim{endDateFilter ? `: ${formatDateBR(endDateFilter)}` : ''}
+              </span>
+              <input
+                type="date"
+                value={endDateFilter}
+                onChange={(e) => setEndDateFilter(e.target.value)}
+                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                title="Clique para selecionar a Data Final"
+              />
+              {endDateFilter && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEndDateFilter('');
+                  }}
+                  className="z-20 p-0.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-200 transition-colors cursor-pointer"
+                  title="Limpar Data Final"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Actions: Clear Filters & Icon-only Export CSV with Tooltip */}
+          <div className="flex items-center space-x-1.5 shrink-0 ml-auto">
+            {(searchTerm || statusFilter !== 'ALL' || technicianFilter !== 'ALL' || startDateFilter || endDateFilter) && (
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-semibold flex items-center space-x-1 cursor-pointer transition-all"
+                title="Limpar todos os filtros"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span className="text-[11px]">Limpar</span>
+              </button>
+            )}
+
+            {/* Exportar CSV - Apenas Ícone com Tooltip no Hover */}
+            <div className="relative group inline-block">
+              <button
+                id="orders-export-csv-btn"
+                onClick={exportOrdersCsv}
+                className="p-1.5 bg-white hover:bg-cyan-50 text-slate-700 hover:text-cyan-800 rounded-lg border border-slate-200 hover:border-cyan-300 shadow-2xs transition-all cursor-pointer flex items-center justify-center"
+                aria-label="Exportar CSV"
+              >
+                <FileDown className="h-4 w-4 text-slate-600 group-hover:text-cyan-700 transition-colors" />
+              </button>
+
+              {/* Tooltip Popup no Hover */}
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-2.5 py-1 rounded-md shadow-lg whitespace-nowrap pointer-events-none z-30 flex items-center gap-1">
+                <span>Exportar CSV</span>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-[1px] border-4 border-transparent border-t-slate-900" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Linha 2: Campo de Busca (Search Input) com suporte a PowerQuery */}
+        <div className="relative w-full">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             id="orders-search-input"
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar chamado, cliente, CPF, bairro ou técnico..."
-            className="w-full pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:bg-white transition-all"
+            placeholder="Buscar por chamado, cliente, CPF, data (ex: 15/ ou 15/08) ou filtro duplo com ; (ex: 15/08; Marcelo)..."
+            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:bg-white transition-all shadow-2xs"
           />
-        </div>
-
-        {/* Status Filter Tabs */}
-        <div className="flex items-center space-x-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          {[
-            { id: 'ALL', label: 'Todas as OS' },
-            { id: 'PENDING', label: 'Pendentes' },
-            { id: 'IN_PROGRESS', label: 'Em Andamento' },
-            { id: 'COMPLETED', label: 'Finalizadas' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              id={`status-filter-${tab.id.toLowerCase()}`}
-              onClick={() => setStatusFilter(tab.id)}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
-                statusFilter === tab.id
-                  ? 'bg-[#003366] text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
         </div>
       </div>
 
       {/* Banner de Ação Rápida para Ordens Não Alocadas */}
-      {unallocatedOrdersInPeriod.length > 0 && (
+      {unallocatedOrders.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 font-bold text-sm">
@@ -360,10 +665,10 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             </div>
             <div>
               <h4 className="text-xs font-bold text-amber-950">
-                {unallocatedOrdersInPeriod.length} Ordem(ns) de Serviço Não Alocadas na {selectedPeriod}ª Qnz de {MONTH_NAMES[selectedMonth - 1]}/{selectedYear}
+                {unallocatedOrders.length} Ordem(ns) de Serviço Não Alocadas
               </h4>
               <p className="text-[11px] text-amber-800">
-                Selecione o técnico para vincular todas as OSs de uma vez ou altere individualmente na tabela:
+                Selecione o técnico para vincular todas as OSs pendentes ou altere individualmente na tabela:
               </p>
             </div>
           </div>
@@ -389,7 +694,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 if (!batchTechId) return;
                 try {
                   setIsBatchBusy(true);
-                  const idsToAssign = unallocatedOrdersInPeriod.map((o) => o.id);
+                  const idsToAssign = unallocatedOrders.map((o) => o.id);
                   await batchReassignTechnician(idsToAssign, batchTechId);
                 } finally {
                   setIsBatchBusy(false);
@@ -398,7 +703,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
               }}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
             >
-              {isBatchBusy ? 'Vinculando...' : `Atribuir Todas as ${unallocatedOrdersInPeriod.length} OSs`}
+              {isBatchBusy ? 'Vinculando...' : `Atribuir Todas (${unallocatedOrders.length} OSs)`}
             </button>
 
             <button
@@ -415,50 +720,147 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         </div>
       )}
 
-      {/* Orders High Density DataGrid */}
+      {/* Orders High Density DataGrid with Clickable Excel-like Column Headers */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[10px] tracking-wider">
+            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase font-bold text-[10px] tracking-wider select-none">
               <tr>
-                <th className="py-3 px-3.5 whitespace-nowrap">Chamado Porto</th>
-                <th className="py-3 px-3.5 min-w-[160px]">Cliente & Local</th>
-                <th className="py-3 px-3.5 min-w-[140px]">Serviço</th>
-                <th className="py-3 px-3.5 min-w-[130px]">Técnico</th>
-                <th className="py-3 px-3.5 whitespace-nowrap bg-cyan-50/40 text-cyan-900 border-x border-cyan-100">
-                  Data / Hora
+                {/* 1. Chamado Porto */}
+                <th
+                  onClick={() => handleSort('callNumber')}
+                  className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Chamado Porto</span>
+                    {renderSortIndicator('callNumber')}
+                  </div>
                 </th>
-                <th className="py-3 px-3.5 whitespace-nowrap">Deslocamento (KM)</th>
-                <th className="py-3 px-3.5 whitespace-nowrap">Repasse Técnico</th>
-                <th className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700">
-                  Pedágio
+
+                {/* 2. Cliente & Local */}
+                <th
+                  onClick={() => handleSort('customerName')}
+                  className="py-3 px-3.5 min-w-[160px] cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Cliente & Local</span>
+                    {renderSortIndicator('customerName')}
+                  </div>
                 </th>
-                <th className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700">
-                  Suporte Extra
+
+                {/* 3. Serviço */}
+                <th
+                  onClick={() => handleSort('serviceCategory')}
+                  className="py-3 px-3.5 min-w-[140px] cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Serviço</span>
+                    {renderSortIndicator('serviceCategory')}
+                  </div>
                 </th>
-                <th className="py-3 px-3.5 text-center whitespace-nowrap">Status</th>
+
+                {/* 4. Técnico */}
+                <th
+                  onClick={() => handleSort('technicianName')}
+                  className="py-3 px-3.5 min-w-[130px] cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Técnico</span>
+                    {renderSortIndicator('technicianName')}
+                  </div>
+                </th>
+
+                {/* 5. Data / Hora */}
+                <th
+                  onClick={() => handleSort('scheduledDate')}
+                  className="py-3 px-3.5 whitespace-nowrap bg-cyan-50/40 text-cyan-900 border-x border-cyan-100 cursor-pointer hover:bg-cyan-100/60 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Data / Hora</span>
+                    {renderSortIndicator('scheduledDate')}
+                  </div>
+                </th>
+
+                {/* 6. Deslocamento (KM) */}
+                <th
+                  onClick={() => handleSort('kmTraveled')}
+                  className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Deslocamento (KM)</span>
+                    {renderSortIndicator('kmTraveled')}
+                  </div>
+                </th>
+
+                {/* 7. Repasse Técnico */}
+                <th
+                  onClick={() => handleSort('totalTechnicianGross')}
+                  className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Repasse Técnico</span>
+                    {renderSortIndicator('totalTechnicianGross')}
+                  </div>
+                </th>
+
+                {/* 8. Pedágio */}
+                <th
+                  onClick={() => handleSort('tollCost')}
+                  className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Pedágio</span>
+                    {renderSortIndicator('tollCost')}
+                  </div>
+                </th>
+
+                {/* 9. Suporte Extra */}
+                <th
+                  onClick={() => handleSort('supportCost')}
+                  className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
+                >
+                  <div className="flex items-center">
+                    <span>Suporte Extra</span>
+                    {renderSortIndicator('supportCost')}
+                  </div>
+                </th>
+
+                {/* 10. Status */}
+                <th
+                  onClick={() => handleSort('status')}
+                  className="py-3 px-3.5 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
+                >
+                  <div className="flex items-center justify-center">
+                    <span>Status</span>
+                    {renderSortIndicator('status')}
+                  </div>
+                </th>
+
                 <th className="py-3 px-3.5 text-center whitespace-nowrap min-w-[90px]">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredOrders.length === 0 ? (
+              {sortedOrders.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="py-12 text-center text-slate-400">
                     <div className="max-w-md mx-auto space-y-1.5">
                       <p className="font-semibold text-slate-600 text-sm">
-                        Nenhuma ordem de serviço encontrada neste período.
+                        Nenhuma ordem de serviço encontrada com os filtros selecionados.
                       </p>
                       <p className="text-xs text-slate-400">
-                        {selectedPeriod}ª Quinzena de {MONTH_NAMES[selectedMonth - 1]}/{selectedYear}.
-                        Altere os seletores de período acima ou limpe o campo de busca.
+                        Altere os filtros acima ou limpe o campo de busca.
                       </p>
                     </div>
                   </td>
                 </tr>
               ) : (
-                filteredOrders.map((os) => {
+                sortedOrders.map((os) => {
                   const scheduleInfo = formatScheduledDateTime(os.scheduledDate);
-                  const matchedTech = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+                  const matchedTech = safeUsers.find(
+                    (u) =>
+                      u.id === os.technicianId ||
+                      (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase())
+                  );
                   const displayName = matchedTech?.name || os.technicianName || null;
                   const isUnallocated = !displayName || displayName === 'Não Alocado';
 
@@ -525,7 +927,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                         </div>
                       </td>
 
-                      {/* 5. DATA / HORA (Nova Coluna ao lado de Técnico) */}
+                      {/* 5. DATA / HORA */}
                       <td className="py-3 px-3.5 whitespace-nowrap bg-cyan-50/20 border-x border-cyan-100/60">
                         <div className="font-mono font-bold text-slate-800 flex items-center gap-1">
                           <Calendar className="h-3 w-3 text-cyan-600 shrink-0" />
@@ -560,14 +962,14 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                         </div>
                       </td>
 
-                      {/* 8. PEDÁGIO (Nova Coluna Financeira ao lado de Repasse) */}
+                      {/* 8. PEDÁGIO */}
                       <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
                         <div className={`font-mono font-medium ${os.tollCost > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
                           R$ {(os.tollCost || 0).toFixed(2)}
                         </div>
                       </td>
 
-                      {/* 9. SUPORTE EXTRA (Nova Coluna Financeira ao lado de Pedágio) */}
+                      {/* 9. SUPORTE EXTRA */}
                       <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
                         <div className={`font-mono font-medium ${os.supportCost > 0 ? 'text-cyan-700 font-bold' : 'text-slate-400'}`}>
                           R$ {(os.supportCost || 0).toFixed(2)}
@@ -579,7 +981,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                         {getStatusBadge(os.status)}
                       </td>
 
-                      {/* 11. AÇÕES (UX Refatorada com ícones minimalistas e tooltips) */}
+                      {/* 11. AÇÕES */}
                       <td className="py-3 px-3.5 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center space-x-1">
                           {/* Visualizar */}

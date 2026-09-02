@@ -159,8 +159,10 @@ export async function initializeDatabaseSchema(): Promise<void> {
         bankAgency VARCHAR(20) NULL,
         bankAccount VARCHAR(30) NULL,
         baseCostAllowance DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        costAllowanceFortnight INT NOT NULL DEFAULT 1,
         hasSpecialTaxRule TINYINT(1) NOT NULL DEFAULT 0,
         specialTaxRate DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+        price_table LONGTEXT NULL,
         createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
         INDEX idx_users_role (role)
@@ -182,8 +184,11 @@ export async function initializeDatabaseSchema(): Promise<void> {
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS bankAgency VARCHAR(20) NULL",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS bankAccount VARCHAR(30) NULL",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS baseCostAllowance DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS costAllowanceFortnight INT NOT NULL DEFAULT 1",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS cost_allowance_fortnight INT NOT NULL DEFAULT 1",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS hasSpecialTaxRule TINYINT(1) NOT NULL DEFAULT 0",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialTaxRate DECIMAL(5, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS price_table LONGTEXT NULL",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS createdAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3)",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS updatedAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
     ];
@@ -197,8 +202,8 @@ export async function initializeDatabaseSchema(): Promise<void> {
     // 2. service_orders table
     await db.query(`
       CREATE TABLE IF NOT EXISTS service_orders (
-        id VARCHAR(36) NOT NULL PRIMARY KEY,
-        callNumber VARCHAR(50) NOT NULL UNIQUE,
+        id VARCHAR(80) NOT NULL PRIMARY KEY,
+        callNumber VARCHAR(50) NOT NULL,
         portoSeguroProtocol VARCHAR(50) NULL,
         serviceCategory VARCHAR(80) NOT NULL,
         baseServiceFee DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
@@ -233,12 +238,17 @@ export async function initializeDatabaseSchema(): Promise<void> {
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
         INDEX idx_os_status (status),
         INDEX idx_os_tech (technicianId),
-        INDEX idx_os_payment (paymentStatus)
+        INDEX idx_os_payment (paymentStatus),
+        INDEX idx_os_callNumber (callNumber)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     // Ensure all missing columns exist in existing 'service_orders' table (MariaDB 10.2+)
     const orderAlterStatements = [
+      "ALTER TABLE service_orders MODIFY COLUMN id VARCHAR(80) NOT NULL",
+      "ALTER TABLE service_orders DROP INDEX callNumber",
+      "ALTER TABLE service_orders DROP INDEX call_number",
+      "ALTER TABLE service_orders ADD INDEX idx_os_callNumber (callNumber)",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING'",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentDate DATETIME(3) NULL",
     ];

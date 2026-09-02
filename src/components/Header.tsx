@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Bell,
-  Search,
   CheckCircle2,
   ChevronDown,
   PlusCircle,
@@ -25,6 +24,8 @@ interface HeaderProps {
   onNavigateTab?: (tab: string) => void;
   onToggleMobileMenu?: () => void;
   onOpenNewOrder?: () => void;
+  onOpenNewTechnician?: () => void;
+  onOpenNewAdvance?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -32,6 +33,8 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigateTab,
   onToggleMobileMenu,
   onOpenNewOrder,
+  onOpenNewTechnician,
+  onOpenNewAdvance,
 }) => {
   const {
     currentUser,
@@ -103,7 +106,7 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'orders':
         return {
-          title: 'Ordens de Serviço (OS)',
+          title: 'Ordens de Serviço',
           subtitle: 'Chamados Homologados Porto Seguro',
           icon: ClipboardList,
         };
@@ -115,8 +118,8 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'stock':
         return {
-          title: 'Controle de Estoque & Insumos',
-          subtitle: 'Químicos, Impermeabilizantes e Suportes',
+          title: 'Controle de Produtos',
+          subtitle: 'Gestão Integrada de Estoque e Insumos',
           icon: PackageCheck,
         };
       case 'technicians':
@@ -127,8 +130,8 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'cashflow':
         return {
-          title: 'Fluxo de Caixa & Vales',
-          subtitle: 'Controle de Adiantamentos e Recebíveis',
+          title: 'Fluxo de Caixa',
+          subtitle: 'Controle Integrado de Entradas, Saídas e Vales',
           icon: DollarSign,
         };
       case 'import_orders':
@@ -186,48 +189,6 @@ export const Header: React.FC<HeaderProps> = ({
                 <h2 className="text-sm sm:text-base font-bold text-[#003366] truncate">
                   {page.title}
                 </h2>
-                {/* Interactive Global Period Selector (Ano -> Mês -> Quinzena) */}
-                <div className="hidden sm:flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
-                  {/* Quinzena */}
-                  <select
-                    id="header-period-select"
-                    value={selectedPeriod}
-                    onChange={(e) => setSelectedPeriod(Number(e.target.value) as 1 | 2)}
-                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-cyan-900 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
-                    title="Selecione a Quinzena"
-                  >
-                    <option value={1}>1ª Quinzena (01-15)</option>
-                    <option value={2}>2ª Quinzena (16-fim)</option>
-                  </select>
-
-                  {/* Mês */}
-                  <select
-                    id="header-month-select"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-800 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
-                    title="Selecione o Mês"
-                  >
-                    {monthNames.map((name, idx) => (
-                      <option key={idx} value={idx + 1}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Ano */}
-                  <select
-                    id="header-year-select"
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(Number(e.target.value))}
-                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-800 shadow-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none cursor-pointer"
-                    title="Selecione o Ano"
-                  >
-                    <option value={2025}>2025</option>
-                    <option value={2026}>2026</option>
-                    <option value={2027}>2027</option>
-                  </select>
-                </div>
               </div>
               <p className="text-[10px] text-slate-400 font-medium truncate hidden md:block">
                 {page.subtitle}
@@ -236,20 +197,11 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Search, Quick Action, Notifications, User Profile */}
+        {/* Right Side: Quick Action, Notifications, User Profile */}
         <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-          {/* Search Input Bar (Desktop) */}
-          <div className="hidden lg:flex items-center gap-2 text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs w-52 xl:w-64 focus-within:ring-2 focus-within:ring-cyan-500 focus-within:bg-white transition-all">
-            <Search className="w-4 h-4 text-slate-400 shrink-0" />
-            <input
-              type="text"
-              placeholder="Pesquisar no sistema..."
-              className="w-full bg-transparent border-none text-slate-800 placeholder-slate-400 focus:outline-none text-xs"
-            />
-          </div>
 
-          {/* Quick New Order Button */}
-          {onOpenNewOrder && (
+          {/* Contextual Quick Action Button */}
+          {(activeTab === 'orders' || activeTab === 'mobile_app') && onOpenNewOrder && (
             <button
               id="header-quick-new-os-btn"
               onClick={onOpenNewOrder}
@@ -257,6 +209,28 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <PlusCircle className="w-3.5 h-3.5 text-cyan-300" />
               <span>Nova OS</span>
+            </button>
+          )}
+
+          {activeTab === 'technicians' && onOpenNewTechnician && (
+            <button
+              id="header-quick-new-tech-btn"
+              onClick={onOpenNewTechnician}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-cyan-300" />
+              <span>Técnico</span>
+            </button>
+          )}
+
+          {activeTab === 'cashflow' && onOpenNewAdvance && (
+            <button
+              id="header-quick-new-advance-btn"
+              onClick={onOpenNewAdvance}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-cyan-300" />
+              <span>Novo Lançamento</span>
             </button>
           )}
 

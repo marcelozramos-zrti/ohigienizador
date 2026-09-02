@@ -31,6 +31,7 @@ const MainLayout: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState<boolean>(false);
   const [showNewAdvanceModal, setShowNewAdvanceModal] = useState<boolean>(false);
+  const [showNewTechModal, setShowNewTechModal] = useState<boolean>(false);
 
   // Redirecionamento automático e proteção de rota no Frontend baseado no RBAC
   useEffect(() => {
@@ -73,6 +74,8 @@ const MainLayout: React.FC = () => {
           onNavigateTab={setActiveTab}
           onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
           onOpenNewOrder={() => setShowNewOrderModal(true)}
+          onOpenNewTechnician={() => setShowNewTechModal(true)}
+          onOpenNewAdvance={() => setShowNewAdvanceModal(true)}
         />
 
         {/* Dynamic Scrollable Page Content */}
@@ -95,7 +98,12 @@ const MainLayout: React.FC = () => {
 
             {activeTab === 'stock' && <InventoryView />}
 
-            {activeTab === 'technicians' && <TechniciansView />}
+            {activeTab === 'technicians' && (
+              <TechniciansView
+                showCreateModal={showNewTechModal}
+                onOpenCreateChange={setShowNewTechModal}
+              />
+            )}
 
             {activeTab === 'cashflow' && (
               <CashFlowView

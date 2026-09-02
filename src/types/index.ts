@@ -116,11 +116,22 @@ export interface User {
   bankAccount?: string;
 
   // Remuneration rules
-  baseCostAllowance: number; // Ajuda de custo fixa quinzenal (ex: R$ 250,00)
+  baseCostAllowance: number; // Ajuda de custo mensal fixa (ex: R$ 250,00)
+  costAllowanceFortnight?: 1 | 2; // Quinzena de pagamento da ajuda de custo mensal (1: 1ª Quinzena, 2: 2ª Quinzena)
   
   // REGRA DE EXCEÇÃO: Flag para os 2 técnicos específicos na base com cálculo de impostos separado
   hasSpecialTaxRule: boolean;
   specialTaxRate: number; // Porcentagem de dedução independente (ex: 16%)
+
+  // Tabela de Preços de Serviços Customizada por Técnico (Preposto / Negociado)
+  priceTable?: TechnicianPriceTableItem[];
+}
+
+export interface TechnicianPriceTableItem {
+  id?: string;
+  serviceType: string; // Ex: "Instalação Lava e Seca", "Impermeabilização 3 Assentos"
+  category: string; // Ex: "Instalação", "Impermeabilização Assentos", "Impermeabilização Cadeiras", "Impermeabilização Colchões", "Higienização"
+  prepostoPrice: number; // Valor Preposto negociado em R$
 }
 
 export interface OSStockItemUsage {
@@ -229,7 +240,8 @@ export interface TechnicianClosingSummary {
   totalKmCost: number;
   totalTollCost: number;
   totalSupportCost: number;
-  fixedCostAllowance: number;
+  fixedCostAllowance: number; // Valor da ajuda de custo creditado nesta quinzena
+  costAllowanceFortnight?: 1 | 2; // Quinzena definida no perfil do técnico (1 ou 2)
 
   // Bruto
   grossTotal: number;
@@ -299,6 +311,27 @@ export interface DatabaseSettings {
   lastSyncTimestamp?: string;
 }
 
+export interface N8nEventsConfig {
+  onOrderCreated: boolean;
+  onOrderAssigned: boolean;
+  onOrderCompleted: boolean;
+  onDailySummary: boolean;
+  onStockAlert: boolean;
+  onBiweeklyClosing: boolean;
+  onAdvanceRequested: boolean;
+}
+
+export interface N8nSettings {
+  enabled: boolean;
+  webhookUrl: string; // URL do Webhook no seu N8N (ex: https://n8n.seuservidor.com/webhook/higienizador-events)
+  apiKey: string; // Token de segurança compartilhado entre o sistema e o N8N
+  events: N8nEventsConfig;
+  lastPingStatus?: 'SUCCESS' | 'ERROR' | 'IDLE';
+  lastPingAt?: string;
+  lastPingResponse?: string;
+  lastPingCode?: number;
+}
+
 export interface GeneralSettings {
   companyName: string;
   companyCnpj: string;
@@ -317,6 +350,7 @@ export interface GeneralSettings {
   autoStockDeduction: boolean;
   serviceCategoriesRates: Record<string, number>;
   databaseSettings?: DatabaseSettings;
+  n8nSettings?: N8nSettings;
 }
 
 export interface ToastItem {

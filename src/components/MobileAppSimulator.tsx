@@ -134,21 +134,13 @@ export const MobileAppSimulator: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      
-      {/* Header Info */}
+      {/* Top Action Bar / Technician Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-              Simulador do App Mobile do Técnico (Expo / React Native)
-            </h1>
-            <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-800 rounded-full border border-emerald-200 uppercase">
-              Ambiente de Campo
-            </span>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Demonstração da experiência do técnico em campo: recebimento de chamados Porto Seguro, apontamento de KM/Pedágio, baixa automática de estoque e extrato.
-          </p>
+        <div className="flex items-center space-x-2">
+          <span className="px-2.5 py-1 text-[11px] font-bold bg-emerald-100 text-emerald-800 rounded-full border border-emerald-200 uppercase tracking-wider flex items-center space-x-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Ambiente de Campo • Expo / React Native</span>
+          </span>
         </div>
 
         {/* Technician Selector */}
@@ -161,11 +153,11 @@ export const MobileAppSimulator: React.FC = () => {
               setActiveOsForExecution(null);
               setMobileTab('os_list');
             }}
-            className="text-xs font-bold text-slate-900 bg-slate-100 rounded-lg px-2.5 py-1.5 border border-slate-200 focus:ring-2 focus:ring-sky-500 focus:outline-none"
+            className="text-xs font-bold text-slate-900 bg-slate-100 rounded-lg px-2.5 py-1.5 border border-slate-200 focus:ring-2 focus:ring-sky-500 focus:outline-none cursor-pointer"
           >
             {technicians.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.name} {t.hasSpecialTaxRule ? '⭐ (Exceção Fiscal 6%)' : ''}
+                {t.name} {t.hasSpecialTaxRule ? '⭐ (Exceção Fiscal 16%)' : ''}
               </option>
             ))}
           </select>
@@ -211,7 +203,7 @@ export const MobileAppSimulator: React.FC = () => {
                   </div>
                   {activeTech.hasSpecialTaxRule && (
                     <span className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-400 text-slate-950 rounded">
-                      6% Fiscal
+                      {activeTech.specialTaxRate || 16}% Fiscal
                     </span>
                   )}
                 </div>
@@ -312,159 +304,177 @@ export const MobileAppSimulator: React.FC = () => {
                 )}
 
                 {/* Tab 2: Execution / Closure Form */}
-                {mobileTab === 'execution' && activeOsForExecution && (
-                  <div className="space-y-3">
-                    <div className="bg-sky-50 border border-sky-200 p-2.5 rounded-xl flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] font-bold uppercase text-sky-700">Atendimento em Andamento</div>
-                        <div className="text-xs font-black text-slate-900">{activeOsForExecution.callNumber}</div>
-                      </div>
-                      <span className="text-[10px] bg-white px-2 py-0.5 rounded text-sky-800 font-bold">
-                        {activeOsForExecution.customerName.split(' ')[0]}
-                      </span>
-                    </div>
-
-                    {/* Form Fields for Closure */}
-                    <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2.5 text-xs">
-                      <div className="font-bold text-slate-900 border-b border-slate-100 pb-1.5 flex items-center space-x-1.5">
-                        <Car className="h-3.5 w-3.5 text-sky-600" />
-                        <span>Apontamento de Deslocamento</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
+                {mobileTab === 'execution' && (
+                  activeOsForExecution ? (
+                    <div className="space-y-3">
+                      <div className="bg-sky-50 border border-sky-200 p-2.5 rounded-xl flex items-center justify-between">
                         <div>
-                          <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
-                            KM Rodado:
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={kmInput}
-                            onChange={(e) => setKmInput(Number(e.target.value))}
-                            className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
-                          />
+                          <div className="text-[10px] font-bold uppercase text-sky-700">Atendimento em Andamento</div>
+                          <div className="text-xs font-black text-slate-900">{activeOsForExecution.callNumber}</div>
                         </div>
-                        <div>
-                          <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
-                            Pedágios (R$):
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={tollInput}
-                            onChange={(e) => setTollInput(Number(e.target.value))}
-                            className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
-                          Custos de Suporte / Adicionais (R$):
-                        </label>
-                        <input
-                          type="number"
-                          step="1"
-                          value={supportInput}
-                          onChange={(e) => setSupportInput(Number(e.target.value))}
-                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Stock Supplies Deduction Section */}
-                    <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
-                        <span className="font-bold text-slate-900 flex items-center space-x-1">
-                          <Package className="h-3.5 w-3.5 text-teal-600" />
-                          <span>Insumos / Suportes Usados</span>
+                        <span className="text-[10px] bg-white px-2 py-0.5 rounded text-sky-800 font-bold">
+                          {activeOsForExecution.customerName.split(' ')[0]}
                         </span>
-                        <button
-                          type="button"
-                          onClick={handleAddSupplyToOs}
-                          className="text-[10px] text-sky-600 font-bold flex items-center space-x-0.5 hover:underline"
-                        >
-                          <Plus className="h-3 w-3" />
-                          <span>Adicionar</span>
-                        </button>
                       </div>
 
-                      <div className="space-y-2">
-                        {selectedSupplies.map((sup, idx) => (
-                          <div key={idx} className="flex items-center space-x-1.5">
-                            <select
-                              value={sup.stockItemId}
-                              onChange={(e) => handleUpdateSupplyItem(idx, e.target.value)}
-                              className="flex-1 p-1 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-800"
-                            >
-                              {safeStock.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {item.name} ({item.quantityInStock} {item.unit})
-                                </option>
-                              ))}
-                            </select>
+                      {/* Form Fields for Closure */}
+                      <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2.5 text-xs">
+                        <div className="font-bold text-slate-900 border-b border-slate-100 pb-1.5 flex items-center space-x-1.5">
+                          <Car className="h-3.5 w-3.5 text-sky-600" />
+                          <span>Apontamento de Deslocamento</span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
+                              KM Rodado:
+                            </label>
                             <input
                               type="number"
                               step="0.5"
-                              value={sup.quantity}
-                              onChange={(e) => handleUpdateSupplyQty(idx, Number(e.target.value))}
-                              className="w-14 p-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center"
+                              value={kmInput}
+                              onChange={(e) => setKmInput(Number(e.target.value))}
+                              className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
                             />
-                            <button
-                              onClick={() => handleRemoveSupply(idx)}
-                              className="text-red-500 hover:text-red-700 p-1"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
                           </div>
-                        ))}
-                      </div>
-                      <div className="text-[9px] text-slate-400">
-                        * O sistema abaterá as quantidades do inventário central instantaneamente.
-                      </div>
-                    </div>
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
+                              Pedágios (R$):
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={tollInput}
+                              onChange={(e) => setTollInput(Number(e.target.value))}
+                              className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                            />
+                          </div>
+                        </div>
 
-                    {/* Customer Signature & Notes */}
-                    <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                      <div className="font-bold text-slate-900 flex items-center space-x-1">
-                        <PenTool className="h-3.5 w-3.5 text-indigo-600" />
-                        <span>Assinatura Digital do Cliente</span>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">
+                            Custos de Suporte / Adicionais (R$):
+                          </label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={supportInput}
+                            onChange={(e) => setSupportInput(Number(e.target.value))}
+                            className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900"
+                          />
+                        </div>
                       </div>
 
-                      <div
-                        onClick={() => setSignatureSigned(!signatureSigned)}
-                        className={`h-16 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
-                          signatureSigned
-                            ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
-                            : 'bg-slate-50 border-slate-300 text-slate-400 hover:bg-slate-100'
-                        }`}
+                      {/* Stock Supplies Deduction Section */}
+                      <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                          <span className="font-bold text-slate-900 flex items-center space-x-1">
+                            <Package className="h-3.5 w-3.5 text-teal-600" />
+                            <span>Insumos / Suportes Usados</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleAddSupplyToOs}
+                            className="text-[10px] text-sky-600 font-bold flex items-center space-x-0.5 hover:underline cursor-pointer"
+                          >
+                            <Plus className="h-3 w-3" />
+                            <span>Adicionar</span>
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {selectedSupplies.map((sup, idx) => (
+                            <div key={idx} className="flex items-center space-x-1.5">
+                              <select
+                                value={sup.stockItemId}
+                                onChange={(e) => handleUpdateSupplyItem(idx, e.target.value)}
+                                className="flex-1 p-1 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-800"
+                              >
+                                {safeStock.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.name} ({item.quantityInStock} {item.unit})
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="number"
+                                step="0.5"
+                                value={sup.quantity}
+                                onChange={(e) => handleUpdateSupplyQty(idx, Number(e.target.value))}
+                                className="w-14 p-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center"
+                              />
+                              <button
+                                onClick={() => handleRemoveSupply(idx)}
+                                className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-[9px] text-slate-400">
+                          * O sistema abaterá as quantidades do inventário central instantaneamente.
+                        </div>
+                      </div>
+
+                      {/* Customer Signature & Notes */}
+                      <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                        <div className="font-bold text-slate-900 flex items-center space-x-1">
+                          <PenTool className="h-3.5 w-3.5 text-indigo-600" />
+                          <span>Assinatura Digital do Cliente</span>
+                        </div>
+
+                        <div
+                          onClick={() => setSignatureSigned(!signatureSigned)}
+                          className={`h-16 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
+                            signatureSigned
+                              ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                              : 'bg-slate-50 border-slate-300 text-slate-400 hover:bg-slate-100'
+                          }`}
+                        >
+                          {signatureSigned ? (
+                            <div className="text-center">
+                              <span className="font-serif italic font-bold text-sm block">
+                                {activeOsForExecution.customerName}
+                              </span>
+                              <span className="text-[9px] text-emerald-600 font-sans">
+                                ✓ Assinatura Capturada e Validada
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="text-center text-[10px]">
+                              <span>Toque para coletar a assinatura do cliente</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Finalize Button */}
+                      <button
+                        onClick={handleFinalizeOs}
+                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
                       >
-                        {signatureSigned ? (
-                          <div className="text-center">
-                            <span className="font-serif italic font-bold text-sm block">
-                              {activeOsForExecution.customerName}
-                            </span>
-                            <span className="text-[9px] text-emerald-600 font-sans">
-                              ✓ Assinatura Capturada e Validada
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="text-center text-[10px]">
-                            <span>Toque para coletar a assinatura do cliente</span>
-                          </div>
-                        )}
-                      </div>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Finalizar e Enviar OS</span>
+                      </button>
                     </div>
-
-                    {/* Finalize Button */}
-                    <button
-                      onClick={handleFinalizeOs}
-                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md flex items-center justify-center space-x-1.5 transition-all"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      <span>Finalizar e Enviar OS</span>
-                    </button>
-                  </div>
+                  ) : (
+                    <div className="p-6 text-center bg-white rounded-2xl border border-slate-200 space-y-3 my-4 shadow-xs">
+                      <div className="w-12 h-12 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center mx-auto">
+                        <Car className="h-6 w-6" />
+                      </div>
+                      <div className="text-xs font-bold text-slate-800">Nenhum Chamado em Execução</div>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        Selecione uma Ordem de Serviço na aba <strong>"Chamados"</strong> e toque em <strong>"Iniciar OS"</strong> para realizar o apontamento e coletar a assinatura.
+                      </p>
+                      <button
+                        onClick={() => setMobileTab('os_list')}
+                        className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      >
+                        Ver Meus Chamados
+                      </button>
+                    </div>
+                  )
                 )}
 
                 {/* Tab 3: Paystub / Extrato */}
@@ -475,7 +485,7 @@ export const MobileAppSimulator: React.FC = () => {
                         <div>
                           <div className="text-[10px] font-bold uppercase text-slate-400">Extrato da Quinzena</div>
                           <div className="text-xs font-black text-slate-900">
-                            {currentClosing.periodNumber === 1 ? '1ª Quinzena' : '2ª Quinzena'} de {currentClosing.referenceMonth}/{currentClosing.referenceYear}
+                            {safeClosing.periodNumber === 1 ? '1ª Quinzena' : '2ª Quinzena'} de {safeClosing.referenceMonth}/{safeClosing.referenceYear}
                           </div>
                         </div>
                         <CreditCard className="h-5 w-5 text-sky-600" />
@@ -644,7 +654,7 @@ export const MobileAppSimulator: React.FC = () => {
                 <span>Regra Fiscal Ativa para {activeTech.name}</span>
               </div>
               <p className="text-amber-800 leading-relaxed">
-                Este é 1 dos 2 técnicos cadastrados com a regra de dedução independente de impostos ({activeTech.specialTaxRate}%). O desconto já é refletido automaticamente em tempo real no demonstrativo do app.
+                Técnico configurado com regra de retenção de impostos ({activeTech.specialTaxRate || 16}%). O desconto já é refletido automaticamente em tempo real no demonstrativo e fechamento.
               </p>
             </div>
           )}

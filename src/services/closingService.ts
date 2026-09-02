@@ -66,7 +66,7 @@ export function parseDateComponents(val: any): { year: number; month: number; da
 
 export function isOrderInPeriod(
   os: ServiceOrder,
-  options: { referenceYear: number; referenceMonth: number; periodNumber: 1 | 2 }
+  options: { referenceYear: number; referenceMonth: number; periodNumber: 0 | 1 | 2 }
 ): boolean {
   if (!os) return false;
   const dateVal = os.scheduledDate || os.completedAt || os.startedAt;
@@ -77,6 +77,10 @@ export function isOrderInPeriod(
 
   if (parsed.year !== options.referenceYear || parsed.month !== options.referenceMonth) {
     return false;
+  }
+
+  if (options.periodNumber === 0) {
+    return true; // Match all quinzenas in this month
   }
 
   if (options.periodNumber === 1) {
@@ -164,6 +168,28 @@ export class ClosingService {
   public static readonly DEFAULT_TAX_EXCEPTION_RATE = 16.0; // 16.0%
 
   /**
+   * Obtém o valor acordado com o técnico (preposto) para determinado escopo/serviço da sua tabela de preços
+   */
+  public static getTechnicianPriceForService(technician: User, serviceName: string): number | null {
+    if (!technician.priceTable || !Array.isArray(technician.priceTable) || technician.priceTable.length === 0) {
+      return null;
+    }
+    const cleanSearch = (serviceName || '').toLowerCase().trim();
+    if (!cleanSearch) return null;
+
+    // Busca exata ou por substring
+    const found = technician.priceTable.find((item) => {
+      const itemService = (item.serviceType || '').toLowerCase().trim();
+      return itemService === cleanSearch || cleanSearch.includes(itemService) || itemService.includes(cleanSearch);
+    });
+
+    if (found && typeof found.prepostoPrice === 'number' && found.prepostoPrice > 0) {
+      return found.prepostoPrice;
+    }
+    return null;
+  }
+
+  /**
    * Calcula o extrato individual do técnico e gera o JSON exato para o PDF e WhatsApp
    */
   public static calculateTechnicianStatement(
@@ -176,32 +202,51 @@ export class ClosingService {
     const safeOrders = orders || [];
     const safeMovements = movements || [];
 
-    // 1. Filtrar ordens concluídas do técnico estritamente no período (Mês, Ano, Quinzena e Status COMPLETED)
+    // 1. Filtrar ordens concluídas
     const completedOrders = safeOrders.filter(
-      (os) => os && os.technicianId === technician.id && os.status === 'COMPLETED' && isOrderInPeriod(os, options)
+      (os) =>
+        os &&
+        os.technicianId === technician.id &&
+        (os.status === 'COMPLETED' ||
+          (os as any).statusOS === 'COMPLETED' ||
+          (os.status as string) === 'VISITA_PERDIDA' ||
+          (os.serviceCategory && os.serviceCategory.toLowerCase().includes('perdida'))) &&
+        isOrderInPeriod(os, options)
     );
 
-    let sumBaseService = 0;
-    let sumKmTraveled = 0;
-    let sumKmCost = 0;
-    let sumTollCost = 0;
-    let sumSupportCost = 0;
-    let sumOrdersTotal = 0;
+    // Variáveis de acumulação (utilizando centavos para evitar floating point drift / falha na precisão IEEE 754)
+    let sumBaseServiceCents = 0;
+    let sumKmTraveledCents = 0; // KM traveled isn't currency, but multiplied by 100 for consistency
+    let sumKmCostCents = 0;
+    let sumTollCostCents = 0;
+    let sumSupportCostCents = 0;
+    let sumOrdersTotalCents = 0;
 
     const formattedOrdersList = completedOrders.map((os) => {
-      const baseFee = Number(os.baseServiceFee || 0);
+      let baseFee = Number(os.baseServiceFee ?? 0);
+      if (baseFee <= 0 && os.serviceCategory) {
+        const tablePrice = this.getTechnicianPriceForService(technician, os.serviceCategory);
+        if (tablePrice !== null && tablePrice > 0) {
+          baseFee = tablePrice;
+        }
+      }
+      if (baseFee <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+        baseFee = 20.00; // Valor padrão fixo Visita Perdida
+      }
+
       const km = Number(os.kmTraveled || 0);
       const kmCost = Number((km * kmRate).toFixed(2));
       const toll = Number(os.tollCost || 0);
       const support = Number(os.supportCost || 0);
       const orderTotal = Number((baseFee + kmCost + toll + support).toFixed(2));
 
-      sumBaseService += baseFee;
-      sumKmTraveled += km;
-      sumKmCost += kmCost;
-      sumTollCost += toll;
-      sumSupportCost += support;
-      sumOrdersTotal += orderTotal;
+      // Soma segura em inteiros (Math.round resolve as rebarbas de ponto flutuante, multiplicando por 100)
+      sumBaseServiceCents += Math.round(baseFee * 100);
+      sumKmTraveledCents += Math.round(km * 100); 
+      sumKmCostCents += Math.round(kmCost * 100);
+      sumTollCostCents += Math.round(toll * 100);
+      sumSupportCostCents += Math.round(support * 100);
+      sumOrdersTotalCents += Math.round(orderTotal * 100);
 
       return {
         id: os.id,
@@ -224,13 +269,22 @@ export class ClosingService {
       };
     });
 
-    // 2. (+) Ajuda de Custo Fixa (ex: R$ 250,00 configurável por técnico)
-    const fixedCostAllowance =
+    // 2. Ajuda de Custo Mensal (Vulnerabilidade RBAC/Lógica Corrigida: Fallback condicional rígido)
+    const rawFortnight = technician.costAllowanceFortnight;
+    const technicianFortnight = (rawFortnight !== undefined && rawFortnight !== null) ? Number(rawFortnight) : 2; 
+    
+    // 0 = Ambas as quinzenas, 1 = Apenas 1ª, 2 = Apenas 2ª
+    const isCostAllowancePeriod = (technicianFortnight === 0) || (technicianFortnight === options.periodNumber);
+
+    const monthlyAllowanceValue =
       technician.baseCostAllowance !== undefined && technician.baseCostAllowance !== null
         ? Number(technician.baseCostAllowance)
-        : this.DEFAULT_COST_ALLOWANCE;
+        : (technician.role === 'TECHNICIAN' ? this.DEFAULT_COST_ALLOWANCE : 0);
 
-    // 3. (=) Total Bruto = Soma das OS + Ajuda de Custo
+    const fixedCostAllowance = isCostAllowancePeriod ? monthlyAllowanceValue : 0.00;
+
+    // 3. (=) Total Bruto
+    const sumOrdersTotal = sumOrdersTotalCents / 100;
     const grossTotal = Number((sumOrdersTotal + fixedCostAllowance).toFixed(2));
 
     // 4. (-) Vales e Adiantamentos do período
@@ -241,60 +295,33 @@ export class ClosingService {
         (m.type === 'ADVANCE_VALE' || m.type === 'EXPENSE_ADVANCE') &&
         m.status === 'CONFIRMED'
     );
-    const advancesAndDiscounts = Number(
-      techAdvances.reduce((acc, m) => acc + (m.amount || 0), 0).toFixed(2)
-    );
+    const advancesAndDiscountsCents = techAdvances.reduce((acc, m) => acc + Math.round((m.amount || 0) * 100), 0);
+    const advancesAndDiscounts = advancesAndDiscountsCents / 100;
 
-    // 5. (-) Exceção Fiscal (Imposto de 16% sobre o Total Bruto, e.g. Robertinho)
+    // 5. (-) Exceção Fiscal (Imposto de 16%)
     const hasSpecialTaxRule = Boolean(technician.hasSpecialTaxRule);
-    const taxRatePercentage = hasSpecialTaxRule
-      ? technician.specialTaxRate || this.DEFAULT_TAX_EXCEPTION_RATE
-      : 0;
+    const taxRatePercentage = hasSpecialTaxRule ? (technician.specialTaxRate || this.DEFAULT_TAX_EXCEPTION_RATE) : 0;
 
-    const taxDeductionAmount =
-      hasSpecialTaxRule && taxRatePercentage > 0
-        ? Number((grossTotal * (taxRatePercentage / 100)).toFixed(2))
-        : 0;
+    // Cálculo exato via centavos para prevenir perda de dízima em R$ altos
+    const grossTotalCents = Math.round(grossTotal * 100);
+    const taxDeductionAmountCents = hasSpecialTaxRule && taxRatePercentage > 0
+      ? Math.round((grossTotalCents * taxRatePercentage) / 100) 
+      : 0;
+    const taxDeductionAmount = taxDeductionAmountCents / 100;
 
     // 6. Total de Deduções
-    const totalDeductions = Number(
-      (advancesAndDiscounts + taxDeductionAmount).toFixed(2)
-    );
+    const totalDeductionsCents = advancesAndDiscountsCents + taxDeductionAmountCents;
+    const totalDeductions = totalDeductionsCents / 100;
 
     // 7. (=) VALOR LÍQUIDO A RECEBER
-    const netPayableAmount = Math.max(
-      0,
-      Number((grossTotal - totalDeductions).toFixed(2))
-    );
+    const netPayableAmount = Math.max(0, Number((grossTotal - totalDeductions).toFixed(2)));
 
-    const startDate = new Date(
-      options.referenceYear,
-      options.referenceMonth - 1,
-      options.periodNumber === 1 ? 1 : 16
-    ).toISOString();
-
-    const lastDayOfMonth = new Date(
-      options.referenceYear,
-      options.referenceMonth,
-      0
-    ).getDate();
-
-    const endDate = new Date(
-      options.referenceYear,
-      options.referenceMonth - 1,
-      options.periodNumber === 1 ? 15 : lastDayOfMonth,
-      23,
-      59,
-      59
-    ).toISOString();
-
-    const periodLabel = `${options.periodNumber === 1 ? '1ª Quinzena' : '2ª Quinzena'} (${String(
-      options.referenceMonth
-    ).padStart(2, '0')}/${options.referenceYear})`;
-
-    const statementId = `stmt-${technician.id}-${options.referenceYear}-${String(
-      options.referenceMonth
-    ).padStart(2, '0')}-q${options.periodNumber}`;
+    const startDate = new Date(options.referenceYear, options.referenceMonth - 1, options.periodNumber === 1 ? 1 : 16).toISOString();
+    const lastDayOfMonth = new Date(options.referenceYear, options.referenceMonth, 0).getDate();
+    const endDate = new Date(options.referenceYear, options.referenceMonth - 1, options.periodNumber === 1 ? 15 : lastDayOfMonth, 23, 59, 59).toISOString();
+    
+    const periodLabel = `${options.periodNumber === 1 ? '1ª Quinzena' : '2ª Quinzena'} (${String(options.referenceMonth).padStart(2, '0')}/${options.referenceYear})`;
+    const statementId = `stmt-${technician.id}-${options.referenceYear}-${String(options.referenceMonth).padStart(2, '0')}-q${options.periodNumber}`;
 
     return {
       statementId,
@@ -318,12 +345,12 @@ export class ClosingService {
       orders: formattedOrdersList,
       financialSummary: {
         totalOrdersCount: completedOrders.length,
-        totalBaseServiceFee: Number(sumBaseService.toFixed(2)),
-        totalKmTraveled: Number(sumKmTraveled.toFixed(2)),
-        totalKmReimbursement: Number(sumKmCost.toFixed(2)),
-        totalTollReimbursement: Number(sumTollCost.toFixed(2)),
-        totalSupportReimbursement: Number(sumSupportCost.toFixed(2)),
-        sumOfOrders: Number(sumOrdersTotal.toFixed(2)),
+        totalBaseServiceFee: sumBaseServiceCents / 100,
+        totalKmTraveled: sumKmTraveledCents / 100,
+        totalKmReimbursement: sumKmCostCents / 100,
+        totalTollReimbursement: sumTollCostCents / 100,
+        totalSupportReimbursement: sumSupportCostCents / 100,
+        sumOfOrders: sumOrdersTotal,
         fixedCostAllowance: Number(fixedCostAllowance.toFixed(2)),
         grossTotal,
         advancesAndDiscounts,
@@ -403,6 +430,7 @@ export class ClosingService {
         totalTollCost: fs.totalTollReimbursement,
         totalSupportCost: fs.totalSupportReimbursement,
         fixedCostAllowance: fs.fixedCostAllowance,
+        costAllowanceFortnight: tech.costAllowanceFortnight || 1,
 
         grossTotal: fs.grossTotal,
         advancesDeduction: fs.advancesAndDiscounts,
@@ -417,20 +445,20 @@ export class ClosingService {
       };
     });
 
-    const totalFaturamentoPorto = (orders || [])
+    const totalFaturamentoPortoCents = (orders || [])
       .filter((os) => os && os.status === 'COMPLETED' && isOrderInPeriod(os, options))
-      .reduce((sum, os) => sum + (os.faturamentoPorto || 0), 0);
+      .reduce((sum, os) => sum + Math.round((os.faturamentoPorto || 0) * 100), 0);
+    const totalFaturamentoPorto = totalFaturamentoPortoCents / 100;
 
-    const totalTechnicianGross = summaries.reduce((acc, s) => acc + s.grossTotal, 0);
-    const totalKmReimbursement = summaries.reduce((acc, s) => acc + s.totalKmCost, 0);
-    const totalTollsReimbursement = summaries.reduce((acc, s) => acc + s.totalTollCost, 0);
-    const totalSupportPaid = summaries.reduce((acc, s) => acc + s.totalSupportCost, 0);
-    const totalAdvancesDeducted = summaries.reduce((acc, s) => acc + s.advancesDeduction, 0);
-    const totalTaxesDeducted = summaries.reduce((acc, s) => acc + s.taxDeductionAmount, 0);
-    const totalNetPayout = summaries.reduce((acc, s) => acc + s.netTotal, 0);
-    const companyProfitMargin = Number(
-      (totalFaturamentoPorto - totalTechnicianGross).toFixed(2)
-    );
+    const totalTechnicianGross = summaries.reduce((acc, s) => acc + Math.round(s.grossTotal * 100), 0) / 100;
+    const totalKmReimbursement = summaries.reduce((acc, s) => acc + Math.round(s.totalKmCost * 100), 0) / 100;
+    const totalTollsReimbursement = summaries.reduce((acc, s) => acc + Math.round(s.totalTollCost * 100), 0) / 100;
+    const totalSupportPaid = summaries.reduce((acc, s) => acc + Math.round(s.totalSupportCost * 100), 0) / 100;
+    const totalAdvancesDeducted = summaries.reduce((acc, s) => acc + Math.round(s.advancesDeduction * 100), 0) / 100;
+    const totalTaxesDeducted = summaries.reduce((acc, s) => acc + Math.round(s.taxDeductionAmount * 100), 0) / 100;
+    const totalNetPayout = summaries.reduce((acc, s) => acc + Math.round(s.netTotal * 100), 0) / 100;
+    
+    const companyProfitMargin = Number((totalFaturamentoPorto - totalTechnicianGross).toFixed(2));
 
     return {
       id: closingId,

@@ -1,4 +1,5 @@
 import { User, ServiceOrder, StockItem, FinancialMovement, GeneralSettings } from '../types';
+import { FELIPE_AUGUSTO_PRICE_TABLE, BRENO_JORGE_PRICE_TABLE } from '../data/standardPriceTables';
 
 export const INITIAL_USERS: User[] = [
   // 1. Master Gestor Admin
@@ -21,6 +22,7 @@ export const INITIAL_USERS: User[] = [
     baseCostAllowance: 0,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
   // 2. Gestor Operacional
   {
@@ -42,8 +44,53 @@ export const INITIAL_USERS: User[] = [
     baseCostAllowance: 0,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
-  // 3. Técnico 1: Carlos Henrique Silva
+  // 3. Técnico Felipe Augusto (Tabela R$ 50 Instalações)
+  {
+    id: 'u-felipe',
+    name: 'Felipe Augusto',
+    email: 'felipe.augusto@ohigienizador.com.br',
+    password: 'Porto@2026',
+    role: 'TECHNICIAN',
+    documentCpf: '321.654.987-10',
+    phone: '11987654321',
+    isActive: true,
+    mfaEnabled: false,
+    pixKeyType: 'CPF',
+    pixKey: '321.654.987-10',
+    bankName: 'Banco Itaú',
+    bankAgency: '0450',
+    bankAccount: '24180-5',
+    baseCostAllowance: 250.0,
+    costAllowanceFortnight: 1,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
+  },
+  // 4. Técnico Breno Jorge (Tabela R$ 40 Instalações / R$ 60 Refrigerador)
+  {
+    id: 'u-breno',
+    name: 'Breno Jorge',
+    email: 'breno.jorge@ohigienizador.com.br',
+    password: 'Porto@2026',
+    role: 'TECHNICIAN',
+    documentCpf: '432.765.098-21',
+    phone: '11976543210',
+    isActive: true,
+    mfaEnabled: false,
+    pixKeyType: 'CPF',
+    pixKey: '432.765.098-21',
+    bankName: 'Nubank (0260)',
+    bankAgency: '0001',
+    bankAccount: '887214-9',
+    baseCostAllowance: 250.0,
+    costAllowanceFortnight: 2,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 0,
+    priceTable: BRENO_JORGE_PRICE_TABLE,
+  },
+  // 5. Técnico 1: Carlos Henrique Silva
   {
     id: 'u1',
     name: 'Carlos Henrique Silva',
@@ -60,10 +107,12 @@ export const INITIAL_USERS: User[] = [
     bankAgency: '1820',
     bankAccount: '33410-2',
     baseCostAllowance: 250.0,
+    costAllowanceFortnight: 1,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
-  // 3. Técnico 2: Lucas Eduardo Rocha
+  // 6. Técnico 2: Lucas Eduardo Rocha
   {
     id: 'u2',
     name: 'Lucas Eduardo Rocha',
@@ -80,10 +129,12 @@ export const INITIAL_USERS: User[] = [
     bankAgency: '0001',
     bankAccount: '4589211-0',
     baseCostAllowance: 250.0,
+    costAllowanceFortnight: 2,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: BRENO_JORGE_PRICE_TABLE,
   },
-  // 4. Técnico 3: Marcos Vinícius Santos
+  // 7. Técnico 3: Marcos Vinícius Santos
   {
     id: 'u3',
     name: 'Marcos Vinícius Santos',
@@ -100,10 +151,12 @@ export const INITIAL_USERS: User[] = [
     bankAgency: '2109',
     bankAccount: '55401-9',
     baseCostAllowance: 250.0,
+    costAllowanceFortnight: 1,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
-  // 5. Técnico 4: Rafael Albuquerque (Regra Fiscal 16%)
+  // 8. Técnico 4: Rafael Albuquerque (Regra Fiscal 16%)
   {
     id: 'u4',
     name: 'Rafael Albuquerque',
@@ -120,10 +173,12 @@ export const INITIAL_USERS: User[] = [
     bankAgency: '0231',
     bankAccount: '11200-8',
     baseCostAllowance: 250.0,
+    costAllowanceFortnight: 1,
     hasSpecialTaxRule: true,
     specialTaxRate: 16.0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
-  // 6. Técnico 5: Marcelo Ramos
+  // 9. Técnico 5: Marcelo Ramos
   {
     id: 'u5',
     name: 'Marcelo Ramos',
@@ -140,8 +195,10 @@ export const INITIAL_USERS: User[] = [
     bankAgency: '0001',
     bankAccount: '00000-0',
     baseCostAllowance: 250.0,
+    costAllowanceFortnight: 1,
     hasSpecialTaxRule: false,
     specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
 ];
 
@@ -537,8 +594,15 @@ export const INITIAL_SETTINGS: GeneralSettings = {
     'Olá {NOME_TECNICO}! Segue seu Extrato Oficial de Fechamento ({PERIODO_QUINZENA}).\n\n📌 Total de Chamados: {TOTAL_OS}\n💵 Total Bruto (+ Ajuda Custo): R$ {VALOR_BRUTO}\n🔻 Vales/Deduções: R$ {VALOR_DESCONTOS}\n⚖️ Impostos Retidos: R$ {VALOR_IMPOSTOS}\n✅ VALOR LÍQUIDO PIX: R$ {VALOR_LIQUIDO}\n\nChave PIX: {CHAVE_PIX} ({BANCO})\n\nO documento oficial em PDF segue anexo. Qualquer dúvida, fale com a Diretoria!',
   autoStockDeduction: true,
   serviceCategoriesRates: {
-    'Instalação Lava e Seca': 40.0,
+    'Instala TV de 49 a 86 + Suporte Fixo': 60.0,
+    'Instala TV até 49 + Suporte Fixo': 50.0,
+    'INSTALAÇÃO DE TV COM SUPORTE ATE 49': 50.0,
+    'Instala TV de 44 à 70" + Suporte Fixo - Porto': 60.0,
     'Instalação TV de 44 a 70 + Suporte Fixo': 60.0,
+    'Instalação TV até 49 + Suporte Fixo': 50.0,
+    'Instalação TV 60"': 65.0,
+    'Instalação TV 80"': 80.0,
+    'Instalação Lava e Seca': 40.0,
     'Instalação Purificador de Água': 40.0,
     'Visita Perdida': 40.0,
     'Higienização de Sofá 3 Lugares': 140.0,
