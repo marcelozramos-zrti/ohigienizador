@@ -242,100 +242,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     password: string,
     mfaCode?: string
   ): Promise<{ success: boolean; requiresMfa?: boolean; user?: User; error?: string }> => {
-    const cleanEmail = (email || '').trim().toLowerCase();
-    let user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
-
-    // Failsafe: if user is not in state yet (e.g. from an unmerged initial list), check INITIAL_USERS
-    if (!user) {
-      const fallbackUser = INITIAL_USERS.find(
-        (u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail
-      );
-      if (fallbackUser) {
-        user = fallbackUser;
-        setUsers((prev) => [...prev, fallbackUser]);
-      }
-    }
-
-    if (!user) {
-      return { success: false, error: 'E-mail não cadastrado no sistema.' };
-    }
-
-    if (!user.isActive) {
-      return {
-        success: false,
-        error: 'Acesso revogado ou conta inativa. Contate o Administrador Master.',
-      };
-    }
-
-    // Verify password (matches user.password, or default passwords)
-    const validPassword =
-      user.password || (user.role === 'ADMIN' ? 'PortoSeguro@2026!' : 'Porto@123');
-    if (
-      password !== validPassword &&
-      password !== 'PortoSeguro@2026!' &&
-      password !== 'Porto@123' &&
-      password !== '123456'
-    ) {
-      return { success: false, error: 'Senha incorreta. Verifique suas credenciais.' };
-    }
-
-    // Check MFA
-    if (user.mfaEnabled) {
-      if (!mfaCode) {
-        return { success: false, requiresMfa: true, user };
-      }
-      const cleanCode = mfaCode.trim();
-      const expectedCode = user.mfaSecret || '772910';
-      if (cleanCode !== expectedCode && cleanCode.length !== 6) {
-        return {
-          success: false,
-          requiresMfa: true,
-          user,
-          error: 'Código MFA de 6 dígitos incorreto.',
-        };
-      }
-    }
-
-    // Success login
-    const updatedUser: User = {
-      ...user,
-      lastLoginAt: new Date().toISOString(),
-    };
-    setCurrentUser(updatedUser);
-    setIsAuthenticated(true);
     try {
-      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(updatedUser));
-    } catch {}
+      const result = await ApiService.login(email, password);
+      
+      if (!result.success) {
+        return result;
+      }
 
-    addToast('Bem-vindo(a)', `Login realizado com sucesso como ${user.name}.`, 'success');
-    return { success: true, user: updatedUser };
+      if (result.requiresMfa) {
+        return result;
+      }
+
+      if (result.user) {
+        setCurrentUser(result.user);
+        setIsAuthenticated(true);
+        try {
+          localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(result.user));
+        } catch {}
+        addToast('Bem-vindo(a)', `Login realizado com sucesso como ${result.user.name}.`, 'success');
+        return { success: true, user: result.user };
+      }
+      
+      return { success: false, error: 'Usuário não retornado pelo servidor.' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Falha na comunicação com o servidor.' };
+    }
   };
 
   const verifyMfa = async (
     email: string,
     mfaCode: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const cleanEmail = (email || '').trim().toLowerCase();
-    let user = users.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
-    if (!user) {
-      user = INITIAL_USERS.find((u) => u && u.email && u.email.trim().toLowerCase() === cleanEmail);
-    }
-    if (!user) {
-      return { success: false, error: 'Usuário não encontrado.' };
-    }
-    const cleanCode = mfaCode.trim();
-    const expectedCode = user.mfaSecret || '772910';
-    if (cleanCode !== expectedCode && cleanCode.length !== 6) {
-      return { success: false, error: 'Código de 6 dígitos inválido ou expirado.' };
-    }
-    const updatedUser: User = { ...user, lastLoginAt: new Date().toISOString() };
-    setCurrentUser(updatedUser);
-    setIsAuthenticated(true);
     try {
-      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(updatedUser));
-    } catch {}
-    addToast('Autenticação Concluída', `Segundo Fator validado para ${user.name}.`, 'success');
-    return { success: true };
+      const result = await ApiService.verifyMfa(email, mfaCode);
+      if (result.success && result.user) {
+        setCurrentUser(result.user);
+        setIsAuthenticated(true);
+        try {
+          localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(result.user));
+        } catch {}
+        addToast('Autenticação Concluída', `Segundo Fator validado para ${result.user.name}.`, 'success');
+        return { success: true };
+      }
+      return { success: false, error: result.error || 'Código de 6 dígitos inválido ou expirado.' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Erro na validação MFA.' };
+    }
   };
 
   const logout = () => {

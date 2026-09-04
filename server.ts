@@ -696,7 +696,7 @@ async function startServer() {
       return res.status(400).json({ success: false, error: `O e-mail "${u.email}" já está cadastrado para outro usuário (${duplicateEmail.name}).` });
     }
 
-    if (cleanCpf) {
+    if (cleanCpf && cleanCpf !== '00000000000') {
       const duplicateCpf = memUsers.find((item) => item.id !== u.id && (item.documentCpf || '').replace(/\D/g, '') === cleanCpf);
       if (duplicateCpf) {
         return res.status(400).json({ success: false, error: `O CPF informado já está cadastrado para o usuário "${duplicateCpf.name}".` });
