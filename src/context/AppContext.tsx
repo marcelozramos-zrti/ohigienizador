@@ -349,21 +349,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetUserPassword = (userId: string, customNewPassword?: string): { temporaryPassword: string } => {
     const randomDigits = Math.floor(1000 + Math.random() * 9000);
     const generatedPassword = customNewPassword || `Porto#${randomDigits}`;
+    
+    let updatedUser: User | null = null;
 
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
-          return {
+          updatedUser = {
             ...u,
             password: generatedPassword,
             temporaryPassword: true,
           };
+          return updatedUser;
         }
         return u;
       })
     );
+    
+    if (updatedUser) {
+      ApiService.saveUser(updatedUser).catch((err) => {
+        console.error('Falha ao salvar senha no backend:', err);
+      });
+    }
 
-    addToast('Senha Resetada', `Nova senha temporária: ${generatedPassword}`, 'warning');
+    addToast('Senha Resetada', `Nova senha provisória gerada com sucesso.`, 'warning');
     return { temporaryPassword: generatedPassword };
   };
 

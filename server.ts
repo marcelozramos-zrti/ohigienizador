@@ -355,13 +355,23 @@ async function startServer() {
   app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body || {};
     const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanNumbersOnly = cleanEmail.replace(/\D/g, '');
 
     if (!cleanEmail || !password) {
-      return res.status(400).json({ success: false, error: 'E-mail e senha são obrigatórios.' });
+      return res.status(400).json({ success: false, error: 'Identificação e senha são obrigatórias.' });
     }
 
-    // Busca usuário
-    const user = memUsers.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+    // Busca usuário por E-mail, CPF ou Telefone (WhatsApp)
+    const user = memUsers.find((u) => {
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uCpf = (u.documentCpf || '').replace(/\D/g, '');
+      const uPhone = (u.phone || '').replace(/\D/g, '');
+      
+      return (
+        uEmail === cleanEmail ||
+        (cleanNumbersOnly.length > 0 && (uCpf === cleanNumbersOnly || uPhone === cleanNumbersOnly))
+      );
+    });
 
     if (!user) {
       await recordAudit({
@@ -372,9 +382,9 @@ async function startServer() {
         module: 'AUTH',
         action: 'LOGIN_FAILED',
         result: 'FAILED',
-        details: `Tentativa de login com e-mail inexistente: ${cleanEmail}`,
+        details: `Tentativa de login com identidade inexistente: ${cleanEmail}`,
       });
-      return res.status(401).json({ success: false, error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
+      return res.status(401).json({ success: false, error: 'Credenciais inválidas. Verifique seus dados e senha.' });
     }
 
     // Validação de Usuário Inativo (Revogado)
@@ -447,9 +457,20 @@ async function startServer() {
   app.post('/api/auth/verify-mfa', async (req, res) => {
     const { email, code } = req.body || {};
     const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanNumbersOnly = cleanEmail.replace(/\D/g, '');
     const cleanCode = (code || '').replace(/\D/g, '');
 
-    const user = memUsers.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+    const user = memUsers.find((u) => {
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uCpf = (u.documentCpf || '').replace(/\D/g, '');
+      const uPhone = (u.phone || '').replace(/\D/g, '');
+      
+      return (
+        uEmail === cleanEmail ||
+        (cleanNumbersOnly.length > 0 && (uCpf === cleanNumbersOnly || uPhone === cleanNumbersOnly))
+      );
+    });
+
     if (!user || user.isActive === false) {
       return res.status(401).json({ success: false, error: 'Usuário não localizado ou inativo.' });
     }
