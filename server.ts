@@ -1160,37 +1160,65 @@ async function startServer() {
           ...o,
           id: o.id,
           callNumber: o.callNumber || o.call_number || o.numero_chamado || '',
+          call_number: o.callNumber || o.call_number || o.numero_chamado || '',
           portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
+          porto_seguro_protocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
           serviceCategory: o.serviceCategory || o.service_category || 'Higienização Padrão',
+          service_category: o.serviceCategory || o.service_category || 'Higienização Padrão',
           baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
+          base_service_fee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
           customerName: o.customerName || o.customer_name || '',
+          customer_name: o.customerName || o.customer_name || '',
           customerCpf: o.customerCpf || o.customer_cpf || '',
+          customer_cpf: o.customerCpf || o.customer_cpf || '',
           customerPhone: o.customerPhone || o.customer_phone || null,
+          customer_phone: o.customerPhone || o.customer_phone || null,
           city: o.city || 'São Paulo',
           uf: o.uf || 'SP',
           neighborhood: o.neighborhood || '',
           addressStreet: o.addressStreet || '',
+          address_street: o.addressStreet || '',
           addressNumber: o.addressNumber || '',
+          address_number: o.addressNumber || '',
           addressComplement: o.addressComplement || null,
+          address_complement: o.addressComplement || null,
           postalCode: o.postalCode || '',
+          postal_code: o.postalCode || '',
           technicianId: rawTechId,
+          technician_id: rawTechId,
           technicianName: resolvedTechName,
+          technician_name: resolvedTechName,
           status: o.status || 'PENDING',
           scheduledDate: o.scheduledDate || o.scheduled_date,
+          scheduled_date: o.scheduledDate || o.scheduled_date,
           startedAt: o.startedAt || o.started_at,
+          started_at: o.startedAt || o.started_at,
           completedAt: o.completedAt || o.completed_at,
+          completed_at: o.completedAt || o.completed_at,
           kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
+          km_traveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
           kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
+          km_rate_applied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
           kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
+          km_total_cost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
           tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
+          toll_cost: Number(o.tollCost ?? o.toll_cost ?? 0),
           supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
+          support_cost: Number(o.supportCost ?? o.support_cost ?? 0),
           totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
+          total_technician_gross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
           faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
+          faturamento_porto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
           customerSignature: o.customerSignature || o.customer_signature || null,
+          customer_signature: o.customerSignature || o.customer_signature || null,
           executionNotes: o.executionNotes || o.execution_notes || null,
+          execution_notes: o.executionNotes || o.execution_notes || null,
           tollReceiptUrl: o.tollReceiptUrl || o.toll_receipt_url || null,
+          toll_receipt_url: o.tollReceiptUrl || o.toll_receipt_url || null,
           paymentStatus: o.paymentStatus || o.payment_status || 'PENDING',
+          payment_status: o.paymentStatus || o.payment_status || 'PENDING',
           paymentDate: o.paymentDate || o.payment_date || null,
+          payment_date: o.paymentDate || o.payment_date || null,
           itemsUsed: [],
         };
       });
@@ -2032,6 +2060,25 @@ async function startServer() {
         userId: requester?.id || 'system', userName: requester?.name || 'Administrador Master', userRole: requester?.role || 'ADMIN', ipAddress: req.ip, module: 'SERVICE_ORDERS', action: 'DATA_IMPORT', result: 'SUCCESS', details: `Importação massiva otimizada concluída: ${importedCount} ordens via ${file.originalname}.`
       });
 
+      // Recarregar memória após importação
+      try {
+        const [reloadRows]: any = await db.query('SELECT * FROM service_orders ORDER BY scheduled_date DESC');
+        if (reloadRows && reloadRows.length > 0) {
+          memOrders = reloadRows.map((o: any) => ({
+            ...o,
+            id: o.id,
+            callNumber: o.call_number || o.callNumber,
+            technicianId: o.technician_id || o.technicianId,
+            status: o.status || 'PENDING',
+            scheduledDate: o.scheduled_date || o.scheduledDate,
+            baseServiceFee: Number(o.base_service_fee ?? o.baseServiceFee ?? 0),
+            kmTraveled: Number(o.km_traveled ?? o.kmTraveled ?? 0),
+            totalTechnicianGross: Number(o.total_technician_gross ?? o.totalTechnicianGross ?? 0),
+            tollCost: Number(o.toll_cost ?? o.tollCost ?? 0)
+          }));
+        }
+      } catch (err) {}
+
       res.json({ success: true, message: `${importedCount} ordens e ${techniciansCreatedCount} técnicos via batch.`, importedCount, techniciansCreated: techniciansCreatedCount, ignoredRowsCount, createdTechnicians: createdTechniciansList, sampleOrders: importedOrdersSummary });
     } catch (err: any) {
       res.status(500).json({ success: false, error: `Erro ao processar planilha (OOM/Parser): ${err.message}` });
@@ -2630,11 +2677,15 @@ async function startServer() {
         description: m.description || '',
         amount: Number(m.amount ?? 0),
         status: m.status || 'CONFIRMED',
-        technicianId: m.technicianId || null,
-        serviceOrderId: m.serviceOrderId || null,
-        biweeklyClosingId: m.biweeklyClosingId || null,
-        paymentMethod: m.paymentMethod || null,
-        date: m.date || m.dueDate || new Date().toISOString(),
+        technicianId: m.technicianId || m.technician_id || null,
+        technician_id: m.technicianId || m.technician_id || null,
+        serviceOrderId: m.serviceOrderId || m.service_order_id || null,
+        service_order_id: m.serviceOrderId || m.service_order_id || null,
+        biweeklyClosingId: m.biweeklyClosingId || m.biweekly_closing_id || null,
+        biweekly_closing_id: m.biweeklyClosingId || m.biweekly_closing_id || null,
+        paymentMethod: m.paymentMethod || m.payment_method || null,
+        payment_method: m.paymentMethod || m.payment_method || null,
+        date: m.date || m.dueDate || m.due_date || new Date().toISOString(),
       }));
       memMovements = formatted;
       res.json({ success: true, data: formatted });
@@ -3030,15 +3081,18 @@ async function startServer() {
       });
     }
 
-    const { phone, technicianId, callNumber, status, date } = req.query;
+    const { phone, technicianId, callNumber, status, date, all, history } = req.query;
 
     let results = [...memOrders];
 
     // Busca por telefone do técnico (WhatsApp)
     if (phone && typeof phone === 'string') {
-      const cleanPhone = phone.replace(/\D/g, '');
+      let cleanPhone = phone.replace(/\D/g, '');
+      if (cleanPhone.startsWith('55') && cleanPhone.length >= 12) cleanPhone = cleanPhone.substring(2);
+      
       const matchedTech = memUsers.find((u) => {
-        const uPhone = (u.phone || '').replace(/\D/g, '');
+        let uPhone = (u.phone || '').replace(/\D/g, '');
+        if (uPhone.startsWith('55') && uPhone.length >= 12) uPhone = uPhone.substring(2);
         return uPhone.length >= 8 && (uPhone.endsWith(cleanPhone.slice(-8)) || cleanPhone.endsWith(uPhone.slice(-8)));
       });
 
@@ -3070,6 +3124,12 @@ async function startServer() {
         if (s === 'EM ANDAMENTO' || s === 'ABERTAS') return o.status === 'PENDING' || o.status === 'IN_PROGRESS' || o.status === 'CONFIRMED';
         return o.status === s;
       });
+    } else {
+      // Padrão: Se não passar status, ou se passar all/history não faz nada especial se não, esconde completed.
+      const showAll = all === 'true' || history === 'true' || all === '1' || history === '1';
+      if (!showAll) {
+        results = results.filter((o) => o.status === 'PENDING' || o.status === 'IN_PROGRESS' || o.status === 'CONFIRMED');
+      }
     }
 
     if (date && typeof date === 'string') {
