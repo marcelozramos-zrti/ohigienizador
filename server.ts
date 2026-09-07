@@ -1824,7 +1824,7 @@ async function startServer() {
 
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
-      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
+      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: true });
 
       // Liberar buffer imediatamente do heap
       if (req.file) req.file.buffer = Buffer.alloc(0);
@@ -1836,6 +1836,12 @@ async function startServer() {
       if (rawRows.length > 20000) {
         return res.status(413).json({ success: false, error: 'Planilha excede o limite máximo de 20.000 linhas por lote para manter estabilidade do servidor.' });
       }
+
+      const formatToLocalMidnight = (date: Date) => {
+        const d = new Date(date);
+        d.setUTCHours(12, 0, 0, 0); 
+        return d;
+      };
 
       // Helpers de Sanitização e Mapeamento omitidos por brevidade da refatoração...
       function parseCurrency(val: any): number {
@@ -1852,25 +1858,34 @@ async function startServer() {
       }
 
       function parseDateValue(val: any): string {
-        if (!val) return new Date().toISOString();
-        if (val instanceof Date) return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
+        if (!val) return formatToLocalMidnight(new Date()).toISOString();
+        if (val instanceof Date) return isNaN(val.getTime()) ? formatToLocalMidnight(new Date()).toISOString() : formatToLocalMidnight(val).toISOString();
         if (typeof val === 'number') {
           const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-          return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+          return isNaN(d.getTime()) ? formatToLocalMidnight(new Date()).toISOString() : formatToLocalMidnight(d).toISOString();
         }
         if (typeof val === 'string') {
           const clean = val.trim();
-          const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+          const brMatch = clean.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
           if (brMatch) {
+            let part1 = parseInt(brMatch[1], 10);
+            let part2 = parseInt(brMatch[2], 10);
             let year = parseInt(brMatch[3], 10);
             if (year < 100) year += 2000;
-            const d = new Date(year, parseInt(brMatch[2], 10) - 1, parseInt(brMatch[1], 10), brMatch[4] ? parseInt(brMatch[4], 10) : 12, brMatch[5] ? parseInt(brMatch[5], 10) : 0);
-            if (!isNaN(d.getTime())) return d.toISOString();
+            
+            let day = part1;
+            let month = part2;
+            if (part2 > 12 && part1 <= 12) {
+              month = part1;
+              day = part2;
+            }
+            const d = new Date(year, month - 1, day, brMatch[4] ? parseInt(brMatch[4], 10) : 12, brMatch[5] ? parseInt(brMatch[5], 10) : 0);
+            if (!isNaN(d.getTime())) return formatToLocalMidnight(d).toISOString();
           }
           const d = new Date(clean);
-          if (!isNaN(d.getTime())) return d.toISOString();
+          if (!isNaN(d.getTime())) return formatToLocalMidnight(d).toISOString();
         }
-        return new Date().toISOString();
+        return formatToLocalMidnight(new Date()).toISOString();
       }
 
       function shouldIgnoreRow(origem: any, tecnico: any): boolean {
@@ -2167,6 +2182,12 @@ async function startServer() {
         normName: (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
       }));
 
+      const formatToLocalMidnight = (date: Date) => {
+        const d = new Date(date);
+        d.setUTCHours(12, 0, 0, 0); 
+        return d;
+      };
+
       function parseJsonCurrency(val: any): number {
         if (val === null || val === undefined || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
@@ -2184,35 +2205,43 @@ async function startServer() {
       }
 
       function parseJsonDate(val: any): string {
-        if (!val) return new Date().toISOString();
+        if (!val) return formatToLocalMidnight(new Date()).toISOString();
         if (val instanceof Date) {
-          return isNaN(val.getTime()) ? new Date().toISOString() : val.toISOString();
+          return isNaN(val.getTime()) ? formatToLocalMidnight(new Date()).toISOString() : formatToLocalMidnight(val).toISOString();
         }
         if (typeof val === 'number') {
           const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-          return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+          return isNaN(d.getTime()) ? formatToLocalMidnight(new Date()).toISOString() : formatToLocalMidnight(d).toISOString();
         }
         if (typeof val === 'string') {
           const clean = val.trim();
           // Formato YYYY-MM-DD
           if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
             const d = new Date(clean);
-            if (!isNaN(d.getTime())) return d.toISOString();
+            if (!isNaN(d.getTime())) return formatToLocalMidnight(d).toISOString();
           }
-          // Formato DD/MM/YYYY
-          const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{1,2}))?$/);
+          // Formato DD/MM/YYYY ou MM/DD/YYYY
+          const brMatch = clean.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{1,2}))?$/);
           if (brMatch) {
-            const day = parseInt(brMatch[1], 10);
-            const month = parseInt(brMatch[2], 10) - 1;
+            let part1 = parseInt(brMatch[1], 10);
+            let part2 = parseInt(brMatch[2], 10);
             let year = parseInt(brMatch[3], 10);
             if (year < 100) year += 2000;
+            
+            let day = part1;
+            let month = part2;
+            if (part2 > 12 && part1 <= 12) {
+              month = part1;
+              day = part2;
+            }
+            
             const hour = brMatch[4] ? parseInt(brMatch[4], 10) : 12;
             const min = brMatch[5] ? parseInt(brMatch[5], 10) : 0;
-            const d = new Date(year, month, day, hour, min);
-            if (!isNaN(d.getTime())) return d.toISOString();
+            const d = new Date(year, month - 1, day, hour, min);
+            if (!isNaN(d.getTime())) return formatToLocalMidnight(d).toISOString();
           }
         }
-        return new Date().toISOString();
+        return formatToLocalMidnight(new Date()).toISOString();
       }
 
       let importedCount = 0;
