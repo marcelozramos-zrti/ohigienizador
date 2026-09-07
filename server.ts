@@ -10,7 +10,7 @@ import { AuditLog, AuditAction, AppModule, AuditResult, Role } from './src/types
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT || process.env.APP_PORT || 3000);
+  const PORT = Number(process.env.PORT || 3002);
 
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
@@ -615,20 +615,39 @@ async function startServer() {
     try {
       const db = getDbPool();
       const [rows]: any = await db.query('SELECT * FROM users ORDER BY name ASC');
-      const formatted = rows.map((u: any) => ({
-        ...u,
-        isActive: Boolean(u.isActive ?? u.is_active ?? true),
-        hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule ?? u.has_special_tax_rule ?? false),
-        baseCostAllowance: Number(u.baseCostAllowance ?? u.base_cost_allowance ?? 0),
-        costAllowanceFortnight: Number(u.costAllowanceFortnight ?? u.cost_allowance_fortnight ?? 1),
-        specialTaxRate: Number(u.specialTaxRate ?? u.special_tax_rate ?? 0),
-        documentCpf: u.documentCpf ?? u.document_cpf ?? u.cpf ?? '',
-        pixKey: u.pixKey ?? u.pix_key ?? '',
-        pixKeyType: u.pixKeyType ?? u.pix_key_type ?? 'CPF',
-        bankName: u.bankName ?? u.bank_name ?? '',
-        bankAgency: u.bankAgency ?? u.bank_agency ?? '',
-        bankAccount: u.bankAccount ?? u.bank_account ?? '',
-      }));
+      const formatted = rows.map((u: any) => {
+        let parsedPriceTable = [];
+        try {
+          if (u.price_table && typeof u.price_table === 'string') {
+            parsedPriceTable = JSON.parse(u.price_table);
+          } else if (Array.isArray(u.price_table)) {
+            parsedPriceTable = u.price_table;
+          } else if (u.priceTable && typeof u.priceTable === 'string') {
+            parsedPriceTable = JSON.parse(u.priceTable);
+          } else if (Array.isArray(u.priceTable)) {
+            parsedPriceTable = u.priceTable;
+          }
+        } catch (e) {
+          parsedPriceTable = [];
+        }
+
+        return {
+          ...u,
+          isActive: Boolean(u.isActive ?? u.is_active ?? true),
+          hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule ?? u.has_special_tax_rule ?? false),
+          baseCostAllowance: Number(u.baseCostAllowance ?? u.base_cost_allowance ?? 0),
+          costAllowanceFortnight: Number(u.costAllowanceFortnight ?? u.cost_allowance_fortnight ?? 1),
+          specialTaxRate: Number(u.specialTaxRate ?? u.special_tax_rate ?? 0),
+          documentCpf: u.documentCpf ?? u.document_cpf ?? u.cpf ?? '',
+          pixKey: u.pixKey ?? u.pix_key ?? '',
+          pixKeyType: u.pixKeyType ?? u.pix_key_type ?? 'CPF',
+          bankName: u.bankName ?? u.bank_name ?? '',
+          bankAgency: u.bankAgency ?? u.bank_agency ?? '',
+          bankAccount: u.bankAccount ?? u.bank_account ?? '',
+          price_table: parsedPriceTable,
+          priceTable: parsedPriceTable,
+        };
+      });
       memUsers = formatted;
 
       // Escopo OWN para Técnico: retorna apenas seu próprio perfil
@@ -771,6 +790,8 @@ async function startServer() {
         has_special_tax_rule: u.hasSpecialTaxRule ? 1 : 0,
         specialtaxrate: Number(u.specialTaxRate || 0),
         special_tax_rate: Number(u.specialTaxRate || 0),
+        price_table: u.priceTable ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : null,
+        pricetable: u.priceTable ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : null,
       };
 
       const insertCols: string[] = [];
@@ -958,6 +979,8 @@ async function startServer() {
         specialtaxrate: u.specialTaxRate !== undefined ? Number(u.specialTaxRate) : undefined,
         passwordhash: u.password,
         password: u.password,
+        price_table: u.priceTable !== undefined ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : undefined,
+        pricetable: u.priceTable !== undefined ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : undefined,
       };
 
       for (const col of cols) {
@@ -3041,7 +3064,12 @@ async function startServer() {
     }
 
     if (status && typeof status === 'string') {
-      results = results.filter((o) => o.status === status.toUpperCase() || (status.toUpperCase() === 'FECHADAS' && o.status === 'COMPLETED') || (status.toUpperCase() === 'EM ANDAMENTO' && o.status === 'PENDING'));
+      const s = status.toUpperCase();
+      results = results.filter((o) => {
+        if (s === 'FECHADAS') return o.status === 'COMPLETED';
+        if (s === 'EM ANDAMENTO' || s === 'ABERTAS') return o.status === 'PENDING' || o.status === 'IN_PROGRESS' || o.status === 'CONFIRMED';
+        return o.status === s;
+      });
     }
 
     if (date && typeof date === 'string') {
@@ -3055,7 +3083,8 @@ async function startServer() {
       success: true,
       count: results.length,
       orders: results.slice(0, 50),
-      data: results.slice(0, 50)
+      data: results.slice(0, 50),
+      list: results.slice(0, 50)
     });
   });
 
