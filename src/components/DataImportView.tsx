@@ -229,17 +229,19 @@ export const DataImportView: React.FC = () => {
 
       const getRowField = (r: any, candidates: string[]) => {
         const rKeys = Object.keys(r);
+        const sanitize = (str: string) => str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_.]+/g, '');
+        
         for (const target of candidates) {
-          const cleanTarget = target.toLowerCase().replace(/[\s_.]+/g, '');
+          const cleanTarget = sanitize(target);
           for (const k of rKeys) {
-            const cleanK = k.toLowerCase().replace(/[\s_.]+/g, '');
+            const cleanK = sanitize(k);
             if (cleanK === cleanTarget) return r[k];
           }
         }
         for (const target of candidates) {
-          const cleanTarget = target.toLowerCase().replace(/[\s_.]+/g, '');
+          const cleanTarget = sanitize(target);
           for (const k of rKeys) {
-            const cleanK = k.toLowerCase().replace(/[\s_.]+/g, '');
+            const cleanK = sanitize(k);
             if (cleanK.includes(cleanTarget) || cleanTarget.includes(cleanK)) return r[k];
           }
         }
@@ -249,7 +251,7 @@ export const DataImportView: React.FC = () => {
       for (let i = 0; i < rawJson.length; i++) {
         const row = rawJson[i];
         const origem = String(getRowField(row, ['Origem', 'origem']) || '').trim();
-        const prestador = String(getRowField(row, ['Prestador', 'Tecnico', 'Técnico', 'tecnico', 'Prestador / Tecnico']) || '').trim();
+        const prestador = String(getRowField(row, ['Prestador', 'Tecnico', 'Técnico', 'tecnico', 'Prestador / Tecnico', 'Tecnico Vinculado']) || '').trim();
         const tipoVisita = String(getRowField(row, ['Tipo Visita', 'Tipo de Visita', 'Tipo_Visita', 'Serviço', 'Servico', 'Categoria']) || '').trim();
         const idChamado = String(getRowField(row, ['IdChamado', 'Id Chamado', 'ID Chamado', 'Chamado', 'OS', 'Numero Chamado']) || `IMP-${Date.now()}-${i}`).trim();
 
@@ -273,22 +275,26 @@ export const DataImportView: React.FC = () => {
         let rowTechId = '';
         let rowTechName = 'Não Alocado';
 
-        if (fileTech) {
-          rowTechId = fileTech.id;
-          rowTechName = fileTech.name;
-        } else if (prestador && prestador !== 'O Higienizador' && prestador !== 'Prestador' && prestador.length >= 3) {
-          // Look up in users
-          const matchedUser = users.find(
-            (u) =>
-              u.name.toLowerCase().includes(prestador.toLowerCase()) ||
-              prestador.toLowerCase().includes(u.name.toLowerCase().split(' ')[0])
-          );
+        if (prestador && prestador !== 'O Higienizador' && prestador !== 'A HIGIENIZADORA' && prestador !== 'Prestador' && prestador.length >= 3) {
+          // Look up in users ignoring accents
+          const sanitizeStr = (str: string) => str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const cleanPrestador = sanitizeStr(prestador);
+          
+          const matchedUser = users.find((u) => {
+            const cleanName = sanitizeStr(u.name);
+            const cleanFirstName = cleanName.split(' ')[0];
+            return cleanName.includes(cleanPrestador) || cleanPrestador.includes(cleanFirstName);
+          });
+          
           if (matchedUser) {
             rowTechId = matchedUser.id;
             rowTechName = matchedUser.name;
           } else {
             rowTechName = prestador;
           }
+        } else if (fileTech) {
+          rowTechId = fileTech.id;
+          rowTechName = fileTech.name;
         }
 
         const km = parseKm(getRowField(row, ['KM', 'Km', 'Km Rodado', 'Quilometragem', 'KM Rodado']));
@@ -307,6 +313,59 @@ export const DataImportView: React.FC = () => {
           statusOS = 'IN_PROGRESS';
         } else if (statusRaw.includes('PEND') || statusRaw.includes('AGEN')) {
           statusOS = 'PENDING';
+        }
+
+        if (valorVisita <= 0 && statusOS === 'COMPLETED') {
+          let foundPrice = 0;
+          
+          const isServiceMatch = (visitaRaw: string, tableServiceRaw: string) => {
+            const sanitize = (str: string) => str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            const v = sanitize(visitaRaw);
+            const s = sanitize(tableServiceRaw);
+            if (v === s || v.includes(s) || s.includes(v)) return true;
+            
+            const vNorm = v.replace('inst.', 'instalacao').replace('inst ', 'instalacao ').replace(' coifa', ' depurador e coifa');
+            const sNorm = s.replace('inst.', 'instalacao').replace('inst ', 'instalacao ').replace(' coifa', ' depurador e coifa');
+            if (vNorm.includes(sNorm) || sNorm.includes(vNorm)) return true;
+            
+            // TV specifics
+            if (vNorm.includes('tv') && sNorm.includes('tv')) {
+              const vIsLarge = vNorm.includes('50 a 65') || vNorm.includes('66 a 98') || vNorm.includes('acima');
+              const sIsLarge = sNorm.includes('acima');
+              if (vIsLarge && sIsLarge) return true;
+              if (!vIsLarge && !sIsLarge && (vNorm.includes('ate 49') || vNorm.includes('ate 55')) && sNorm.includes('ate 55')) return true;
+            }
+
+            const getTokens = (str: string) => str.split(/[\s\-+/]+/).filter(t => t.length > 2 && !['com', 'sem', 'ate', 'para', 'de', 'da', 'do', 'em'].includes(t));
+            const vTokens = getTokens(vNorm);
+            const sTokens = getTokens(sNorm);
+            
+            let matchCount = 0;
+            for (const st of sTokens) {
+              if (vTokens.some(vt => vt === st || vt.startsWith(st) || st.startsWith(vt))) {
+                matchCount++;
+              }
+            }
+            if (sTokens.length > 0 && matchCount >= Math.max(1, sTokens.length - 1)) {
+              return true;
+            }
+            return false;
+          };
+
+          const searchUsers = rowTechId ? [users.find(u => u.id === rowTechId), ...users] : users;
+          for (const u of searchUsers) {
+            if (u && (u as any).priceTable && Array.isArray((u as any).priceTable)) {
+              const pTable: any[] = (u as any).priceTable;
+              const match = pTable.find(p => isServiceMatch(tipoVisita, p.serviceType || ''));
+              if (match && match.prepostoPrice) {
+                foundPrice = match.prepostoPrice;
+                break;
+              }
+            }
+          }
+          if (foundPrice > 0) {
+            valorVisita = foundPrice;
+          }
         }
 
         const totalCalculado = Number((valorVisita + km * 0.50 + pedagio).toFixed(2));
@@ -1002,12 +1061,18 @@ export const DataImportView: React.FC = () => {
                           value={row.technicianId}
                           onChange={(e) => handleUpdateRowField(row.rowKey, 'technicianId', e.target.value)}
                           className={`px-2 py-1 rounded text-xs font-bold border transition-colors ${
-                            row.technicianName === 'Não Alocado'
+                            row.technicianId === '' && row.technicianName !== 'Não Alocado'
+                              ? 'bg-blue-50 text-blue-900 border-blue-300'
+                              : row.technicianName === 'Não Alocado'
                               ? 'bg-amber-50 text-amber-900 border-amber-300'
                               : 'bg-white text-slate-800 border-slate-200'
                           }`}
                         >
-                          <option value="">⚠️ Não Alocado</option>
+                          <option value="">
+                            {row.technicianName !== 'Não Alocado' && row.technicianName !== 'A HIGIENIZADORA' && row.technicianName !== 'O Higienizador'
+                              ? `✨ ${row.technicianName} (Será Criado)`
+                              : '⚠️ Não Alocado'}
+                          </option>
                           {users
                             .filter((u) => u.role === 'TECHNICIAN')
                             .map((u) => (

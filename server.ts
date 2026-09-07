@@ -10,7 +10,7 @@ import { AuditLog, AuditAction, AppModule, AuditResult, Role } from './src/types
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.APP_PORT) || 3002;
+  const PORT = Number(process.env.APP_PORT) || 3000;
 
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
@@ -2191,7 +2191,80 @@ async function startServer() {
         const kmRate = 0.50;
         const kmCost = km > 0 ? Number((km * kmRate).toFixed(2)) : 0;
         const toll = parseJsonCurrency(item['Pedágio'] || item.PEDAGIO || item.pedagio || item.tollCost || 0);
-        const valorVisita = parseJsonCurrency(item['Valor da Visita'] || item['VALOR DA VISTA'] || item.valorVisita || item.baseServiceFee || 0);
+        let valorVisita = parseJsonCurrency(item['Valor da Visita'] || item['VALOR DA VISTA'] || item.valorVisita || item.baseServiceFee || 0);
+
+        if ((finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED') && (statusRaw.includes('PERD') || statusRaw.includes('AUSEN')) && valorVisita <= 0) {
+          valorVisita = 20.00;
+        }
+
+        if (valorVisita <= 0 && finalStatus === 'COMPLETED') {
+           let foundPrice = 0;
+           
+           const isServiceMatch = (visitaRaw: string, tableServiceRaw: string) => {
+             const sanitize = (str: string) => str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+             const v = sanitize(visitaRaw);
+             const s = sanitize(tableServiceRaw);
+             if (v === s || v.includes(s) || s.includes(v)) return true;
+             
+             const vNorm = v.replace('inst.', 'instalacao').replace('inst ', 'instalacao ').replace(' coifa', ' depurador e coifa');
+             const sNorm = s.replace('inst.', 'instalacao').replace('inst ', 'instalacao ').replace(' coifa', ' depurador e coifa');
+             if (vNorm.includes(sNorm) || sNorm.includes(vNorm)) return true;
+             
+             if (vNorm.includes('tv') && sNorm.includes('tv')) {
+               const vIsLarge = vNorm.includes('50 a 65') || vNorm.includes('66 a 98') || vNorm.includes('acima');
+               const sIsLarge = sNorm.includes('acima');
+               if (vIsLarge && sIsLarge) return true;
+               if (!vIsLarge && !sIsLarge && (vNorm.includes('ate 49') || vNorm.includes('ate 55')) && sNorm.includes('ate 55')) return true;
+             }
+
+             const getTokens = (str: string) => str.split(/[\s\-+/]+/).filter(t => t.length > 2 && !['com', 'sem', 'ate', 'para', 'de', 'da', 'do', 'em'].includes(t));
+             const vTokens = getTokens(vNorm);
+             const sTokens = getTokens(sNorm);
+             
+             let matchCount = 0;
+             for (const st of sTokens) {
+               if (vTokens.some(vt => vt === st || vt.startsWith(st) || st.startsWith(vt))) {
+                 matchCount++;
+               }
+             }
+             if (sTokens.length > 0 && matchCount >= Math.max(1, sTokens.length - 1)) {
+               return true;
+             }
+             return false;
+           };
+           
+           const sanitizeName = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+           const techUser = currentUsersList.find((u: any) => u.id === resolvedTechId) || currentUsersList.find((u: any) => sanitizeName(u.name || '') === sanitizeName(resolvedTechName));
+
+           let searchUsers = currentUsersList;
+           if (techUser && techUser.price_table) {
+             searchUsers = [techUser, ...currentUsersList]; 
+           }
+           
+           for (const u of searchUsers) {
+             let pTable: any[] = [];
+             if (typeof u.price_table === 'string') {
+               try { pTable = JSON.parse(u.price_table); } catch(e){}
+             } else if (Array.isArray(u.price_table)) {
+               pTable = u.price_table;
+             } else if ((u as any).priceTable && Array.isArray((u as any).priceTable)) {
+               pTable = (u as any).priceTable;
+             }
+             
+             if (pTable && pTable.length > 0) {
+               const match = pTable.find((p: any) => isServiceMatch(tipoVisita, p.serviceType || ''));
+               if (match && match.prepostoPrice) {
+                 foundPrice = match.prepostoPrice;
+                 break;
+               }
+             }
+           }
+           
+           if (foundPrice > 0) {
+             valorVisita = foundPrice;
+           }
+        }
+
         const totalGross = Number((valorVisita + kmCost + toll).toFixed(2));
 
         const scheduledDateStr = parseJsonDate(item['Dt.Visita'] || item.dtVisita || item.scheduledDate);
