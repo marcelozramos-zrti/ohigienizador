@@ -1093,6 +1093,11 @@ async function startServer() {
         `);
       });
 
+      const normalizedUsers = memUsers.map(u => ({
+        ...u,
+        normName: (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      }));
+
       const formatted = rows.map((o: any) => {
         let rawTechId = o.technicianId || o.technician_id || null;
         let resolvedTechName = o.technicianName || o.technician_name || null;
@@ -1115,8 +1120,8 @@ async function startServer() {
         // Se não tiver ID mas tiver nome gravado, busca o ID do usuário correspondente
         if (!rawTechId && resolvedTechName) {
           const cleanNameNorm = resolvedTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          const userObj = memUsers.find((u) => {
-            const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const userObj = normalizedUsers.find((u) => {
+            const uNameNorm = u.normName;
             if (!uNameNorm || !cleanNameNorm) return false;
             return uNameNorm === cleanNameNorm || 
                    (uNameNorm.length >= 4 && cleanNameNorm.includes(uNameNorm)) || 
@@ -2037,6 +2042,11 @@ async function startServer() {
         }
       } catch {}
 
+      const normalizedCurrentUsersList = currentUsersList.map(u => ({
+        ...u,
+        normName: (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      }));
+
       function parseJsonCurrency(val: any): number {
         if (val === null || val === undefined || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
@@ -2095,7 +2105,7 @@ async function startServer() {
         const callNumber = String(item.IdChamado || item.idChamado || item.callNumber || `IMP-${Date.now()}-${idx + 1}`).trim();
         const rawTechId = item.technicianId || '';
         const rawTechName = String(item.Prestador || item.Tecnico || item.technicianName || 'Técnico').trim();
-        const tipoVisita = String(item['Tipo Visita'] || item.tipoVisita || item.serviceCategory || 'Serviço Porto').trim();
+        const tipoVisita = String(item['Tipo Visita'] || item['Tipo de Visita'] || item['Tipo de Visita / Escopo'] || item['TipoVisita'] || item.tipoVisita || item.serviceCategory || item['Serviço'] || item['Servico'] || 'Serviço Porto').trim();
         const statusRaw = String(item['Status OS'] || item.Status || item.status || 'COMPLETED').toUpperCase();
 
         let finalStatus = 'COMPLETED';
@@ -2121,8 +2131,8 @@ async function startServer() {
         } else {
           // Busca por nome
           const cleanNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          const found = currentUsersList.find((u) => {
-            const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const found = normalizedCurrentUsersList.find((u) => {
+            const uNameNorm = u.normName;
             if (!uNameNorm || !cleanNameNorm) return false;
             return uNameNorm === cleanNameNorm || 
                    (uNameNorm.length >= 4 && cleanNameNorm.includes(uNameNorm)) || 
@@ -2161,6 +2171,7 @@ async function startServer() {
             };
 
             currentUsersList.push(newTechUser);
+            normalizedCurrentUsersList.push({...newTechUser, normName: cleanNameNorm});
             memUsers.push(newTechUser);
 
             if (dbAvailable) {
@@ -3030,17 +3041,21 @@ async function startServer() {
     }
 
     if (status && typeof status === 'string') {
-      results = results.filter((o) => o.status === status.toUpperCase());
+      results = results.filter((o) => o.status === status.toUpperCase() || (status.toUpperCase() === 'FECHADAS' && o.status === 'COMPLETED') || (status.toUpperCase() === 'EM ANDAMENTO' && o.status === 'PENDING'));
     }
 
     if (date && typeof date === 'string') {
-      results = results.filter((o) => o.date.startsWith(date));
+      results = results.filter((o) => {
+        const orderDate = o.scheduledDate || o.startedAt || o.completedAt || '';
+        return orderDate.startsWith(date);
+      });
     }
 
     res.json({
       success: true,
       count: results.length,
       orders: results.slice(0, 50),
+      data: results.slice(0, 50)
     });
   });
 
@@ -3312,7 +3327,10 @@ async function startServer() {
     }
 
     const targetDate = (req.query.date as string) || new Date().toISOString().split('T')[0];
-    const dayOrders = memOrders.filter((o) => o.date.startsWith(targetDate) && o.status !== 'CANCELLED');
+    const dayOrders = memOrders.filter((o) => {
+      const orderDate = o.scheduledDate || o.startedAt || o.completedAt || '';
+      return orderDate.startsWith(targetDate) && o.status !== 'CANCELLED';
+    });
 
     // Agrupar por técnico
     const byTech: Record<string, { technician: any; count: number; orders: any[] }> = {};
@@ -3340,11 +3358,11 @@ async function startServer() {
         id: ord.id,
         callNumber: ord.callNumber,
         customerName: ord.customerName,
-        customerAddress: ord.customerAddress,
+        customerAddress: ord.customerAddress || ord.addressStreet,
         customerPhone: ord.customerPhone,
         serviceCategory: ord.serviceCategory,
         status: ord.status,
-        date: ord.date,
+        date: ord.scheduledDate || ord.startedAt || ord.completedAt || '',
       });
     }
 
