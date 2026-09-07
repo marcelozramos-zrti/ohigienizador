@@ -103,8 +103,8 @@ interface AppContextType {
   setSelectedMonth: (month: number) => void;
   selectedYear: number;
   setSelectedYear: (year: number) => void;
-  selectedPeriod: 1 | 2;
-  setSelectedPeriod: (period: 1 | 2) => void;
+  selectedPeriod: 0 | 1 | 2;
+  setSelectedPeriod: (period: 0 | 1 | 2) => void;
   recalculateClosing: () => void;
 
   // PDF & WhatsApp
@@ -526,7 +526,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [selectedMonth, setSelectedMonth] = useState<number>(8); // Agosto
   const [selectedYear, setSelectedYear] = useState<number>(2026);
-  const [selectedPeriod, setSelectedPeriod] = useState<1 | 2>(1); // 1ª Quinzena
+  const [selectedPeriod, setSelectedPeriod] = useState<0 | 1 | 2>(1); // 1ª Quinzena
 
   // Floating Toasts (dismissable balloon alerts)
   const [toasts, setToasts] = useState<ToastItem[]>([]);

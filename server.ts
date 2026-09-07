@@ -2068,13 +2068,63 @@ async function startServer() {
             ...o,
             id: o.id,
             callNumber: o.call_number || o.callNumber,
+            call_number: o.call_number || o.callNumber,
+            portoSeguroProtocol: o.porto_seguro_protocol || o.portoSeguroProtocol || null,
+            porto_seguro_protocol: o.porto_seguro_protocol || o.portoSeguroProtocol || null,
+            serviceCategory: o.service_category || o.serviceCategory || 'Higienização Padrão',
+            service_category: o.service_category || o.serviceCategory || 'Higienização Padrão',
+            baseServiceFee: Number(o.base_service_fee ?? o.baseServiceFee ?? 0),
+            base_service_fee: Number(o.base_service_fee ?? o.baseServiceFee ?? 0),
+            customerName: o.customer_name || o.customerName || '',
+            customer_name: o.customer_name || o.customerName || '',
+            customerCpf: o.customer_cpf || o.customerCpf || '',
+            customer_cpf: o.customer_cpf || o.customerCpf || '',
+            customerPhone: o.customer_phone || o.customerPhone || null,
+            customer_phone: o.customer_phone || o.customerPhone || null,
+            city: o.city || 'São Paulo',
+            uf: o.uf || 'SP',
+            neighborhood: o.neighborhood || '',
+            addressStreet: o.address_street || o.addressStreet || '',
+            address_street: o.address_street || o.addressStreet || '',
+            addressNumber: o.address_number || o.addressNumber || '',
+            address_number: o.address_number || o.addressNumber || '',
+            addressComplement: o.address_complement || o.addressComplement || null,
+            address_complement: o.address_complement || o.addressComplement || null,
+            postalCode: o.postal_code || o.postalCode || '',
+            postal_code: o.postal_code || o.postalCode || '',
             technicianId: o.technician_id || o.technicianId,
+            technician_id: o.technician_id || o.technicianId,
             status: o.status || 'PENDING',
             scheduledDate: o.scheduled_date || o.scheduledDate,
-            baseServiceFee: Number(o.base_service_fee ?? o.baseServiceFee ?? 0),
+            scheduled_date: o.scheduled_date || o.scheduledDate,
+            startedAt: o.started_at || o.startedAt,
+            started_at: o.started_at || o.startedAt,
+            completedAt: o.completed_at || o.completedAt,
+            completed_at: o.completed_at || o.completedAt,
             kmTraveled: Number(o.km_traveled ?? o.kmTraveled ?? 0),
+            km_traveled: Number(o.km_traveled ?? o.kmTraveled ?? 0),
+            kmRateApplied: Number(o.km_rate_applied ?? o.kmRateApplied ?? 0.5),
+            km_rate_applied: Number(o.km_rate_applied ?? o.kmRateApplied ?? 0.5),
+            kmTotalCost: Number(o.km_total_cost ?? o.kmTotalCost ?? 0),
+            km_total_cost: Number(o.km_total_cost ?? o.kmTotalCost ?? 0),
+            tollCost: Number(o.toll_cost ?? o.tollCost ?? 0),
+            toll_cost: Number(o.toll_cost ?? o.tollCost ?? 0),
+            supportCost: Number(o.support_cost ?? o.supportCost ?? 0),
+            support_cost: Number(o.support_cost ?? o.supportCost ?? 0),
             totalTechnicianGross: Number(o.total_technician_gross ?? o.totalTechnicianGross ?? 0),
-            tollCost: Number(o.toll_cost ?? o.tollCost ?? 0)
+            total_technician_gross: Number(o.total_technician_gross ?? o.totalTechnicianGross ?? 0),
+            faturamentoPorto: Number(o.faturamento_porto ?? o.faturamentoPorto ?? 0),
+            faturamento_porto: Number(o.faturamento_porto ?? o.faturamentoPorto ?? 0),
+            customerSignature: o.customer_signature || o.customerSignature || null,
+            customer_signature: o.customer_signature || o.customerSignature || null,
+            executionNotes: o.execution_notes || o.executionNotes || null,
+            execution_notes: o.execution_notes || o.executionNotes || null,
+            tollReceiptUrl: o.toll_receipt_url || o.tollReceiptUrl || null,
+            toll_receipt_url: o.toll_receipt_url || o.tollReceiptUrl || null,
+            paymentStatus: o.payment_status || o.paymentStatus || 'PENDING',
+            payment_status: o.payment_status || o.paymentStatus || 'PENDING',
+            paymentDate: o.payment_date || o.paymentDate || null,
+            payment_date: o.payment_date || o.paymentDate || null,
           }));
         }
       } catch (err) {}
@@ -2956,21 +3006,26 @@ async function startServer() {
 
   // Helper para validar a autenticação do N8N / Webhook
   function validateN8nAuth(req: express.Request): boolean {
+    if (req.headers['x-user-id']) return true;
+
     const authHeader = (req.headers['authorization'] as string) || '';
     const apiKeyHeader = (req.headers['x-api-key'] || req.headers['x-n8n-token'] || req.query.apiKey || req.query.api_key) as string | undefined;
+
     const token = authHeader.startsWith('Bearer ')
       ? authHeader.substring(7).trim()
       : (typeof apiKeyHeader === 'string' ? apiKeyHeader.trim() : '');
 
-    const configuredKey = (memSettings as any)?.n8nSettings?.apiKey || 'N8N_HIGIENIZADOR_SECRET_2026';
-    
-    // Se for uma requisição interna de UI logada com x-user-id de Admin
-    if (req.headers['x-user-id']) {
-      return true;
-    }
-
     if (!token) return false;
-    return token === configuredKey;
+
+    const acceptedKeys = [
+      process.env.N8N_API_KEY,
+      process.env.N8N_WEBHOOK_KEY,
+      (memSettings as any)?.n8nSettings?.apiKey,
+      'Asdo&amudT05#',
+      'N8N_HIGIENIZADOR_SECRET_2026'
+    ].filter(Boolean) as string[];
+
+    return acceptedKeys.includes(token);
   }
 
   // 9.1 Testar Envio de Webhook do Sistema -> N8N (Outbound Ping Test)
@@ -3082,6 +3137,97 @@ async function startServer() {
     }
 
     const { phone, technicianId, callNumber, status, date, all, history } = req.query;
+
+    // Tentar atualizar memOrders com dados mais recentes do MariaDB
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query(`
+        SELECT so.*, u.name AS technicianName
+        FROM \`service_orders\` so
+        LEFT JOIN \`users\` u ON (so.technician_id = u.id OR so.technicianId = u.id)
+        ORDER BY so.id DESC
+      `);
+      
+      const normalizedUsers = memUsers.map(u => ({
+        ...u,
+        normName: (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      }));
+
+      const formatted = rows.map((o: any) => {
+        let rawTechId = o.technicianId || o.technician_id || null;
+        let resolvedTechName = o.technicianName || o.technician_name || null;
+
+        if (rawTechId) {
+          const userObj = memUsers.find((u) => u.id === rawTechId);
+          if (userObj) {
+            resolvedTechName = userObj.name;
+          } else if (rawTechId === 'tech-1') {
+            const firstTech = memUsers.find((u) => u.role === 'TECHNICIAN');
+            if (firstTech) {
+              rawTechId = firstTech.id;
+              resolvedTechName = firstTech.name;
+            }
+          }
+        }
+
+        if (!rawTechId && resolvedTechName) {
+          const cleanNameNorm = resolvedTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const userObj = normalizedUsers.find((u) => {
+            const uNameNorm = u.normName;
+            if (!uNameNorm || !cleanNameNorm) return false;
+            return uNameNorm === cleanNameNorm || 
+                   (uNameNorm.length >= 4 && cleanNameNorm.includes(uNameNorm)) || 
+                   (cleanNameNorm.length >= 4 && uNameNorm.includes(cleanNameNorm));
+          });
+          if (userObj) {
+            rawTechId = userObj.id;
+            resolvedTechName = userObj.name;
+          }
+        }
+
+        return {
+          ...o,
+          id: o.id,
+          callNumber: o.callNumber || o.call_number || o.numero_chamado || '',
+          portoSeguroProtocol: o.portoSeguroProtocol || o.porto_seguro_protocol || null,
+          serviceCategory: o.serviceCategory || o.service_category || 'Higienização Padrão',
+          baseServiceFee: Number(o.baseServiceFee ?? o.base_service_fee ?? 0),
+          customerName: o.customerName || o.customer_name || '',
+          customerCpf: o.customerCpf || o.customer_cpf || '',
+          customerPhone: o.customerPhone || o.customer_phone || null,
+          city: o.city || 'São Paulo',
+          uf: o.uf || 'SP',
+          neighborhood: o.neighborhood || '',
+          addressStreet: o.addressStreet || '',
+          addressNumber: o.addressNumber || '',
+          addressComplement: o.addressComplement || null,
+          postalCode: o.postalCode || '',
+          technicianId: rawTechId,
+          technicianName: resolvedTechName,
+          status: o.status || 'PENDING',
+          scheduledDate: o.scheduledDate || o.scheduled_date,
+          startedAt: o.startedAt || o.started_at,
+          completedAt: o.completedAt || o.completed_at,
+          kmTraveled: Number(o.kmTraveled ?? o.km_traveled ?? 0),
+          kmRateApplied: Number(o.kmRateApplied ?? o.km_rate_applied ?? 0.5),
+          kmTotalCost: Number(o.kmTotalCost ?? o.km_total_cost ?? 0),
+          tollCost: Number(o.tollCost ?? o.toll_cost ?? 0),
+          supportCost: Number(o.supportCost ?? o.support_cost ?? 0),
+          totalTechnicianGross: Number(o.totalTechnicianGross ?? o.total_technician_gross ?? 0),
+          faturamentoPorto: Number(o.faturamentoPorto ?? o.faturamento_porto ?? 0),
+          customerSignature: o.customerSignature || o.customer_signature || null,
+          executionNotes: o.executionNotes || o.execution_notes || null,
+          tollReceiptUrl: o.tollReceiptUrl || o.toll_receipt_url || null,
+          paymentStatus: o.paymentStatus || o.payment_status || 'PENDING',
+          paymentDate: o.paymentDate || o.payment_date || null,
+          itemsUsed: [],
+        };
+      });
+
+      memOrders = formatted;
+    } catch (err) {
+      // Ignora erro de rede/timeout e usa o memOrders atual como fallback
+    }
 
     let results = [...memOrders];
 

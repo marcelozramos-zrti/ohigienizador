@@ -568,61 +568,6 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             </div>
             )}
 
-            {/* Period Filter: Início */}
-            <div className="relative inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-cyan-50/50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-cyan-300 transition-all group shrink-0">
-              <Calendar className="h-4 w-4 text-cyan-700 group-hover:scale-110 transition-transform shrink-0 pointer-events-none" />
-              <span className="text-xs font-bold text-slate-700 group-hover:text-cyan-900 select-none pointer-events-none">
-                Início{startDateFilter ? `: ${formatDateBR(startDateFilter)}` : ''}
-              </span>
-              <input
-                type="date"
-                value={startDateFilter}
-                onChange={(e) => setStartDateFilter(e.target.value)}
-                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                title="Clique para selecionar a Data Inicial"
-              />
-              {startDateFilter && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setStartDateFilter('');
-                  }}
-                  className="z-20 p-0.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-200 transition-colors cursor-pointer"
-                  title="Limpar Data Inicial"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-
-            {/* Period Filter: Fim */}
-            <div className="relative inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-cyan-50/50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-cyan-300 transition-all group shrink-0">
-              <Calendar className="h-4 w-4 text-cyan-700 group-hover:scale-110 transition-transform shrink-0 pointer-events-none" />
-              <span className="text-xs font-bold text-slate-700 group-hover:text-cyan-900 select-none pointer-events-none">
-                Fim{endDateFilter ? `: ${formatDateBR(endDateFilter)}` : ''}
-              </span>
-              <input
-                type="date"
-                value={endDateFilter}
-                onChange={(e) => setEndDateFilter(e.target.value)}
-                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                title="Clique para selecionar a Data Final"
-              />
-              {endDateFilter && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEndDateFilter('');
-                  }}
-                  className="z-20 p-0.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-200 transition-colors cursor-pointer"
-                  title="Limpar Data Final"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
           </div>
 
           {/* Actions: Clear Filters & Icon-only Export CSV with Tooltip */}
