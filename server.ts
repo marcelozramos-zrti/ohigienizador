@@ -1117,7 +1117,10 @@ async function startServer() {
           const cleanNameNorm = resolvedTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
           const userObj = memUsers.find((u) => {
             const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-            return uNameNorm === cleanNameNorm || (uNameNorm && cleanNameNorm && (uNameNorm.includes(cleanNameNorm) || cleanNameNorm.includes(uNameNorm)));
+            if (!uNameNorm || !cleanNameNorm) return false;
+            return uNameNorm === cleanNameNorm || 
+                   (uNameNorm.length >= 4 && cleanNameNorm.includes(uNameNorm)) || 
+                   (cleanNameNorm.length >= 4 && uNameNorm.includes(cleanNameNorm));
           });
           if (userObj) {
             rawTechId = userObj.id;
@@ -2120,7 +2123,10 @@ async function startServer() {
           const cleanNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
           const found = currentUsersList.find((u) => {
             const uNameNorm = (u.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-            return uNameNorm === cleanNameNorm || uNameNorm.includes(cleanNameNorm) || cleanNameNorm.includes(uNameNorm);
+            if (!uNameNorm || !cleanNameNorm) return false;
+            return uNameNorm === cleanNameNorm || 
+                   (uNameNorm.length >= 4 && cleanNameNorm.includes(uNameNorm)) || 
+                   (cleanNameNorm.length >= 4 && uNameNorm.includes(cleanNameNorm));
           });
 
           if (found) {

@@ -283,7 +283,7 @@ export const DataImportView: React.FC = () => {
           const matchedUser = users.find((u) => {
             const cleanName = sanitizeStr(u.name);
             const cleanFirstName = cleanName.split(' ')[0];
-            return cleanName.includes(cleanPrestador) || cleanPrestador.includes(cleanFirstName);
+            return cleanName === cleanPrestador || cleanName.includes(cleanPrestador) || (cleanFirstName.length >= 3 && cleanPrestador.includes(cleanFirstName));
           });
           
           if (matchedUser) {
