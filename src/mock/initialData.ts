@@ -24,6 +24,28 @@ export const INITIAL_USERS: User[] = [
     specialTaxRate: 0,
     priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
   },
+  // 1.5 Admin ZRTI
+  {
+    id: 'admin-zrti',
+    name: 'Admin ZRTI',
+    email: 'admin@zrti.com.br',
+    password: 'Porto@2026',
+    role: 'ADMIN',
+    isSuperAdmin: true,
+    documentCpf: '000.000.000-00',
+    phone: '11900000000',
+    isActive: true,
+    mfaEnabled: false,
+    pixKeyType: 'EMAIL',
+    pixKey: 'admin@zrti.com.br',
+    bankName: 'Banco Itaú',
+    bankAgency: '0001',
+    bankAccount: '00000-0',
+    baseCostAllowance: 0,
+    hasSpecialTaxRule: false,
+    specialTaxRate: 0,
+    priceTable: FELIPE_AUGUSTO_PRICE_TABLE,
+  },
   // 2. Gestor Operacional
   {
     id: 'op1',

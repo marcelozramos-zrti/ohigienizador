@@ -77,7 +77,16 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
   const [batchTechId, setBatchTechId] = useState<string>('');
   const [isBatchBusy, setIsBatchBusy] = useState<boolean>(false);
 
-  const safeOrders = orders || [];
+  // Restringe a lista de OS para o Técnico, mesmo se a API enviar tudo
+  const roleFilteredOrders = useMemo(() => {
+    if (!orders) return [];
+    if (currentUser?.role === 'TECHNICIAN') {
+      return orders.filter(o => o.technicianId === currentUser.id);
+    }
+    return orders;
+  }, [orders, currentUser]);
+
+  const safeOrders = roleFilteredOrders || [];
   const safeUsers = users || [];
 
   const techniciansList = useMemo(() => {
@@ -369,6 +378,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
   return (
     <div className="space-y-6">
       {/* Executive Status Dashboard - Quadros Informativos de Cobrança em Tempo Real */}
+      {currentUser?.role !== 'TECHNICIAN' && (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {/* Total de Chamados */}
         <div
@@ -471,6 +481,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         </div>
 
         {/* Painel do Gestor - Cobrança de Fechamento */}
+        {currentUser?.role !== 'TECHNICIAN' && (
         <div
           onClick={() => setStatusFilter(statusFilter === 'NOT_COMPLETED' ? 'ALL' : 'NOT_COMPLETED')}
           className={`bg-white rounded-xl p-3 border transition-all cursor-pointer shadow-2xs hover:shadow-md ${
@@ -507,7 +518,9 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             )}
           </div>
         </div>
+        )}
       </div>
+      )}
 
       {/* Filters & Actions Box */}
       <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-xs space-y-2.5">
@@ -515,6 +528,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-2">
             {/* Status Filter Select */}
+            {currentUser?.role !== 'TECHNICIAN' && (
             <div className="flex items-center space-x-1.5 shrink-0">
               <label className="text-[11px] font-semibold text-slate-500 hidden sm:inline">Status:</label>
               <select
@@ -531,8 +545,10 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 <option value="CANCELLED">Canceladas</option>
               </select>
             </div>
+            )}
 
             {/* Technician Filter Select */}
+            {currentUser?.role !== 'TECHNICIAN' && (
             <div className="flex items-center space-x-1.5 shrink-0">
               <label className="text-[11px] font-semibold text-slate-500 hidden sm:inline">Técnico:</label>
               <select
@@ -550,6 +566,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 ))}
               </select>
             </div>
+            )}
 
             {/* Period Filter: Início */}
             <div className="relative inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-cyan-50/50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-cyan-300 transition-all group shrink-0">
@@ -657,7 +674,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
       </div>
 
       {/* Banner de Ação Rápida para Ordens Não Alocadas */}
-      {unallocatedOrders.length > 0 && (
+      {unallocatedOrders.length > 0 && currentUser?.role !== 'TECHNICIAN' && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 font-bold text-sm">
@@ -782,6 +799,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 </th>
 
                 {/* 6. Deslocamento (KM) */}
+                {currentUser?.role !== 'TECHNICIAN' && (
                 <th
                   onClick={() => handleSort('kmTraveled')}
                   className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
@@ -791,6 +809,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                     {renderSortIndicator('kmTraveled')}
                   </div>
                 </th>
+                )}
 
                 {/* 7. Repasse Técnico */}
                 <th
@@ -804,6 +823,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 </th>
 
                 {/* 8. Pedágio */}
+                {currentUser?.role !== 'TECHNICIAN' && (
                 <th
                   onClick={() => handleSort('tollCost')}
                   className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
@@ -813,8 +833,10 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                     {renderSortIndicator('tollCost')}
                   </div>
                 </th>
+                )}
 
                 {/* 9. Suporte Extra */}
+                {currentUser?.role !== 'TECHNICIAN' && (
                 <th
                   onClick={() => handleSort('supportCost')}
                   className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
@@ -824,6 +846,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                     {renderSortIndicator('supportCost')}
                   </div>
                 </th>
+                )}
 
                 {/* 10. Status */}
                 <th
@@ -842,7 +865,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             <tbody className="divide-y divide-slate-100">
               {sortedOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-slate-400">
+                  <td colSpan={currentUser?.role === 'TECHNICIAN' ? 9 : 11} className="py-12 text-center text-slate-400">
                     <div className="max-w-md mx-auto space-y-1.5">
                       <p className="font-semibold text-slate-600 text-sm">
                         Nenhuma ordem de serviço encontrada com os filtros selecionados.
@@ -889,19 +912,21 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                         </div>
                       </td>
 
-                      {/* 3. Service Category */}
+                      {/* 3. Service Category & Values */}
                       <td className="py-3 px-3.5">
                         <div className="font-medium text-slate-800 truncate max-w-[160px]" title={os.serviceCategory}>
                           {os.serviceCategory}
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          Base: R$ {(os.baseServiceFee || 0).toFixed(2)}
                         </div>
                       </td>
 
                       {/* 4. Technician */}
                       <td className="py-3 px-3.5">
                         <div className="flex items-center gap-1.5">
+                          {currentUser?.role === 'TECHNICIAN' ? (
+                            <div className="text-xs font-semibold py-1 px-2 rounded-lg border bg-slate-50 text-slate-800 border-slate-200">
+                              {displayName || 'Não Alocado'}
+                            </div>
+                          ) : (
                           <select
                             value={matchedTech?.id || os.technicianId || ''}
                             onChange={async (e) => {
@@ -924,6 +949,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                               </option>
                             ))}
                           </select>
+                          )}
                         </div>
                       </td>
 
@@ -944,6 +970,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                       </td>
 
                       {/* 6. KM & Logistics */}
+                      {currentUser?.role !== 'TECHNICIAN' && (
                       <td className="py-3 px-3.5 whitespace-nowrap">
                         <div className="font-medium text-slate-700 font-mono">
                           {os.kmTraveled > 0
@@ -951,30 +978,37 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                             : '0 km'}
                         </div>
                       </td>
+                      )}
 
                       {/* 7. Repasse Técnico */}
                       <td className="py-3 px-3.5 whitespace-nowrap">
                         <div className="font-bold text-[#003366] font-mono">
-                          R$ {(os.totalTechnicianGross || 0).toFixed(2)}
+                           R$ {(os.totalTechnicianGross || 0).toFixed(2)}
                         </div>
+                        {currentUser?.role !== 'TECHNICIAN' && (
                         <div className="text-[10px] text-slate-400">
                           Porto: R$ {(os.faturamentoPorto || 0).toFixed(2)}
                         </div>
+                        )}
                       </td>
 
                       {/* 8. PEDÁGIO */}
+                      {currentUser?.role !== 'TECHNICIAN' && (
                       <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
                         <div className={`font-mono font-medium ${os.tollCost > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
                           R$ {(os.tollCost || 0).toFixed(2)}
                         </div>
                       </td>
+                      )}
 
                       {/* 9. SUPORTE EXTRA */}
+                      {currentUser?.role !== 'TECHNICIAN' && (
                       <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
                         <div className={`font-mono font-medium ${os.supportCost > 0 ? 'text-cyan-700 font-bold' : 'text-slate-400'}`}>
                           R$ {(os.supportCost || 0).toFixed(2)}
                         </div>
                       </td>
+                      )}
 
                       {/* 10. Status */}
                       <td className="py-3 px-3.5 text-center whitespace-nowrap">
@@ -1148,6 +1182,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
               </div>
 
               {/* Demonstrativo Financeiro da OS */}
+              {currentUser?.role !== 'TECHNICIAN' && (
               <div>
                 <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
                   Composição do Pagamento ao Técnico
@@ -1183,11 +1218,12 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                   <div className="pt-2 border-t border-cyan-200 flex justify-between text-xs">
                     <span className="font-bold text-[#003366]">Total Repasse Técnico:</span>
                     <span className="font-black text-[#003366]">
-                      R$ {(selectedOrder.totalTechnicianGross || 0).toFixed(2)}
+                       R$ {(selectedOrder.totalTechnicianGross || 0).toFixed(2)}
                     </span>
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Insumos Abatidos */}
               <div>

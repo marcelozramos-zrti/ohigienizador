@@ -10,7 +10,7 @@ import { AuditLog, AuditAction, AppModule, AuditResult, Role } from './src/types
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = Number(process.env.APP_PORT) || 3000;
 
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
@@ -2678,6 +2678,10 @@ async function startServer() {
           whatsappInstanceName: s.whatsappInstanceName || s.whatsapp_instance_name || '',
           whatsappTemplateMessage: s.whatsappTemplateMessage || s.whatsapp_template_message || '',
           autoStockDeduction: Boolean(s.autoStockDeduction ?? s.auto_stock_deduction ?? true),
+          n8nSettings: {
+            apiKey: s.n8nApiKey || s.n8n_api_key || memSettings?.n8nSettings?.apiKey || 'N8N_HIGIENIZADOR_SECRET_2026',
+            webhookUrl: s.n8nWebhookUrl || s.n8n_webhook_url || memSettings?.n8nSettings?.webhookUrl || '',
+          },
         };
         memSettings = formatted;
         res.json({ success: true, data: formatted });
@@ -2742,6 +2746,8 @@ async function startServer() {
         whatsappinstancename: s.whatsappInstanceName || '',
         whatsapptemplatemessage: s.whatsappTemplateMessage || '',
         autostockdeduction: s.autoStockDeduction ? 1 : 0,
+        n8n_api_key: s.n8nSettings?.apiKey || '',
+        n8n_webhook_url: s.n8nSettings?.webhookUrl || '',
       };
 
       const insertCols: string[] = [];

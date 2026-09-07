@@ -355,6 +355,8 @@ model GeneralSettings {
   whatsappTemplateMessage    String    @default("Olá, {NOME_TECNICO}! Segue seu extrato de fechamento quinzenal ({PERIODO}) da empresa O Higienizador. Valor líquido a receber via PIX: {VALOR_LIQUIDO}. O PDF detalhado está anexo.") @db.Text
 
   autoStockDeduction         Boolean   @default(true)
+  n8nApiKey                  String?   @map("n8n_api_key") @db.VarChar(255)
+  n8nWebhookUrl              String?   @map("n8n_webhook_url") @db.VarChar(255)
   updatedAt                  DateTime  @updatedAt
 
   @@map("general_settings")

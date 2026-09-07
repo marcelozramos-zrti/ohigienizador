@@ -125,13 +125,13 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  USERS: 'higienizador_users_mariadb_v4',
-  ORDERS: 'higienizador_orders_mariadb_v4',
-  STOCK: 'higienizador_stock_mariadb_v4',
-  MOVEMENTS: 'higienizador_movements_mariadb_v4',
-  SETTINGS: 'higienizador_settings_mariadb_v4',
-  ACTIVE_TAB: 'higienizador_active_tab_mariadb_v4',
-  AUTH_SESSION: 'higienizador_auth_session_mariadb_v4',
+  USERS: 'higienizador_users_mariadb_v5',
+  ORDERS: 'higienizador_orders_mariadb_v5',
+  STOCK: 'higienizador_stock_mariadb_v5',
+  MOVEMENTS: 'higienizador_movements_mariadb_v5',
+  SETTINGS: 'higienizador_settings_mariadb_v5',
+  ACTIVE_TAB: 'higienizador_active_tab_mariadb_v5',
+  AUTH_SESSION: 'higienizador_auth_session_mariadb_v5',
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {

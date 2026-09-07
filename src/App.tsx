@@ -47,7 +47,8 @@ const MainLayout: React.FC = () => {
         setActiveTab('dashboard');
       }
     }
-  }, [isAuthenticated, isTechnician, isOperational, activeTab, setActiveTab]);
+    // Admin has access to all routes, so no restrictions needed for isMasterAdmin
+  }, [isAuthenticated, isTechnician, isOperational, isMasterAdmin, activeTab, setActiveTab]);
 
   // If not authenticated, render the secure Login View with Superadmin and Technician access
   if (!isAuthenticated) {

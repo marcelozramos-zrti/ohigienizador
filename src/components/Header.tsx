@@ -348,62 +348,38 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showRoleMenu && (
-              <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in">
-                <div className="px-4 py-2 border-b border-slate-100">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                    Alternar Perfil Ativo
-                  </span>
-                  <p className="text-[11px] text-slate-500">
-                    Clique para testar a visão de outros usuários
-                  </p>
-                </div>
-                <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                  {safeUsers.map((u) => {
-                    const isSelected = u.id === safeUser.id;
-                    return (
-                      <button
-                        key={u.id}
-                        id={`switch-user-${u.id}`}
-                        onClick={() => handleSwitchUser(u.id)}
-                        className={`w-full text-left px-4 py-2.5 flex items-center justify-between hover:bg-slate-50 transition-colors cursor-pointer ${
-                          isSelected ? 'bg-cyan-50/60' : ''
-                        }`}
-                      >
-                        <div>
-                          <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{u.name}</span>
-                            {u.hasSpecialTaxRule && (
-                              <span className="text-[9px] px-1 py-0.2 bg-amber-100 text-amber-800 rounded font-bold">
-                                16% Fiscal
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            {u.email} • <span className="font-semibold">{u.role}</span>
-                          </div>
-                        </div>
-                        {isSelected && (
-                          <CheckCircle2 className="w-4 h-4 text-cyan-600 shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-[#003366] text-white flex items-center justify-center font-bold text-lg shadow-inner">
+                    {(safeUser.name || 'U').charAt(0)}
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-slate-900 truncate max-w-[150px]">
+                      {safeUser.name}
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate max-w-[150px]">
+                      {safeUser.email}
+                    </div>
+                    <div className="text-[9px] font-bold text-cyan-700 uppercase mt-0.5">
+                      {safeUser.role}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="p-2 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
-                  <div className="text-[10px] text-slate-400 font-mono">
-                    ID: {safeUser.id.substring(0, 14)}
-                  </div>
+                <div className="p-2 bg-slate-50/70 flex flex-col gap-1">
                   <button
                     onClick={() => {
                       setShowRoleMenu(false);
                       logout();
                     }}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-center space-x-2 px-3 py-2.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-sm font-bold transition-colors cursor-pointer border border-red-100"
                   >
-                    <LogOut className="w-3.5 h-3.5" />
+                    <LogOut className="w-4 h-4" />
                     <span>Sair da Conta</span>
                   </button>
+                  <div className="text-[9px] text-center text-slate-400 font-mono mt-1">
+                    ID: {safeUser.id.substring(0, 14)}
+                  </div>
                 </div>
               </div>
             )}
