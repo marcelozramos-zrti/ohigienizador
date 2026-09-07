@@ -10,7 +10,7 @@ import { AuditLog, AuditAction, AppModule, AuditResult, Role } from './src/types
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.APP_PORT) || 3000;
+  const PORT = Number(process.env.APP_PORT) || 3002;
 
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
