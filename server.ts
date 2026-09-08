@@ -2019,7 +2019,7 @@ async function startServer() {
         const totalTechnicianGross = Number((baseServiceFee + kmTotalCost + tollCost).toFixed(2));
         
         const cleanStatus = String(statusRaw || '').toLowerCase().trim();
-        const finalStatus = cleanStatus.includes('perdida') ? 'COMPLETED' : cleanStatus.includes('canc') ? 'CANCELLED' : cleanStatus.includes('anda') ? 'IN_PROGRESS' : 'PENDING';
+        const finalStatus = (cleanStatus.includes('perdida') || cleanStatus.includes('conclu') || cleanStatus.includes('finaliz')) ? 'COMPLETED' : cleanStatus.includes('canc') ? 'CANCELLED' : cleanStatus.includes('anda') ? 'IN_PROGRESS' : 'PENDING';
         
         const scheduledDateStr = parseDateValue(dtVisitaRaw);
         const dateSlug = scheduledDateStr.split('T')[0].replace(/-/g, '');
@@ -2062,7 +2062,7 @@ async function startServer() {
                 id, call_number, porto_seguro_protocol, service_category, base_service_fee, customer_name, customer_cpf, customer_phone, city, uf, neighborhood, address_street, address_number, address_complement, postal_code, technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto
               ) VALUES ? 
               ON DUPLICATE KEY UPDATE 
-                status=VALUES(status), total_technician_gross=VALUES(total_technician_gross), faturamento_porto=VALUES(faturamento_porto)
+                status=VALUES(status), total_technician_gross=VALUES(total_technician_gross), faturamento_porto=VALUES(faturamento_porto), started_at=VALUES(started_at), completed_at=VALUES(completed_at)
             `, [chunk]);
           }
         }
@@ -2258,7 +2258,7 @@ async function startServer() {
         const statusRaw = String(item['Status OS'] || item.Status || item.status || 'COMPLETED').toUpperCase();
 
         let finalStatus = 'COMPLETED';
-        if (statusRaw.includes('PERD') || statusRaw.includes('AUSEN')) {
+        if (statusRaw.includes('PERD') || statusRaw.includes('AUSEN') || statusRaw.includes('CONCLU') || statusRaw.includes('FINALIZ')) {
           finalStatus = 'COMPLETED';
         } else if (statusRaw.includes('CANC') || statusRaw.includes('RECUS') || statusRaw.includes('IMPOSS')) {
           finalStatus = 'CANCELLED';
