@@ -3473,6 +3473,54 @@ async function startServer() {
 
     memOrders[orderIdx] = updatedOrder;
 
+    // Persistência imediata no MariaDB
+    try {
+      const db = getDbPool();
+      let completedAtSql: string | null = null;
+      if (updatedOrder.status === 'COMPLETED') {
+        const d = updatedOrder.completedAt ? new Date(updatedOrder.completedAt) : new Date();
+        const validD = isNaN(d.getTime()) ? new Date() : d;
+        completedAtSql = validD.toISOString().slice(0, 19).replace('T', ' ');
+      } else if (updatedOrder.completedAt) {
+        const d = new Date(updatedOrder.completedAt);
+        completedAtSql = !isNaN(d.getTime()) ? d.toISOString().slice(0, 19).replace('T', ' ') : null;
+      }
+
+      await db.execute(
+        `UPDATE service_orders 
+         SET status = ?, 
+             km_traveled = ?, 
+             km_total_cost = ?, 
+             toll_cost = ?, 
+             support_cost = ?, 
+             total_technician_gross = ?, 
+             service_category = ?, 
+             base_service_fee = ?, 
+             faturamento_porto = ?, 
+             completed_at = ?, 
+             execution_notes = ?
+         WHERE id = ? OR call_number = ?`,
+        [
+          updatedOrder.status,
+          Number(updatedOrder.kmTraveled || 0),
+          Number(updatedOrder.kmCost || 0),
+          Number(updatedOrder.tollCost || 0),
+          Number(updatedOrder.supportCost || 0),
+          Number(updatedOrder.totalCost || 0),
+          updatedOrder.serviceCategory || '',
+          Number(updatedOrder.baseServiceFee || 0),
+          Number(updatedOrder.faturamentoPorto || 0),
+          completedAtSql,
+          updatedOrder.observation || '',
+          updatedOrder.id,
+          updatedOrder.callNumber,
+        ]
+      );
+      console.log(`[N8N Webhook] OS ${updatedOrder.callNumber} (ID: ${updatedOrder.id}) persistida com sucesso no MariaDB. Status: ${updatedOrder.status}`);
+    } catch (dbErr: any) {
+      console.error(`[N8N Webhook ERROR] Falha ao persistir OS ${updatedOrder.callNumber} no MariaDB:`, dbErr?.message || dbErr);
+    }
+
     // Registrar auditoria da ação do N8N / WhatsApp
     await recordAudit({
       userId: 'n8n-bot',
@@ -3486,33 +3534,6 @@ async function startServer() {
       result: 'SUCCESS',
       details: `OS ${updatedOrder.callNumber} atualizada via N8N/WhatsApp: Produto="${newCategory}", Repasse Base=R$ ${newBaseFee.toFixed(2)}, Status=${newStatus}, KM=${newKm}, Pedágio=R$ ${newToll}.`,
     });
-
-    // Gravação no MariaDB se disponível
-    try {
-      const db = getDbPool();
-      await db.execute(
-        `UPDATE service_orders 
-         SET status = ?, serviceCategory = ?, baseServiceFee = ?, faturamentoPorto = ?, kmTraveled = ?, kmCost = ?, tollCost = ?, supportCost = ?, totalCost = ?, observation = ?, completedAt = ?
-         WHERE id = ? OR callNumber = ?`,
-        [
-          updatedOrder.status,
-          updatedOrder.serviceCategory,
-          updatedOrder.baseServiceFee,
-          updatedOrder.faturamentoPorto || 0,
-          updatedOrder.kmTraveled,
-          updatedOrder.kmCost,
-          updatedOrder.tollCost,
-          updatedOrder.supportCost,
-          updatedOrder.totalCost,
-          updatedOrder.observation || '',
-          updatedOrder.completedAt ? new Date(updatedOrder.completedAt) : null,
-          updatedOrder.id,
-          updatedOrder.callNumber,
-        ]
-      );
-    } catch {
-      // resiliência
-    }
 
     res.json({
       success: true,
