@@ -1064,57 +1064,15 @@ async function startServer() {
     try {
       const db = getDbPool();
 
-      // Query com LEFT JOIN na tabela users para trazer o nome real do técnico (technicianName)
-      // e aliases camelCase conforme esperado pelo React DataGrid
-      const query = `
+      // Query direta e simplificada com LEFT JOIN na tabela users para trazer o nome real do técnico
+      const [rows]: any = await db.query(`
         SELECT 
           so.*,
-          so.id AS id,
-          so.call_number AS callNumber,
-          so.porto_seguro_protocol AS portoSeguroProtocol,
-          so.service_category AS serviceCategory,
-          so.base_service_fee AS baseServiceFee,
-          so.customer_name AS customerName,
-          so.customer_cpf AS customerCpf,
-          so.customer_phone AS customerPhone,
-          so.city AS city,
-          so.uf AS uf,
-          so.neighborhood AS neighborhood,
-          so.address_street AS addressStreet,
-          so.address_number AS addressNumber,
-          so.address_complement AS addressComplement,
-          so.postal_code AS postalCode,
-          so.technician_id AS technicianId,
-          so.status AS status,
-          so.scheduled_date AS scheduledDate,
-          so.started_at AS startedAt,
-          so.completed_at AS completedAt,
-          so.km_traveled AS kmTraveled,
-          so.km_rate_applied AS kmRateApplied,
-          so.km_total_cost AS kmTotalCost,
-          so.toll_cost AS tollCost,
-          so.support_cost AS supportCost,
-          so.total_technician_gross AS totalTechnicianGross,
-          so.faturamento_porto AS faturamentoPorto,
-          so.payment_status AS paymentStatus,
-          so.payment_date AS paymentDate,
           u.name AS technicianName
         FROM \`service_orders\` so
         LEFT JOIN \`users\` u ON so.technician_id = u.id
-        ORDER BY so.scheduled_date DESC, so.id DESC
-      `;
-
-      const [rows]: any = await db.query(query).catch(async () => {
-        // Fallback resiliente caso a tabela tenha colunas sem underscore
-        return await db.query(`
-          SELECT 
-            so.*,
-            u.name AS technicianName
-          FROM \`service_orders\` so
-          LEFT JOIN \`users\` u ON (so.technician_id = u.id OR so.technicianId = u.id)
-          ORDER BY so.id DESC
-        `);
-      });
+        ORDER BY so.id DESC
+      `);
 
       const normalizedUsers = memUsers.map(u => ({
         ...u,
@@ -3173,7 +3131,7 @@ async function startServer() {
       const [rows]: any = await db.query(`
         SELECT so.*, u.name AS technicianName
         FROM \`service_orders\` so
-        LEFT JOIN \`users\` u ON (so.technician_id = u.id OR so.technicianId = u.id)
+        LEFT JOIN \`users\` u ON so.technician_id = u.id
         ORDER BY so.id DESC
       `);
       
@@ -3498,7 +3456,7 @@ async function startServer() {
              base_service_fee = ?, 
              faturamento_porto = ?, 
              completed_at = ?, 
-             execution_notes = ?
+             execution_notes = COALESCE(?, execution_notes)
          WHERE id = ? OR call_number = ?`,
         [
           updatedOrder.status,
@@ -3511,7 +3469,7 @@ async function startServer() {
           Number(updatedOrder.baseServiceFee || 0),
           Number(updatedOrder.faturamentoPorto || 0),
           completedAtSql,
-          updatedOrder.observation || '',
+          updatedOrder.observation !== undefined && updatedOrder.observation !== null && updatedOrder.observation !== '' ? updatedOrder.observation : null,
           updatedOrder.id,
           updatedOrder.callNumber,
         ]
