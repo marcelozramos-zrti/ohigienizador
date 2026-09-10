@@ -3657,12 +3657,12 @@ async function startServer() {
              base_service_fee = ?, 
              faturamento_porto = ?, 
              completed_at = ?, 
-             execution_notes = COALESCE(?, execution_notes),
-              customer_name = ?,
-              address_street = ?,
-              address_number = ?,
-              neighborhood = ?,
-              city = ?
+              execution_notes = COALESCE(?, execution_notes),
+              customer_name = COALESCE(?, customer_name),
+              address_street = COALESCE(?, address_street),
+              address_number = COALESCE(?, address_number),
+              neighborhood = COALESCE(?, neighborhood),
+              city = COALESCE(?, city)
          WHERE id = ? OR call_number = ?`,
         [
           updatedOrder.status,
@@ -3675,12 +3675,12 @@ async function startServer() {
           Number(updatedOrder.baseServiceFee || 0),
           Number(updatedOrder.faturamentoPorto || 0),
           completedAtSql,
-          updatedOrder.observation !== undefined && updatedOrder.observation !== null && updatedOrder.observation !== '' ? updatedOrder.observation : null,
-          updatedOrder.customerName || "",
-          updatedOrder.addressStreet || "",
-          updatedOrder.addressNumber || "",
-          updatedOrder.neighborhood || "",
-          updatedOrder.city || "",
+          observation !== undefined && observation !== null && observation !== '' ? observation : null,
+          customerName !== undefined ? customerName : null,
+          addressStreet !== undefined ? addressStreet : null,
+          addressNumber !== undefined ? addressNumber : null,
+          neighborhood !== undefined ? neighborhood : null,
+          city !== undefined ? city : null,
           updatedOrder.id,
           updatedOrder.callNumber,
         ]
@@ -3706,8 +3706,8 @@ async function startServer() {
 
     res.json({
       success: true,
-      message: `OS ${updatedOrder.callNumber} atualizada com sucesso via N8N. Produto: "${newCategory}" (Repasse: R$ ${newBaseFee.toFixed(2)}).`,
-      order: updatedOrder,
+      message: 'OS atualizada com sucesso',
+      data: updatedOrder
     });
   });
 
