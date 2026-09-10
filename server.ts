@@ -3584,9 +3584,11 @@ async function startServer() {
     const newStatus = (status === 'COMPLETED' || status === 'IN_PROGRESS') ? status : current.status;
 
     // Cadastral values
-    const newAddressStreet = (addressStreet !== undefined && addressStreet !== null && String(addressStreet).trim() !== '') ? String(addressStreet).trim() : current.addressStreet;
-    const newAddressNumber = (addressNumber !== undefined && addressNumber !== null && String(addressNumber).trim() !== '') ? String(addressNumber).trim() : current.addressNumber;
-    const newNeighborhood = (neighborhood !== undefined && neighborhood !== null && String(neighborhood).trim() !== '') ? String(neighborhood).trim() : current.neighborhood;
+    const street = (addressStreet !== undefined && addressStreet !== null && String(addressStreet).trim() !== '') ? String(addressStreet).trim() : (current.addressStreet || current.address_street || '');
+    const number = (addressNumber !== undefined && addressNumber !== null && String(addressNumber).trim() !== '') ? String(addressNumber).trim() : (current.addressNumber || current.address_number || 'S/N');
+    const neigh = (neighborhood !== undefined && neighborhood !== null && String(neighborhood).trim() !== '') ? String(neighborhood).trim() : (current.neighborhood || current.neighborhood_name || 'A definir');
+    const fullAddress = street ? `${street}, ${number}` : (current.address || 'A definir');
+
     const newCity = (city !== undefined && city !== null && String(city).trim() !== '') ? String(city).trim() : current.city;
     const newCustomerName = (customerName !== undefined && customerName !== null && String(customerName).trim() !== '' && String(customerName).trim().toLowerCase() !== 'cliente') ? String(customerName).trim() : current.customerName;
 
@@ -3612,9 +3614,13 @@ async function startServer() {
     const updatedOrder = {
       ...current,
       customerName: newCustomerName,
-      addressStreet: newAddressStreet,
-      addressNumber: newAddressNumber,
-      neighborhood: newNeighborhood,
+      addressStreet: street,
+      address_street: street,
+      addressNumber: number,
+      address_number: number,
+      neighborhood: neigh,
+      neighborhood_name: neigh,
+      address: fullAddress,
       city: newCity,
       serviceCategory: newCategory,
       baseServiceFee: newBaseFee,
