@@ -3584,10 +3584,10 @@ async function startServer() {
     const newStatus = (status === 'COMPLETED' || status === 'IN_PROGRESS') ? status : current.status;
 
     // Cadastral values
-    const street = (addressStreet !== undefined && addressStreet !== null && String(addressStreet).trim() !== '') ? String(addressStreet).trim() : (current.addressStreet || current.address_street || '');
-    const number = (addressNumber !== undefined && addressNumber !== null && String(addressNumber).trim() !== '') ? String(addressNumber).trim() : (current.addressNumber || current.address_number || 'S/N');
-    const neigh = (neighborhood !== undefined && neighborhood !== null && String(neighborhood).trim() !== '') ? String(neighborhood).trim() : (current.neighborhood || current.neighborhood_name || 'A definir');
-    const fullAddress = street ? `${street}, ${number}` : (current.address || 'A definir');
+    const finalStreet = addressStreet || current.address_street || current.addressStreet || null;
+    const finalNumber = addressNumber || current.address_number || current.addressNumber || null;
+    const finalNeighborhood = neighborhood || current.neighborhood || current.neighborhood_name || null;
+    const fullAddress = finalStreet ? `${finalStreet}, ${finalNumber || 'S/N'}` : (current.address || 'A definir');
 
     const newCity = (city !== undefined && city !== null && String(city).trim() !== '') ? String(city).trim() : current.city;
     const newCustomerName = (customerName !== undefined && customerName !== null && String(customerName).trim() !== '' && String(customerName).trim().toLowerCase() !== 'cliente') ? String(customerName).trim() : current.customerName;
@@ -3614,12 +3614,12 @@ async function startServer() {
     const updatedOrder = {
       ...current,
       customerName: newCustomerName,
-      addressStreet: street,
-      address_street: street,
-      addressNumber: number,
-      address_number: number,
-      neighborhood: neigh,
-      neighborhood_name: neigh,
+      addressStreet: finalStreet,
+      address_street: finalStreet,
+      addressNumber: finalNumber,
+      address_number: finalNumber,
+      neighborhood: finalNeighborhood,
+      neighborhood_name: finalNeighborhood,
       address: fullAddress,
       city: newCity,
       serviceCategory: newCategory,
@@ -3685,9 +3685,9 @@ async function startServer() {
           completedAtSql,
           observation !== undefined && observation !== null && observation !== '' ? observation : null,
           updatedOrder.customerName || null,
-          updatedOrder.addressStreet || null,
-          updatedOrder.addressNumber || null,
-          updatedOrder.neighborhood || null,
+          finalStreet,
+          finalNumber,
+          finalNeighborhood,
           updatedOrder.city || null,
           updatedOrder.id,
           updatedOrder.callNumber,
