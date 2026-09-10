@@ -1134,10 +1134,14 @@ async function startServer() {
           city: o.city || 'São Paulo',
           uf: o.uf || 'SP',
           neighborhood: o.neighborhood || '',
-          addressStreet: o.addressStreet || '',
-          address_street: o.addressStreet || '',
-          addressNumber: o.addressNumber || '',
-          address_number: o.addressNumber || '',
+          addressStreet: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          address_street: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          street: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          logradouro: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          addressNumber: o.addressNumber || o.address_number || o.number || o.numero || '',
+          address_number: o.addressNumber || o.address_number || o.number || o.numero || '',
+          number: o.addressNumber || o.address_number || o.number || o.numero || '',
+          numero: o.addressNumber || o.address_number || o.number || o.numero || '',
           addressComplement: o.addressComplement || null,
           address_complement: o.addressComplement || null,
           postalCode: o.postalCode || '',
@@ -2059,8 +2063,12 @@ async function startServer() {
             neighborhood: o.neighborhood || '',
             addressStreet: o.address_street || o.addressStreet || '',
             address_street: o.address_street || o.addressStreet || '',
+            street: o.address_street || o.addressStreet || '',
+            logradouro: o.address_street || o.addressStreet || '',
             addressNumber: o.address_number || o.addressNumber || '',
             address_number: o.address_number || o.addressNumber || '',
+            number: o.address_number || o.addressNumber || '',
+            numero: o.address_number || o.addressNumber || '',
             addressComplement: o.address_complement || o.addressComplement || null,
             address_complement: o.address_complement || o.addressComplement || null,
             postalCode: o.postal_code || o.postalCode || '',
@@ -3185,8 +3193,14 @@ async function startServer() {
           city: o.city || 'São Paulo',
           uf: o.uf || 'SP',
           neighborhood: o.neighborhood || '',
-          addressStreet: o.addressStreet || '',
-          addressNumber: o.addressNumber || '',
+          addressStreet: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          address_street: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          street: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          logradouro: o.addressStreet || o.address_street || o.street || o.logradouro || '',
+          addressNumber: o.addressNumber || o.address_number || o.number || o.numero || '',
+          address_number: o.addressNumber || o.address_number || o.number || o.numero || '',
+          number: o.addressNumber || o.address_number || o.number || o.numero || '',
+          numero: o.addressNumber || o.address_number || o.number || o.numero || '',
           addressComplement: o.addressComplement || null,
           postalCode: o.postalCode || '',
           technicianId: rawTechId,
@@ -3584,10 +3598,10 @@ async function startServer() {
     const newStatus = (status === 'COMPLETED' || status === 'IN_PROGRESS') ? status : current.status;
 
     // Cadastral values
-    const finalStreet = addressStreet || current.address_street || current.addressStreet || null;
-    const finalNumber = addressNumber || current.address_number || current.addressNumber || null;
+    const streetValue = addressStreet || req.body?.street || req.body?.logradouro || current.address_street || current.addressStreet || current.street || current.logradouro || '';
+    const numberValue = addressNumber || req.body?.number || req.body?.numero || current.address_number || current.addressNumber || current.number || current.numero || '';
     const finalNeighborhood = neighborhood || current.neighborhood || current.neighborhood_name || null;
-    const fullAddress = finalStreet ? `${finalStreet}, ${finalNumber || 'S/N'}` : (current.address || 'A definir');
+    const fullAddress = streetValue ? `${streetValue}, ${numberValue || 'S/N'}` : (current.address || 'A definir');
 
     const newCity = (city !== undefined && city !== null && String(city).trim() !== '') ? String(city).trim() : current.city;
     const newCustomerName = (customerName !== undefined && customerName !== null && String(customerName).trim() !== '' && String(customerName).trim().toLowerCase() !== 'cliente') ? String(customerName).trim() : current.customerName;
@@ -3614,10 +3628,14 @@ async function startServer() {
     const updatedOrder = {
       ...current,
       customerName: newCustomerName,
-      addressStreet: finalStreet,
-      address_street: finalStreet,
-      addressNumber: finalNumber,
-      address_number: finalNumber,
+      addressStreet: streetValue,
+      address_street: streetValue,
+      street: streetValue,
+      logradouro: streetValue,
+      addressNumber: numberValue,
+      address_number: numberValue,
+      number: numberValue,
+      numero: numberValue,
       neighborhood: finalNeighborhood,
       neighborhood_name: finalNeighborhood,
       address: fullAddress,
@@ -3685,8 +3703,8 @@ async function startServer() {
           completedAtSql,
           observation !== undefined && observation !== null && observation !== '' ? observation : null,
           updatedOrder.customerName || null,
-          finalStreet,
-          finalNumber,
+          streetValue,
+          numberValue,
           finalNeighborhood,
           updatedOrder.city || null,
           updatedOrder.id,
