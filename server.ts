@@ -3489,6 +3489,11 @@ async function startServer() {
       observation,
       customerSignature,
       completedAt,
+      addressStreet,
+      addressNumber,
+      neighborhood,
+      city,
+      customerName,
     } = req.body || {};
 
     if (!callNumber && !orderId) {
@@ -3561,13 +3566,27 @@ async function startServer() {
       ? Number(explicitFaturamento)
       : current.faturamentoPorto;
 
-    const newKm = kmTraveled !== undefined ? Number(kmTraveled) : current.kmTraveled;
-    const newToll = tollCost !== undefined ? Number(tollCost) : current.tollCost;
-    const newSupport = supportCost !== undefined ? Number(supportCost) : current.supportCost;
+    // ANTI-ZEROING: Preserve value if the provided value is falsy (0, null, undefined) or invalid.
+    const reqKm = Number(kmTraveled);
+    const newKm = !isNaN(reqKm) && reqKm > 0 ? reqKm : Number(current.kmTraveled || 0);
+
+    const reqToll = Number(tollCost);
+    const newToll = !isNaN(reqToll) && reqToll > 0 ? reqToll : Number(current.tollCost || 0);
+
+    const reqSupport = Number(supportCost);
+    const newSupport = !isNaN(reqSupport) && reqSupport > 0 ? reqSupport : Number(current.supportCost || 0);
+
     const kmRate = Number(memSettings?.kmReimbursementRate || memSettings?.kmRateDefault || 0.5);
     const newKmCost = newKm * kmRate;
     const newTotalCost = newBaseFee + newKmCost + newToll + newSupport;
     const newStatus = status ? status.toUpperCase() : current.status;
+
+    // Cadastral values
+    const newAddressStreet = addressStreet !== undefined ? addressStreet : current.addressStreet;
+    const newAddressNumber = addressNumber !== undefined ? addressNumber : current.addressNumber;
+    const newNeighborhood = neighborhood !== undefined ? neighborhood : current.neighborhood;
+    const newCity = city !== undefined ? city : current.city;
+    const newCustomerName = customerName !== undefined ? customerName : current.customerName;
 
     // Baixa automática de insumos se enviado
     let updatedStockSupplies = current.stockSuppliesUsed || [];
@@ -3590,6 +3609,11 @@ async function startServer() {
 
     const updatedOrder = {
       ...current,
+      customerName: newCustomerName,
+      addressStreet: newAddressStreet,
+      addressNumber: newAddressNumber,
+      neighborhood: newNeighborhood,
+      city: newCity,
       serviceCategory: newCategory,
       baseServiceFee: newBaseFee,
       faturamentoPorto: newFaturamento,
@@ -3633,7 +3657,12 @@ async function startServer() {
              base_service_fee = ?, 
              faturamento_porto = ?, 
              completed_at = ?, 
-             execution_notes = COALESCE(?, execution_notes)
+             execution_notes = COALESCE(?, execution_notes),
+              customer_name = ?,
+              address_street = ?,
+              address_number = ?,
+              neighborhood = ?,
+              city = ?
          WHERE id = ? OR call_number = ?`,
         [
           updatedOrder.status,
@@ -3647,6 +3676,11 @@ async function startServer() {
           Number(updatedOrder.faturamentoPorto || 0),
           completedAtSql,
           updatedOrder.observation !== undefined && updatedOrder.observation !== null && updatedOrder.observation !== '' ? updatedOrder.observation : null,
+          updatedOrder.customerName || "",
+          updatedOrder.addressStreet || "",
+          updatedOrder.addressNumber || "",
+          updatedOrder.neighborhood || "",
+          updatedOrder.city || "",
           updatedOrder.id,
           updatedOrder.callNumber,
         ]
