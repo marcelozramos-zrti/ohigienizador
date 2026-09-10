@@ -3503,11 +3503,16 @@ async function startServer() {
       });
     }
 
-    const orderIdx = memOrders.findIndex(
-      (o) =>
-        (orderId && o.id === orderId) ||
-        (callNumber && o.callNumber.trim().toLowerCase() === String(callNumber).trim().toLowerCase())
-    );
+    let orderIdx = memOrders.findIndex((o) => orderId && o.id === orderId);
+    if (orderIdx < 0 && callNumber) {
+      const callNumStr = String(callNumber).trim().toLowerCase();
+      orderIdx = memOrders.findIndex((o) => {
+        const oCallNum = o.callNumber.toLowerCase();
+        return oCallNum === callNumStr || 
+               (callNumStr.length >= 4 && oCallNum.endsWith(`-${callNumStr}`)) ||
+               (callNumStr.length >= 4 && oCallNum.endsWith(callNumStr));
+      });
+    }
 
     if (orderIdx < 0) {
       return res.status(404).json({
@@ -3566,27 +3571,24 @@ async function startServer() {
       ? Number(explicitFaturamento)
       : current.faturamentoPorto;
 
-    // ANTI-ZEROING: Preserve value if the provided value is falsy (0, null, undefined) or invalid.
-    const reqKm = Number(kmTraveled);
-    const newKm = !isNaN(reqKm) && reqKm > 0 ? reqKm : Number(current.kmTraveled || 0);
+    // ANTI-ZEROING: Preserve value if the provided value is falsy (null, undefined) or invalid.
+    const newKm = (kmTraveled !== undefined && kmTraveled !== null && !isNaN(Number(kmTraveled)) && Number(kmTraveled) >= 0) ? Number(kmTraveled) : Number(current.kmTraveled || 0);
 
-    const reqToll = Number(tollCost);
-    const newToll = !isNaN(reqToll) && reqToll > 0 ? reqToll : Number(current.tollCost || 0);
+    const newToll = (tollCost !== undefined && tollCost !== null && !isNaN(Number(tollCost)) && Number(tollCost) >= 0) ? Number(tollCost) : Number(current.tollCost || 0);
 
-    const reqSupport = Number(supportCost);
-    const newSupport = !isNaN(reqSupport) && reqSupport > 0 ? reqSupport : Number(current.supportCost || 0);
+    const newSupport = (supportCost !== undefined && supportCost !== null && !isNaN(Number(supportCost)) && Number(supportCost) >= 0) ? Number(supportCost) : Number(current.supportCost || 0);
 
     const kmRate = Number(memSettings?.kmReimbursementRate || memSettings?.kmRateDefault || 0.5);
     const newKmCost = newKm * kmRate;
     const newTotalCost = newBaseFee + newKmCost + newToll + newSupport;
-    const newStatus = status ? status.toUpperCase() : current.status;
+    const newStatus = (status === 'COMPLETED' || status === 'IN_PROGRESS') ? status : current.status;
 
     // Cadastral values
-    const newAddressStreet = addressStreet !== undefined ? addressStreet : current.addressStreet;
-    const newAddressNumber = addressNumber !== undefined ? addressNumber : current.addressNumber;
-    const newNeighborhood = neighborhood !== undefined ? neighborhood : current.neighborhood;
-    const newCity = city !== undefined ? city : current.city;
-    const newCustomerName = customerName !== undefined ? customerName : current.customerName;
+    const newAddressStreet = (addressStreet !== undefined && addressStreet !== null && String(addressStreet).trim() !== '') ? String(addressStreet).trim() : current.addressStreet;
+    const newAddressNumber = (addressNumber !== undefined && addressNumber !== null && String(addressNumber).trim() !== '') ? String(addressNumber).trim() : current.addressNumber;
+    const newNeighborhood = (neighborhood !== undefined && neighborhood !== null && String(neighborhood).trim() !== '') ? String(neighborhood).trim() : current.neighborhood;
+    const newCity = (city !== undefined && city !== null && String(city).trim() !== '') ? String(city).trim() : current.city;
+    const newCustomerName = (customerName !== undefined && customerName !== null && String(customerName).trim() !== '' && String(customerName).trim().toLowerCase() !== 'cliente') ? String(customerName).trim() : current.customerName;
 
     // Baixa automática de insumos se enviado
     let updatedStockSupplies = current.stockSuppliesUsed || [];
@@ -3658,11 +3660,11 @@ async function startServer() {
              faturamento_porto = ?, 
              completed_at = ?, 
               execution_notes = COALESCE(?, execution_notes),
-              customer_name = COALESCE(?, customer_name),
-              address_street = COALESCE(?, address_street),
-              address_number = COALESCE(?, address_number),
-              neighborhood = COALESCE(?, neighborhood),
-              city = COALESCE(?, city)
+              customer_name = ?,
+              address_street = ?,
+              address_number = ?,
+              neighborhood = ?,
+              city = ?
          WHERE id = ? OR call_number = ?`,
         [
           updatedOrder.status,
@@ -3676,11 +3678,11 @@ async function startServer() {
           Number(updatedOrder.faturamentoPorto || 0),
           completedAtSql,
           observation !== undefined && observation !== null && observation !== '' ? observation : null,
-          customerName !== undefined ? customerName : null,
-          addressStreet !== undefined ? addressStreet : null,
-          addressNumber !== undefined ? addressNumber : null,
-          neighborhood !== undefined ? neighborhood : null,
-          city !== undefined ? city : null,
+          updatedOrder.customerName || null,
+          updatedOrder.addressStreet || null,
+          updatedOrder.addressNumber || null,
+          updatedOrder.neighborhood || null,
+          updatedOrder.city || null,
           updatedOrder.id,
           updatedOrder.callNumber,
         ]
