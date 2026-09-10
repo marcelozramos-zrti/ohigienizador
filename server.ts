@@ -3391,28 +3391,27 @@ async function startServer() {
       await db.execute(
         `INSERT INTO service_orders (
           id, call_number, customer_name, customer_phone, customer_cpf, service_category, 
-          technician_id, city, neighborhood, address_street, address_number, postal_code, contract_number,
-          status, scheduled_date, created_at, started_at, execution_notes,
-          km_traveled, km_total_cost, toll_cost, support_cost, total_technician_gross, base_service_fee, faturamento_porto
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0)`,
+          technician_id, city, neighborhood, address_street, address_number, 
+          status, km_traveled, km_total_cost, toll_cost, support_cost, 
+          total_technician_gross, base_service_fee, faturamento_porto, 
+          scheduled_date, created_at, execution_notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newOrder.id,
           newOrder.callNumber,
           newOrder.customerName,
-          newOrder.customerPhone,
-          newOrder.customerCpf,
+          newOrder.customerPhone || '',
+          newOrder.customerCpf || '',
           newOrder.serviceCategory,
           newOrder.technicianId,
           newOrder.city,
           newOrder.neighborhood,
           newOrder.addressStreet,
           newOrder.addressNumber,
-          '', // postal_code
-          '', // contract_number
           newOrder.status,
+          0, 0, 0, 0, 0, 0, 0,
           formatDbDate(newOrder.scheduledDate),
           formatDbDate(newOrder.createdAt),
-          formatDbDate(newOrder.startedAt),
           newOrder.observation
         ]
       );
