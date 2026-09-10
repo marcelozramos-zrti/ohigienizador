@@ -3301,6 +3301,7 @@ async function startServer() {
       neighborhood,
       addressStreet,
       addressNumber,
+      postalCode,
       status,
       observation
     } = req.body || {};
@@ -3390,29 +3391,41 @@ async function startServer() {
       const db = getDbPool();
       await db.execute(
         `INSERT INTO service_orders (
-          id, call_number, customer_name, customer_phone, customer_cpf, service_category, 
-          technician_id, city, neighborhood, address_street, address_number, 
-          status, km_traveled, km_total_cost, toll_cost, support_cost, 
-          total_technician_gross, base_service_fee, faturamento_porto, 
-          scheduled_date, created_at, execution_notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, call_number, porto_seguro_protocol, service_category, base_service_fee,
+          customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
+          address_street, address_number, address_complement, postal_code,
+          technician_id, status, scheduled_date, started_at, completed_at,
+          km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
+          total_technician_gross, faturamento_porto
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newOrder.id,
           newOrder.callNumber,
+          '',                                            // porto_seguro_protocol
+          newOrder.serviceCategory || 'Higienização / Instalação',
+          0,                                             // base_service_fee
           newOrder.customerName,
-          newOrder.customerPhone || '',
-          newOrder.customerCpf || '',
-          newOrder.serviceCategory,
+          customerCpf || '',                             // customer_cpf
+          customerPhone || '',                           // customer_phone
+          city || 'São Paulo',                           // city
+          'SP',                                          // uf
+          neighborhood || 'A definir',                   // neighborhood
+          addressStreet || 'A definir',                  // address_street
+          addressNumber || 'S/N',                        // address_number
+          '',                                            // address_complement
+          postalCode || '',                              // postal_code
           newOrder.technicianId,
-          newOrder.city,
-          newOrder.neighborhood,
-          newOrder.addressStreet,
-          newOrder.addressNumber,
-          newOrder.status,
-          0, 0, 0, 0, 0, 0, 0,
+          newOrder.status || 'IN_PROGRESS',
           formatDbDate(newOrder.scheduledDate),
-          formatDbDate(newOrder.createdAt),
-          newOrder.observation
+          formatDbDate(newOrder.startedAt),
+          null,                                          // completed_at
+          0,                                             // km_traveled
+          0,                                             // km_rate_applied
+          0,                                             // km_total_cost
+          0,                                             // toll_cost
+          0,                                             // support_cost
+          0,                                             // total_technician_gross
+          0                                              // faturamento_porto
         ]
       );
 
