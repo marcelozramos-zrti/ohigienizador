@@ -188,6 +188,11 @@ export interface ServiceOrder {
   // Controle de Quitação Financeira (Dar Baixa ao Técnico)
   paymentStatus?: 'PENDING' | 'PAID';
   paymentDate?: string | null;
+
+  additionalProduct?: string;
+  supportProduct?: string;
+  productId?: string;
+  productName?: string;
 }
 
 export interface StockItem {

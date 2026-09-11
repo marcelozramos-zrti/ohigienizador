@@ -314,51 +314,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </nav>
 
-      {/* Porto SLA High Density Widget */}
-      {!collapsed ? (
-        <div className="p-3 m-3 rounded-lg bg-white/5 border border-white/10 text-xs">
-          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-200">
+      {/* Porto SLA High Density Widget - Super Compact Footer */}
+      <div className={`p-3 border-t border-white/10 bg-white/5 text-xs`}>
+        {!collapsed ? (
+          <div className="flex items-center justify-between text-[10px] font-semibold text-slate-200">
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse"></span>
-              <span className="text-cyan-200 text-[10px] uppercase font-bold tracking-tight">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+              <span className="text-cyan-200 text-[9px] uppercase font-bold tracking-tight">
                 Porto Seguro API
               </span>
             </span>
-            <span className="text-emerald-400 font-bold text-[10px]">99.9%</span>
+            <span className="text-emerald-400 font-bold text-[9px]">99.9%</span>
           </div>
-          <p className="text-[10px] text-slate-300/70 mt-1 leading-tight">
-            Sincronização em tempo real de sinistros homologados.
-          </p>
-        </div>
-      ) : (
-        <div
-          className="p-2 mx-2 mb-3 rounded-lg bg-white/5 border border-white/10 flex justify-center items-center cursor-pointer"
-          title="Porto Seguro API: 99.9% Online"
-        >
-          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-        </div>
-      )}
-
-      {/* User Context Footer */}
-      <div className={`${collapsed ? 'p-3' : 'p-4'} border-t border-white/10 bg-white/5`}>
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'}`}>
+        ) : (
           <div
-            className="w-8 h-8 rounded-full bg-cyan-500 flex items-center justify-center font-bold text-xs text-white shadow-xs shrink-0"
-            title={collapsed ? `${safeUser.name} (${safeUser.role})` : undefined}
+            className="flex justify-center items-center cursor-pointer"
+            title="Porto Seguro API: 99.9% Online"
           >
-            {(safeUser.name || 'U').charAt(0)}
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
           </div>
-          {!collapsed && (
-            <div className="flex-1 overflow-hidden">
-              <p className="text-xs font-bold text-white truncate">{safeUser.name}</p>
-              <p className="text-[10px] text-cyan-300 uppercase font-semibold tracking-tight">
-                {safeUser.role === 'ADMIN' && 'Acesso Master'}
-                {safeUser.role === 'OPERATIONAL' && 'Gestão Operacional'}
-                {safeUser.role === 'TECHNICIAN' && 'Técnico Campo'}
-              </p>
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

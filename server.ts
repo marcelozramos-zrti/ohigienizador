@@ -1488,6 +1488,156 @@ async function startServer() {
         values.push(updates.status);
       }
 
+      if (updates.serviceCategory !== undefined) {
+        const key = 'servicecategory';
+        const keyAlt = 'service_category';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.serviceCategory);
+        }
+      }
+
+      if (updates.scheduledDate !== undefined) {
+        const key = 'scheduleddate';
+        const keyAlt = 'scheduled_date';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.scheduledDate ? new Date(updates.scheduledDate) : null);
+        }
+      }
+
+      if (updates.technicianId !== undefined) {
+        const key = 'technicianid';
+        const keyAlt = 'technician_id';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.technicianId || null);
+        }
+      }
+
+      if (updates.baseServiceFee !== undefined) {
+        const key = 'baseservicefee';
+        const keyAlt = 'base_service_fee';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.baseServiceFee || 0));
+        }
+      }
+
+      if (updates.kmTraveled !== undefined) {
+        const key = 'kmtraveled';
+        const keyAlt = 'km_traveled';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.kmTraveled || 0));
+        }
+      }
+
+      if (updates.kmRateApplied !== undefined) {
+        const key = 'kmrateapplied';
+        const keyAlt = 'km_rate_applied';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.kmRateApplied || 0));
+        }
+      }
+
+      if (updates.kmTotalCost !== undefined) {
+        const key = 'kmtotalcost';
+        const keyAlt = 'km_total_cost';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.kmTotalCost || 0));
+        }
+      }
+
+      if (updates.tollCost !== undefined) {
+        const key = 'tollcost';
+        const keyAlt = 'toll_cost';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.tollCost || 0));
+        }
+      }
+
+      if (updates.supportCost !== undefined) {
+        const key = 'supportcost';
+        const keyAlt = 'support_cost';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.supportCost || 0));
+        }
+      }
+
+      if (updates.totalTechnicianGross !== undefined) {
+        const key = 'totaltechniciangross';
+        const keyAlt = 'total_technician_gross';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.totalTechnicianGross || 0));
+        }
+      }
+
+      if (updates.faturamentoPorto !== undefined) {
+        const key = 'faturamentoporto';
+        const keyAlt = 'faturamento_porto';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.faturamentoPorto || 0));
+        }
+      }
+
+      if (updates.additionalProduct !== undefined) {
+        const key = 'additionalproduct';
+        const keyAlt = 'additional_product';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.additionalProduct || null);
+        }
+      }
+
+      if (updates.supportProduct !== undefined) {
+        const key = 'supportproduct';
+        const keyAlt = 'support_product';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.supportProduct || null);
+        }
+      }
+
+      if (updates.productId !== undefined) {
+        const key = 'productid';
+        const keyAlt = 'product_id';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.productId || null);
+        }
+      }
+
+      if (updates.productName !== undefined) {
+        const key = 'productname';
+        const keyAlt = 'product_name';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(updates.productName || null);
+        }
+      }
+
       if (setClauses.length > 0) {
         values.push(orderId);
         await db.execute(

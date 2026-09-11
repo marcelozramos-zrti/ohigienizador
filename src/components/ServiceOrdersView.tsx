@@ -53,15 +53,17 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
     exportOrdersCsv,
     currentUser,
     deleteServiceOrder,
+    updateServiceOrder,
     reassignOrderTechnician,
     batchReassignTechnician,
     autoRepairOrders,
     addToast,
+    settings,
   } = useApp();
 
   // Filters State - All on a summarized single line
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [statusFilter, setStatusFilter] = useState<string>('ACTIVE');
   const [technicianFilter, setTechnicianFilter] = useState<string>('ALL');
   const [startDateFilter, setStartDateFilter] = useState<string>('');
   const [endDateFilter, setEndDateFilter] = useState<string>('');
@@ -69,6 +71,23 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
   // Sorting State (Excel-like column header sorting)
   const [sortField, setSortField] = useState<SortField>('scheduledDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // Inline editing states
+  const [editingDateOrderId, setEditingDateOrderId] = useState<string | null>(null);
+  const [tempDateValue, setTempDateValue] = useState<string>('');
+
+  // Helper to format ISO string to native datetime-local format (YYYY-MM-DDTHH:mm)
+  const formatToDateTimeLocal = (dateString?: string | Date) => {
+    if (!dateString) return '';
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
 
   // Modals
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
@@ -117,7 +136,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
   const handleClearFilters = () => {
     setSearchTerm('');
-    setStatusFilter('ALL');
+    setStatusFilter('ACTIVE');
     setTechnicianFilter('ALL');
     setStartDateFilter('');
     setEndDateFilter('');
@@ -227,8 +246,10 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         }
       }
 
-      // Filtro de Status (suporta PENDING, IN_PROGRESS, COMPLETED, CANCELLED e NOT_COMPLETED para OS não finalizadas)
-      if (statusFilter === 'NOT_COMPLETED') {
+      // Filtro de Status (suporta PENDING, IN_PROGRESS, COMPLETED, CANCELLED, ACTIVE para Pendentes/Em Andamento e NOT_COMPLETED para OS não finalizadas)
+      if (statusFilter === 'ACTIVE') {
+        if (os.status !== 'PENDING' && os.status !== 'IN_PROGRESS') return false;
+      } else if (statusFilter === 'NOT_COMPLETED') {
         if (os.status === 'COMPLETED') return false;
       } else if (statusFilter !== 'ALL' && os.status !== statusFilter) {
         return false;
@@ -537,7 +558,8 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none cursor-pointer"
               >
-                <option value="ALL">Todos os Status</option>
+                <option value="ACTIVE">Ativas (Em Andamento / Pendentes)</option>
+                <option value="ALL">Todas as Ordens</option>
                 <option value="NOT_COMPLETED">⚠️ Não Finalizadas</option>
                 <option value="PENDING">Pendentes</option>
                 <option value="IN_PROGRESS">Em Andamento</option>
@@ -572,7 +594,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
           {/* Actions: Clear Filters & Icon-only Export CSV with Tooltip */}
           <div className="flex items-center space-x-1.5 shrink-0 ml-auto">
-            {(searchTerm || statusFilter !== 'ALL' || technicianFilter !== 'ALL' || startDateFilter || endDateFilter) && (
+            {(searchTerm || statusFilter !== 'ACTIVE' || technicianFilter !== 'ALL' || startDateFilter || endDateFilter) && (
               <button
                 type="button"
                 onClick={handleClearFilters}
@@ -684,8 +706,8 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
       {/* Orders High Density DataGrid with Clickable Excel-like Column Headers */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="overflow-x-auto w-full">
+          <table className="w-full text-left text-xs min-w-fit">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase font-bold text-[10px] tracking-wider select-none">
               <tr>
                 {/* 1. Chamado Porto */}
@@ -710,13 +732,13 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                   </div>
                 </th>
 
-                {/* 3. Serviço */}
+                {/* 3. Serviço & Repasse */}
                 <th
                   onClick={() => handleSort('serviceCategory')}
-                  className="py-3 px-3.5 min-w-[140px] cursor-pointer hover:bg-slate-100 transition-colors group"
+                  className="py-3 px-3.5 min-w-[150px] cursor-pointer hover:bg-slate-100 transition-colors group"
                 >
                   <div className="flex items-center">
-                    <span>Serviço</span>
+                    <span>SERVIÇO & PRODUTO</span>
                     {renderSortIndicator('serviceCategory')}
                   </div>
                 </th>
@@ -727,7 +749,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                   className="py-3 px-3.5 min-w-[130px] cursor-pointer hover:bg-slate-100 transition-colors group"
                 >
                   <div className="flex items-center">
-                    <span>Técnico</span>
+                    <span>TÉCNICO & REPASSE</span>
                     {renderSortIndicator('technicianName')}
                   </div>
                 </th>
@@ -743,74 +765,27 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                   </div>
                 </th>
 
-                {/* 6. Deslocamento (KM) */}
+                {/* 6. Deslocamento & Custos */}
                 {currentUser?.role !== 'TECHNICIAN' && (
                 <th
                   onClick={() => handleSort('kmTraveled')}
                   className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
                 >
                   <div className="flex items-center">
-                    <span>Deslocamento (KM)</span>
+                    <span>Deslocamento & Custos</span>
                     {renderSortIndicator('kmTraveled')}
                   </div>
                 </th>
                 )}
 
-                {/* 7. Repasse Técnico */}
-                <th
-                  onClick={() => handleSort('totalTechnicianGross')}
-                  className="py-3 px-3.5 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
-                >
-                  <div className="flex items-center">
-                    <span>Repasse Técnico</span>
-                    {renderSortIndicator('totalTechnicianGross')}
-                  </div>
-                </th>
 
-                {/* 8. Pedágio */}
-                {currentUser?.role !== 'TECHNICIAN' && (
-                <th
-                  onClick={() => handleSort('tollCost')}
-                  className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
-                >
-                  <div className="flex items-center">
-                    <span>Pedágio</span>
-                    {renderSortIndicator('tollCost')}
-                  </div>
-                </th>
-                )}
-
-                {/* 9. Suporte Extra */}
-                {currentUser?.role !== 'TECHNICIAN' && (
-                <th
-                  onClick={() => handleSort('supportCost')}
-                  className="py-3 px-3.5 whitespace-nowrap bg-slate-100/60 text-slate-700 cursor-pointer hover:bg-slate-200/60 transition-colors group"
-                >
-                  <div className="flex items-center">
-                    <span>Suporte Extra</span>
-                    {renderSortIndicator('supportCost')}
-                  </div>
-                </th>
-                )}
-
-                {/* 10. Status */}
-                <th
-                  onClick={() => handleSort('status')}
-                  className="py-3 px-3.5 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors group"
-                >
-                  <div className="flex items-center justify-center">
-                    <span>Status</span>
-                    {renderSortIndicator('status')}
-                  </div>
-                </th>
-
-                <th className="py-3 px-3.5 text-center whitespace-nowrap min-w-[90px]">Ações</th>
+                <th className="py-3 px-3.5 text-center whitespace-nowrap min-w-[90px] sticky right-0 bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.1)] z-10">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {sortedOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={currentUser?.role === 'TECHNICIAN' ? 9 : 11} className="py-12 text-center text-slate-400">
+                  <td colSpan={currentUser?.role === 'TECHNICIAN' ? 6 : 7} className="py-12 text-center text-slate-400">
                     <div className="max-w-md mx-auto space-y-1.5">
                       <p className="font-semibold text-slate-600 text-sm">
                         Nenhuma ordem de serviço encontrada com os filtros selecionados.
@@ -836,14 +811,30 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                     <tr key={os.id} className="hover:bg-slate-50/80 transition-colors">
                       {/* 1. Call Number */}
                       <td className="py-3 px-3.5 whitespace-nowrap">
-                        <div className="font-mono font-bold text-[#003366]">
-                          #{os.callNumber}
-                        </div>
-                        {os.portoSeguroProtocol && (
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            {os.portoSeguroProtocol}
+                        <div className="flex items-center">
+                          {os.status === 'IN_PROGRESS' && (
+                            <span className="w-2 h-9 rounded-[2px] bg-amber-400 shrink-0 inline-block mr-3 animate-pulse" title="Em Andamento" />
+                          )}
+                          {os.status === 'PENDING' && (
+                            <span className="w-2 h-9 rounded-[2px] bg-rose-500 shrink-0 inline-block mr-3" title="Pendente" />
+                          )}
+                          {os.status === 'COMPLETED' && (
+                            <span className="w-2 h-9 rounded-[2px] bg-emerald-500 shrink-0 inline-block mr-3" title="Finalizada" />
+                          )}
+                          {os.status === 'CANCELLED' && (
+                            <span className="w-2 h-9 rounded-[2px] bg-slate-400 shrink-0 inline-block mr-3" title="Cancelada" />
+                          )}
+                          <div>
+                            <div className="font-mono font-bold text-[#003366] text-sm">
+                              #{os.callNumber}
+                            </div>
+                            {os.portoSeguroProtocol && (
+                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                Protocolo: {os.portoSeguroProtocol}
+                              </div>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </td>
 
                       {/* 2. Customer & Local */}
@@ -857,111 +848,254 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                         </div>
                       </td>
 
-                      {/* 3. Service Category & Values */}
+                      {/* 3. Serviço & Produto */}
                       <td className="py-3 px-3.5">
-                        <div className="font-medium text-slate-800 truncate max-w-[160px]" title={os.serviceCategory}>
-                          {os.serviceCategory}
-                        </div>
-                      </td>
-
-                      {/* 4. Technician */}
-                      <td className="py-3 px-3.5">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-col gap-1.5">
                           {currentUser?.role === 'TECHNICIAN' ? (
-                            <div className="text-xs font-semibold py-1 px-2 rounded-lg border bg-slate-50 text-slate-800 border-slate-200">
-                              {displayName || 'Não Alocado'}
+                            <div className="flex flex-col">
+                              <div className="font-semibold text-slate-800 truncate max-w-[160px]" title={os.serviceCategory}>
+                                {os.serviceCategory}
+                              </div>
+                              {(() => {
+                                const prod = os.additionalProduct || os.supportProduct || os.productName || '';
+                                let prodName = '';
+                                if (prod === "Refil de Purificador" || prod === "Refil Purificador") prodName = "Refil Purificador";
+                                else if (prod) prodName = prod;
+                                else if (os.supportCost === 60) prodName = "Suporte Fixo TV";
+                                else if (os.supportCost === 120) prodName = "Suporte Articulado TV";
+                                else if (os.supportCost === 40) prodName = "Refil Purificador";
+                                else if (os.supportCost === 30) prodName = "Kit Limpeza Extra";
+                                
+                                return prodName && prodName !== 'Nenhum' ? (
+                                  <span className="text-[10px] text-slate-500 font-medium mt-0.5">📦 {prodName}</span>
+                                ) : null;
+                              })()}
                             </div>
                           ) : (
-                          <select
-                            value={matchedTech?.id || os.technicianId || ''}
-                            onChange={async (e) => {
-                              const newTechId = e.target.value;
-                              if (newTechId) {
-                                await reassignOrderTechnician(os.id, newTechId);
-                              }
-                            }}
-                            className={`text-xs font-semibold py-1 px-2 rounded-lg border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
-                              isUnallocated
-                                ? 'bg-amber-50 text-amber-900 border-amber-300 ring-1 ring-amber-400/50'
-                                : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-cyan-50 hover:border-cyan-300'
-                            }`}
-                            title="Alterar técnico responsável"
-                          >
-                            {isUnallocated && <option value="">⚠️ Não Alocado (Selecione)</option>}
-                            {techniciansList.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
+                            <>
+                              <select
+                                value={os.serviceCategory || ''}
+                                onChange={(e) => {
+                                  const newCategory = e.target.value;
+                                  if (newCategory) {
+                                    const suggestedFee = settings?.serviceCategoriesRates?.[newCategory] || 140;
+                                    updateServiceOrder(os.id, {
+                                      serviceCategory: newCategory,
+                                      baseServiceFee: suggestedFee,
+                                      faturamentoPorto: suggestedFee * 1.6
+                                    });
+                                  }
+                                }}
+                                className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
+                                title="Alterar categoria do serviço"
+                              >
+                                <option value="Higienização de Sofá 3 Lugares">Higienização de Sofá 3 Lugares</option>
+                                <option value="Impermeabilização de Estofado">Impermeabilização de Estofado</option>
+                                <option value="Higienização Automotiva Completa">Higienização Automotiva Completa</option>
+                                <option value="Higienização de Colchão Queen">Higienização de Colchão Queen</option>
+                                <option value="Higienização de Tapetes e Carpetes">Higienização de Tapetes e Carpetes</option>
+                                <option value="Instalação Lava e Seca">Instalação Lava e Seca</option>
+                                <option value="Instalação TV de 44 a 70 + Suporte Fixo">Instalação TV de 44 a 70 + Suporte Fixo</option>
+                                <option value="Instalação Purificador de Água">Instalação Purificador de Água</option>
+                                <option value="Visita Perdida">Visita Perdida</option>
+                              </select>
+
+                              <select
+                                value={(() => {
+                                  const prod = os.additionalProduct || os.supportProduct || os.productName || '';
+                                  if (prod === "Refil de Purificador" || prod === "Refil Purificador") return "Refil Purificador";
+                                  if (prod) return prod;
+                                  if (os.supportCost === 60) return "Suporte Fixo TV";
+                                  if (os.supportCost === 120) return "Suporte Articulado TV";
+                                  if (os.supportCost === 40) return "Refil Purificador";
+                                  if (os.supportCost === 30) return "Kit Limpeza Extra";
+                                  return "Nenhum";
+                                })()}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  let cost = 0;
+                                  if (val === "Suporte Fixo TV") cost = 60;
+                                  else if (val === "Suporte Articulado TV") cost = 120;
+                                  else if (val === "Refil Purificador" || val === "Refil de Purificador") cost = 40;
+                                  else if (val === "Kit Limpeza Extra") cost = 30;
+
+                                  updateServiceOrder(os.id, {
+                                    additionalProduct: val,
+                                    supportProduct: val,
+                                    productName: val,
+                                    productId: val,
+                                    supportCost: cost
+                                  });
+                                }}
+                                className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
+                                title="Alterar produto adicional"
+                              >
+                                <option value="Nenhum">Nenhum</option>
+                                <option value="Suporte Fixo TV">Suporte Fixo TV (R$ 60,00)</option>
+                                <option value="Suporte Articulado TV">Suporte Articulado TV (R$ 120,00)</option>
+                                <option value="Refil Purificador">Refil Purificador (R$ 40,00)</option>
+                                <option value="Kit Limpeza Extra">Kit Limpeza Extra (R$ 30,00)</option>
+                              </select>
+                            </>
                           )}
                         </div>
                       </td>
 
-                      {/* 5. DATA / HORA */}
-                      <td className="py-3 px-3.5 whitespace-nowrap bg-cyan-50/20 border-x border-cyan-100/60">
-                        <div className="font-mono font-bold text-slate-800 flex items-center gap-1">
-                          <Calendar className="h-3 w-3 text-cyan-600 shrink-0" />
-                          <span>{scheduleInfo.date}</span>
-                        </div>
-                        {scheduleInfo.time ? (
-                          <div className="text-[10px] text-cyan-800 font-mono flex items-center gap-1 mt-0.5 font-medium">
-                            <Clock className="h-2.5 w-2.5 text-cyan-500 shrink-0" />
-                            <span>{scheduleInfo.time}</span>
+                      {/* 4. Técnico */}
+                      <td className="py-3 px-3.5">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1.5">
+                            {currentUser?.role === 'TECHNICIAN' ? (
+                              <div className="text-xs font-semibold py-1 px-2 rounded-lg border bg-slate-50 text-slate-800 border-slate-200">
+                                {displayName || 'Não Alocado'}
+                              </div>
+                            ) : (
+                            <select
+                              value={matchedTech?.id || os.technicianId || ''}
+                              onChange={async (e) => {
+                                const newTechId = e.target.value;
+                                if (newTechId) {
+                                  await reassignOrderTechnician(os.id, newTechId);
+                                }
+                              }}
+                              className={`text-xs font-semibold py-1 px-2 rounded-lg border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
+                                isUnallocated
+                                  ? 'bg-amber-50 text-amber-900 border-amber-300 ring-1 ring-amber-400/50'
+                                  : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-cyan-50 hover:border-cyan-300'
+                              }`}
+                              title="Alterar técnico responsável"
+                            >
+                              {isUnallocated && <option value="">⚠️ Não Alocado (Selecione)</option>}
+                              {techniciansList.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}
+                                </option>
+                              ))}
+                            </select>
+                            )}
                           </div>
+                          <div className="text-xs font-semibold text-emerald-600 mt-1 flex items-center gap-1">
+                            <span>💰</span>
+                            <span>Repasse: R$ {Number(os.totalTechnicianGross || os.baseServiceFee || 0).toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* 5. DATA / HORA */}
+                      <td 
+                        onClick={() => {
+                          if (currentUser?.role !== 'TECHNICIAN' && editingDateOrderId !== os.id) {
+                            setEditingDateOrderId(os.id);
+                            setTempDateValue(formatToDateTimeLocal(os.scheduledDate));
+                          }
+                        }}
+                        className={`py-3 px-3.5 whitespace-nowrap bg-cyan-50/20 border-x border-cyan-100/60 transition-all ${
+                          currentUser?.role !== 'TECHNICIAN' ? 'cursor-pointer hover:bg-cyan-50/60' : ''
+                        }`}
+                        title={currentUser?.role !== 'TECHNICIAN' ? "Clique para editar data/hora rapidamente" : undefined}
+                      >
+                        {editingDateOrderId === os.id ? (
+                          <input
+                            type="datetime-local"
+                            value={tempDateValue}
+                            onChange={(e) => setTempDateValue(e.target.value)}
+                            onBlur={() => {
+                              if (tempDateValue) {
+                                updateServiceOrder(os.id, { scheduledDate: new Date(tempDateValue).toISOString() });
+                              }
+                              setEditingDateOrderId(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                if (tempDateValue) {
+                                  updateServiceOrder(os.id, { scheduledDate: new Date(tempDateValue).toISOString() });
+                                }
+                                setEditingDateOrderId(null);
+                              } else if (e.key === 'Escape') {
+                                setEditingDateOrderId(null);
+                              }
+                            }}
+                            autoFocus
+                            className="p-1 text-xs border border-cyan-300 rounded bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono w-full"
+                          />
                         ) : (
-                          <div className="text-[10px] text-slate-400">Horário comercial</div>
+                          <div className="flex flex-col justify-center">
+                            <div className="font-mono font-bold text-slate-800 flex items-center gap-1">
+                              <Calendar className="h-3 w-3 text-cyan-600 shrink-0" />
+                              <span>{scheduleInfo.date}</span>
+                            </div>
+                            {scheduleInfo.time ? (
+                              <div className="text-[10px] text-cyan-800 font-mono flex items-center gap-1 mt-0.5 font-medium">
+                                <Clock className="h-2.5 w-2.5 text-cyan-500 shrink-0" />
+                                <span>{scheduleInfo.time}</span>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-400">Horário comercial</div>
+                            )}
+                          </div>
                         )}
                       </td>
 
-                      {/* 6. KM & Logistics */}
+                      {/* 6. Deslocamento & Custos */}
                       {currentUser?.role !== 'TECHNICIAN' && (
                       <td className="py-3 px-3.5 whitespace-nowrap">
-                        <div className="font-medium text-slate-700 font-mono">
-                          {os.kmTraveled > 0
-                            ? `${os.kmTraveled} km (R$ ${(os.kmTotalCost || 0).toFixed(2)})`
-                            : '0 km'}
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center text-xs text-slate-700">
+                            <span>🚗</span>
+                            <input
+                              key={`km-${os.id}-${os.kmTraveled}`}
+                              type="number"
+                              min="0"
+                              step="1"
+                              defaultValue={os.kmTraveled ?? 0}
+                              onBlur={(e) => {
+                                const val = Number(e.target.value || 0);
+                                if (val !== os.kmTraveled) {
+                                  updateServiceOrder(os.id, { kmTraveled: val });
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                              className="w-14 px-1.5 py-0.5 border border-slate-200 rounded text-xs text-center mx-1 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500 bg-white text-slate-800"
+                              title="Editar KM deslocado"
+                            />
+                            <span className="font-medium text-slate-500">km</span>
+                          </div>
+                          <div className="flex items-center text-xs text-slate-700">
+                            <span>💳</span>
+                            <input
+                              key={`toll-${os.id}-${os.tollCost}`}
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              defaultValue={os.tollCost ?? 0}
+                              onBlur={(e) => {
+                                const val = Number(e.target.value || 0);
+                                if (val !== os.tollCost) {
+                                  updateServiceOrder(os.id, { tollCost: val });
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                              className="w-14 px-1.5 py-0.5 border border-slate-200 rounded text-xs text-center mx-1 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500 bg-white text-slate-800"
+                              title="Editar custos de pedágio"
+                            />
+                            <span className="font-medium text-slate-500">pedágio</span>
+                          </div>
                         </div>
                       </td>
                       )}
 
-                      {/* 7. Repasse Técnico */}
-                      <td className="py-3 px-3.5 whitespace-nowrap">
-                        <div className="font-bold text-[#003366] font-mono">
-                           R$ {(os.totalTechnicianGross || 0).toFixed(2)}
-                        </div>
-                        {currentUser?.role !== 'TECHNICIAN' && (
-                        <div className="text-[10px] text-slate-400">
-                          Porto: R$ {(os.faturamentoPorto || 0).toFixed(2)}
-                        </div>
-                        )}
-                      </td>
 
-                      {/* 8. PEDÁGIO */}
-                      {currentUser?.role !== 'TECHNICIAN' && (
-                      <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
-                        <div className={`font-mono font-medium ${os.tollCost > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
-                          R$ {(os.tollCost || 0).toFixed(2)}
-                        </div>
-                      </td>
-                      )}
 
-                      {/* 9. SUPORTE EXTRA */}
-                      {currentUser?.role !== 'TECHNICIAN' && (
-                      <td className="py-3 px-3.5 whitespace-nowrap bg-slate-50/50">
-                        <div className={`font-mono font-medium ${os.supportCost > 0 ? 'text-cyan-700 font-bold' : 'text-slate-400'}`}>
-                          R$ {(os.supportCost || 0).toFixed(2)}
-                        </div>
-                      </td>
-                      )}
-
-                      {/* 10. Status */}
-                      <td className="py-3 px-3.5 text-center whitespace-nowrap">
-                        {getStatusBadge(os.status)}
-                      </td>
-
-                      {/* 11. AÇÕES */}
-                      <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                      {/* 10. AÇÕES */}
+                      <td className="py-3 px-3.5 text-center whitespace-nowrap sticky right-0 bg-white group-hover:bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.1)]">
                         <div className="flex items-center justify-center space-x-1">
                           {/* Visualizar */}
                           <button
