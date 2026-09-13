@@ -25,10 +25,13 @@ interface EditServiceOrderModalProps {
 }
 
 export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ order, onClose }) => {
-  const { updateServiceOrder, deleteServiceOrder, users = [], settings, addToast } = useApp();
+  const { updateServiceOrder, deleteServiceOrder, users = [], settings, addToast, currentUser } = useApp();
 
   const safeUsers = users || [];
   const technicians = safeUsers.filter((u) => u && u.role === 'TECHNICIAN');
+
+  const isTechnician = currentUser?.role === 'TECHNICIAN';
+  const isEditableForTech = isTechnician && order.status === 'IN_PROGRESS';
 
   // Order identifiers & insurance details
   const [callNumber, setCallNumber] = useState(order.callNumber || '');
@@ -250,7 +253,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                 <select
                   value={technicianId}
                   onChange={(e) => setTechnicianId(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-cyan-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  disabled={isTechnician}
+                  className="w-full p-2.5 bg-white border border-cyan-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                 >
                   <option value="">-- Nenhum Técnico (Pendente de Alocação) --</option>
                   {technicians.map((t) => (
@@ -271,12 +275,14 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                 <select
                   value={status}
                   onChange={(e) => setStatus(e.target.value as ServiceOrder['status'])}
-                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  disabled={isTechnician && !isEditableForTech}
+                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-cyan-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                 >
                   <option value="PENDING">PENDING • Pendente de Início</option>
                   <option value="IN_PROGRESS">IN_PROGRESS • Em Andamento / Em Rota</option>
                   <option value="COMPLETED">COMPLETED • Finalizada com Sucesso</option>
                   <option value="CANCELLED">CANCELLED • Cancelada</option>
+                  <option value="LOST_VISIT">LOST_VISIT • Visita Perdida (VP)</option>
                 </select>
                 <span className="text-[10px] text-slate-500 mt-1 block">
                   Status atualizado sincroniza instantaneamente com o aplicativo móvel do técnico.
@@ -294,7 +300,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                 required
                 value={callNumber}
                 onChange={(e) => setCallNumber(e.target.value)}
-                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800"
+                disabled={isTechnician}
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
               />
             </div>
             <div>
@@ -303,7 +310,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                 type="text"
                 value={portoProtocol}
                 onChange={(e) => setPortoProtocol(e.target.value)}
-                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800"
+                disabled={isTechnician}
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
               />
             </div>
             <div>
@@ -312,7 +320,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                 type="date"
                 value={scheduledDate}
                 onChange={(e) => setScheduledDate(e.target.value)}
-                className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                disabled={isTechnician}
+                className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
               />
             </div>
           </div>
@@ -323,7 +332,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
             <select
               value={serviceCategory}
               onChange={(e) => handleCategoryChange(e.target.value)}
-              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800"
+              disabled={isTechnician}
+              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
             >
               <option value="Higienização de Sofá 3 Lugares">Higienização de Sofá 3 Lugares (R$ 140,00)</option>
               <option value="Impermeabilização de Estofado">Impermeabilização de Estofado (R$ 190,00)</option>
@@ -351,7 +361,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   required
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -361,7 +372,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   required
                   value={customerCpf}
                   onChange={(e) => setCustomerCpf(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
             </div>
@@ -373,8 +385,9 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   type="text"
                   value={customerPhone}
                   onChange={(e) => setCustomerPhone(e.target.value)}
+                  disabled={isTechnician}
                   placeholder="(11) 99999-9999"
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -383,7 +396,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   type="text"
                   value={postalCode}
                   onChange={(e) => setPostalCode(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -392,20 +406,22 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   type="text"
                   value={uf}
                   onChange={(e) => setUf(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold uppercase text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold uppercase text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-              <div className="sm:col-span-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div>
                 <label className="text-[10px] font-bold text-slate-600 block mb-1">Logradouro (Rua / Av):</label>
                 <input
                   type="text"
                   required
                   value={addressStreet}
                   onChange={(e) => setAddressStreet(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -414,7 +430,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   type="text"
                   value={addressNumber}
                   onChange={(e) => setAddressNumber(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -423,7 +440,32 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   type="text"
                   value={neighborhood}
                   onChange={(e) => setNeighborhood(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 block mb-1">Complemento / Ponto de Referência:</label>
+                <input
+                  type="text"
+                  value={addressComplement}
+                  onChange={(e) => setAddressComplement(e.target.value)}
+                  disabled={isTechnician && !isEditableForTech}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
+                  placeholder="Apto, Bloco, etc."
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 block mb-1">Cidade:</label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
             </div>
@@ -443,7 +485,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   step="0.50"
                   value={baseServiceFee}
                   onChange={(e) => setBaseServiceFee(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
@@ -454,7 +497,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   step="1"
                   value={kmTraveled}
                   onChange={(e) => setKmTraveled(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                  disabled={isTechnician && !isEditableForTech}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
@@ -465,7 +509,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   step="0.50"
                   value={tollCost}
                   onChange={(e) => setTollCost(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                  disabled={isTechnician && !isEditableForTech}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
@@ -476,7 +521,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   step="0.50"
                   value={supportCost}
                   onChange={(e) => setSupportCost(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
             </div>
@@ -489,7 +535,8 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
                   step="1.00"
                   value={faturamentoPorto}
                   onChange={(e) => setFaturamentoPorto(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                  disabled={isTechnician}
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                 />
                 <span className="text-[10px] text-slate-400 mt-0.5 block">Valor faturado contra a seguradora</span>
               </div>
@@ -513,21 +560,26 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
               rows={2}
               value={executionNotes}
               onChange={(e) => setExecutionNotes(e.target.value)}
+              disabled={isTechnician && !isEditableForTech}
               placeholder="Descreva detalhes adicionais ou instruções ao técnico..."
-              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800"
+              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
             />
           </div>
 
           {/* Footer Actions */}
           <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setShowDeleteConfirm(true)}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl border border-red-200 transition-colors"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span>Excluir OS</span>
-            </button>
+            {!isTechnician ? (
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center space-x-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl border border-red-200 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Excluir OS</span>
+              </button>
+            ) : (
+              <div />
+            )}
 
             <div className="flex items-center space-x-2">
               <button

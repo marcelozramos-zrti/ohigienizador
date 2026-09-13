@@ -792,6 +792,8 @@ async function startServer() {
         special_tax_rate: Number(u.specialTaxRate || 0),
         price_table: u.priceTable ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : null,
         pricetable: u.priceTable ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : null,
+        km_rate: Number(u.kmRate ?? u.km_rate ?? 0.75),
+        kmrate: Number(u.kmRate ?? u.km_rate ?? 0.75),
       };
 
       const insertCols: string[] = [];
@@ -981,6 +983,8 @@ async function startServer() {
         password: u.password,
         price_table: u.priceTable !== undefined ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : undefined,
         pricetable: u.priceTable !== undefined ? (typeof u.priceTable === 'string' ? u.priceTable : JSON.stringify(u.priceTable)) : undefined,
+        km_rate: u.kmRate !== undefined ? Number(u.kmRate) : undefined,
+        kmrate: u.kmRate !== undefined ? Number(u.kmRate) : undefined,
       };
 
       for (const col of cols) {
@@ -1210,6 +1214,69 @@ async function startServer() {
   app.get('/api/orders', getServiceOrdersHandler);
   app.get('/api/service-orders', getServiceOrdersHandler);
 
+  async function calculateOrderFinance(o: any, db?: any): Promise<any> {
+    const result = { ...o };
+    const executionDateStr = o.scheduledDate || o.scheduled_date || o.completedAt || o.completed_at || new Date().toISOString();
+    
+    const execTime = new Date(executionDateStr).getTime();
+    const cutoffTime = new Date('2026-07-26T23:59:59').getTime();
+    const isBeforeCutoff = execTime <= cutoffTime;
+
+    let kmRateApplied = 0.75;
+    if (isBeforeCutoff) {
+      kmRateApplied = 0.50;
+    } else {
+      const techId = o.technicianId || o.technician_id;
+      if (techId) {
+        try {
+          const poolDb = db || getDbPool();
+          const [techRows]: any = await poolDb.query('SELECT km_rate, kmRate FROM users WHERE id = ?', [techId]);
+          if (techRows && techRows.length > 0) {
+            kmRateApplied = Number(techRows[0].km_rate ?? techRows[0].kmRate ?? 0.75);
+          } else {
+            const memTech = memUsers.find(u => u.id === techId);
+            if (memTech) {
+              kmRateApplied = Number(memTech.km_rate ?? memTech.kmRate ?? 0.75);
+            }
+          }
+        } catch {
+          const memTech = memUsers.find(u => u.id === techId);
+          if (memTech) {
+            kmRateApplied = Number(memTech.km_rate ?? memTech.kmRate ?? 0.75);
+          }
+        }
+      }
+    }
+
+    const existingRate = o.kmRateApplied ?? o.km_rate_applied;
+    if (existingRate !== undefined && existingRate !== null && Number(existingRate) > 0) {
+      kmRateApplied = Number(existingRate);
+    }
+
+    result.kmRateApplied = kmRateApplied;
+    result.km_rate_applied = kmRateApplied;
+
+    const kmTraveled = Number(o.kmTraveled ?? o.km_traveled ?? 0);
+    const kmPayout = Math.round((kmTraveled * kmRateApplied) * 100) / 100;
+
+    result.kmPayout = kmPayout;
+    result.km_payout = kmPayout;
+    result.kmTotalCost = kmPayout;
+    result.km_total_cost = kmPayout;
+
+    const baseServiceFee = Number(o.baseServiceFee ?? o.base_service_fee ?? 0);
+    const tollCost = Number(o.tollCost ?? o.toll_cost ?? 0);
+    const supportCost = Number(o.supportCost ?? o.support_cost ?? 0);
+
+    const totalTechnicianGross = Math.round((baseServiceFee + kmPayout + tollCost + supportCost) * 100) / 100;
+    
+    result.totalTechnicianGross = totalTechnicianGross;
+    result.total_technician_gross = totalTechnicianGross;
+    result.total_tech_payout = totalTechnicianGross;
+
+    return result;
+  }
+
   app.post('/api/orders', async (req, res) => {
     const requester = await getRequester(req);
     const o = req.body;
@@ -1217,6 +1284,80 @@ async function startServer() {
     const existingIdx = memOrders.findIndex((item) => item.id === o.id);
     const isEdit = existingIdx >= 0;
     const oldOrder = isEdit ? memOrders[existingIdx] : null;
+
+    // Recalcular financeiro com base nas novas regras
+    const calculated = await calculateOrderFinance({ ...(isEdit ? memOrders[existingIdx] : {}), ...o });
+    Object.assign(o, calculated);
+
+    // -------------------------------------------------------------------------
+    // TRAVA DE DUPLICIDADE ATIVA & TRAVA DE REINCIDÊNCIA DE VP (VISITA PERDIDA)
+    // -------------------------------------------------------------------------
+    const callNumber = o.callNumber || (oldOrder ? oldOrder.callNumber : '');
+    const status = o.status || 'PENDING';
+
+    if (callNumber) {
+      try {
+        const db = getDbPool();
+
+        // 1. Verificar se já existe uma OS em andamento para o mesmo chamado
+        if (status === 'IN_PROGRESS') {
+          const [activeRows]: any = await db.query(
+            "SELECT id, callNumber FROM service_orders WHERE status = 'IN_PROGRESS' AND callNumber = ? AND id <> ?",
+            [callNumber, o.id || '']
+          );
+          if (activeRows && activeRows.length > 0) {
+            await recordAudit({
+              userId: requester?.id || 'system',
+              userName: requester?.name || 'Sistema',
+              userRole: requester?.role || 'ADMIN',
+              ipAddress: req.ip,
+              module: 'SERVICE_ORDERS',
+              action: 'ACCESS_DENIED',
+              result: 'BLOCKED',
+              details: `Tentativa de iniciar OS #${callNumber} bloqueada: Já existe uma Ordem de Serviço em andamento (IN_PROGRESS) para este chamado.`,
+            });
+            return res.status(400).json({
+              success: false,
+              error: 'Operação bloqueada por integridade: Este número de chamado já possui um atendimento ativo (Em Andamento) no sistema.'
+            });
+          }
+        }
+
+        // 2. Verificar reincidência de Visita Perdida (VP)
+        if (status === 'LOST_VISIT') {
+          const [lostVisitRows]: any = await db.query(
+            "SELECT id FROM service_orders WHERE status = 'LOST_VISIT' AND callNumber = ? AND id <> ?",
+            [callNumber, o.id || '']
+          );
+          
+          if (lostVisitRows && lostVisitRows.length > 0) {
+            // Se já houver ordens como LOST_VISIT para este chamado, temos reincidência!
+            await recordAudit({
+              userId: requester?.id || 'system',
+              userName: requester?.name || 'Sistema',
+              userRole: requester?.role || 'ADMIN',
+              ipAddress: req.ip,
+              module: 'AUDIT',
+              action: 'OS_UPDATE',
+              affectedRecordId: o.id,
+              affectedRecordType: 'service_order',
+              result: 'BLOCKED',
+              details: `TRAVA DE AUDITORIA ADMINISTRATIVA ACIONADA: Reincidência de Visita Perdida (VP) detectada para o chamado #${callNumber} (já houveram ${lostVisitRows.length} VP anteriores).`,
+            });
+
+            // Se o usuário solicitante for um técnico (TECHNICIAN), aplicamos o bloqueio rígido (trava)
+            if (requester && requester.role === 'TECHNICIAN') {
+              return res.status(400).json({
+                success: false,
+                error: 'Trava de Auditoria Administrativa acionada: Este chamado possui reincidência de Visita Perdida (VP). Entre em contato com o suporte operacional/gerência para prosseguir.'
+              });
+            }
+          }
+        }
+      } catch (dbErr: any) {
+        console.error('[Integridade/VP] Falha ao verificar travas no MariaDB:', dbErr.message);
+      }
+    }
 
     // Regras de Autorização de Ordens de Serviço
     if (requester && requester.role === 'TECHNICIAN') {
@@ -1344,6 +1485,8 @@ async function startServer() {
         km_rate_applied: Number(o.kmRateApplied || 0.5),
         kmtotalcost: Number(o.kmTotalCost || 0),
         km_total_cost: Number(o.kmTotalCost || 0),
+        kmpayout: Number(o.kmPayout || 0),
+        km_payout: Number(o.kmPayout || 0),
         tollcost: Number(o.tollCost || 0),
         toll_cost: Number(o.tollCost || 0),
         supportcost: Number(o.supportCost || 0),
@@ -1371,6 +1514,9 @@ async function startServer() {
 
       for (const col of cols) {
         const colLower = col.Field.toLowerCase();
+        if (colLower === 'active_call_token' || colLower === 'activecalltoken') {
+          continue;
+        }
         let val = orderValues[colLower];
 
         if (val === undefined) {
@@ -1404,6 +1550,12 @@ async function startServer() {
       }
       res.json({ success: true, message: `OS ${o.callNumber} gravada com sucesso.` });
     } catch (err: any) {
+      if (err.message && (err.message.includes('uq_active_call_token') || err.message.includes('active_call_token'))) {
+        return res.status(400).json({
+          success: false,
+          error: 'Operação bloqueada por integridade: Este número de chamado já possui um atendimento ativo (Em Andamento) no sistema.'
+        });
+      }
       if (isNetworkError(err)) {
         return res.json({ success: true, message: `OS ${o.callNumber} salva com sucesso.` });
       }
@@ -1427,6 +1579,18 @@ async function startServer() {
     if (!existingOrder && memIdx < 0) {
       // Se não encontrado na memória, ainda tentamos gravar se tiver dados mínimos
     }
+
+    // Recalcular financeiro com base nas novas regras
+    const mergedForCalc = { ...existingOrder, ...updates };
+    const calculated = await calculateOrderFinance(mergedForCalc);
+    updates.kmRateApplied = calculated.kmRateApplied;
+    updates.km_rate_applied = calculated.kmRateApplied;
+    updates.kmTotalCost = calculated.kmTotalCost;
+    updates.km_total_cost = calculated.kmTotalCost;
+    updates.kmPayout = calculated.kmPayout;
+    updates.km_payout = calculated.kmPayout;
+    updates.totalTechnicianGross = calculated.totalTechnicianGross;
+    updates.total_technician_gross = calculated.totalTechnicianGross;
 
     const isSettlement = updates.paymentStatus && updates.paymentStatus !== existingOrder?.paymentStatus;
     const paymentStatusVal = updates.paymentStatus || existingOrder?.paymentStatus || 'PENDING';
@@ -1558,6 +1722,16 @@ async function startServer() {
         }
       }
 
+      if (updates.kmPayout !== undefined) {
+        const key = 'kmpayout';
+        const keyAlt = 'km_payout';
+        if (cols.has(key) || cols.has(keyAlt)) {
+          const field = cols.get(key) || cols.get(keyAlt)!;
+          setClauses.push(`\`${field}\` = ?`);
+          values.push(Number(updates.kmPayout || 0));
+        }
+      }
+
       if (updates.tollCost !== undefined) {
         const key = 'tollcost';
         const keyAlt = 'toll_cost';
@@ -1652,10 +1826,16 @@ async function startServer() {
         data: memIdx >= 0 ? memOrders[memIdx] : { id: orderId, ...updates, paymentStatus: paymentStatusVal, paymentDate: paymentDateVal },
       });
     } catch (err: any) {
+      if (err.message && (err.message.includes('uq_active_call_token') || err.message.includes('active_call_token'))) {
+        return res.status(400).json({
+          success: false,
+          error: 'Operação bloqueada por integridade: Este número de chamado já possui um atendimento ativo (Em Andamento) no sistema.'
+        });
+      }
       if (isNetworkError(err)) {
         return res.json({
           success: true,
-          message: 'Ordem de serviço atualizada na memória local.',
+          message: 'Ordem de serviço updated on local memory.',
           data: memIdx >= 0 ? memOrders[memIdx] : { id: orderId, ...updates },
         });
       }
@@ -1956,6 +2136,111 @@ async function startServer() {
       };
 
       // Helpers de Sanitização e Mapeamento omitidos por brevidade da refatoração...
+      const sinonimos = {
+        call_number: ['os', 'ordem de servico', 'ordem de serviço', 'chamado', 'numero os', 'protocolo', 'call_number', 'idchamado'],
+        km_traveled: ['km', 'km rodado', 'quilometragem', 'distancia', 'km_total', 'km_traveled'],
+        toll_cost: ['pedagio', 'pedágio', 'taxa pedagio', 'ped', 'toll', 'toll_cost'],
+        scheduled_date: ['data', 'data de atendimento', 'data atendimento', 'data execucao', 'dt_atendimento', 'data/hora', 'dt.visita', 'data visita'],
+        technician_name: ['tecnico', 'técnico', 'prestador', 'responsavel', 'qra', 'nome tecnico'],
+        customer_name: ['cliente', 'nome cliente', 'nome do cliente', 'customer_name'],
+        base_service_fee: ['repasse', 'valor servico', 'valor base', 'repasse base', 'servico', 'valor da visita', 'valor', 'base fee']
+      };
+
+      function normalizeKey(key: string): string {
+        return key
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .replace(/\s+/g, ' ');
+      }
+
+      function getSinonimoValue(normRow: Record<string, any>, field: keyof typeof sinonimos): any {
+        const synonymsList = sinonimos[field];
+        for (const synonym of synonymsList) {
+          const normSynonym = normalizeKey(synonym);
+          if (normRow[normSynonym] !== undefined && normRow[normSynonym] !== null && normRow[normSynonym] !== '') {
+            return normRow[normSynonym];
+          }
+        }
+        return null;
+      }
+
+      function extractKmValue(cellValue: any): number {
+        if (cellValue === null || cellValue === undefined || cellValue === '') {
+          return 0.00;
+        }
+        if (typeof cellValue === 'number') {
+          return isNaN(cellValue) ? 0.00 : Number(cellValue.toFixed(2));
+        }
+        
+        const valStr = String(cellValue).trim().toLowerCase();
+        
+        const pattern1 = /(\d+(?:[.,]\d+)?)\s*(?:km|kms|k\b)/i;
+        const match1 = valStr.match(pattern1);
+        if (match1) {
+          const numStr = match1[1].replace(',', '.');
+          const num = parseFloat(numStr);
+          return isNaN(num) ? 0.00 : Number(num.toFixed(2));
+        }
+
+        const pattern2 = /km[:\s]*(\d+(?:[.,]\d+)?)/i;
+        const match2 = valStr.match(pattern2);
+        if (match2) {
+          const numStr = match2[1].replace(',', '.');
+          const num = parseFloat(numStr);
+          return isNaN(num) ? 0.00 : Number(num.toFixed(2));
+        }
+
+        const fallbackPattern = /(\d+(?:[.,]\d+)?)/;
+        const matchFallback = valStr.match(fallbackPattern);
+        if (matchFallback) {
+          const numStr = matchFallback[1].replace(',', '.');
+          const num = parseFloat(numStr);
+          return isNaN(num) ? 0.00 : Number(num.toFixed(2));
+        }
+
+        return 0.00;
+      }
+
+      function extractTollValue(kmCellValue: any, fallbackTollColValue: any): number {
+        if (kmCellValue !== null && kmCellValue !== undefined && kmCellValue !== '') {
+          const kmStr = String(kmCellValue).trim().toLowerCase();
+          
+          const pattern1 = /(?:pedagio|ped)[:\s]*r?\$?\s*(\d+(?:[.,]\d+)?)/i;
+          const match1 = kmStr.match(pattern1);
+          if (match1) {
+            const numStr = match1[1].replace(',', '.');
+            const num = parseFloat(numStr);
+            if (!isNaN(num)) return Number(num.toFixed(2));
+          }
+
+          const pattern2 = /r?\$?\s*(\d+(?:[.,]\d+)?)\s*(?:pedagio|ped)/i;
+          const match2 = kmStr.match(pattern2);
+          if (match2) {
+            const numStr = match2[1].replace(',', '.');
+            const num = parseFloat(numStr);
+            if (!isNaN(num)) return Number(num.toFixed(2));
+          }
+        }
+
+        if (fallbackTollColValue !== null && fallbackTollColValue !== undefined && fallbackTollColValue !== '') {
+          if (typeof fallbackTollColValue === 'number') {
+            return isNaN(fallbackTollColValue) ? 0.00 : Number(fallbackTollColValue.toFixed(2));
+          }
+          const tollStr = String(fallbackTollColValue).trim().toLowerCase();
+          const tollPattern = /(\d+(?:[.,]\d+)?)/;
+          const matchToll = tollStr.match(tollPattern);
+          if (matchToll) {
+            const numStr = matchToll[1].replace(',', '.');
+            const num = parseFloat(numStr);
+            if (!isNaN(num)) return Number(num.toFixed(2));
+          }
+        }
+
+        return 0.00;
+      }
+
       function parseCurrency(val: any): number {
         if (val === null || val === undefined || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : Number(val.toFixed(2));
@@ -2009,24 +2294,6 @@ async function startServer() {
         return forbiddenWords.some(w => o.includes(w) || t.includes(w));
       }
 
-      function getField(row: Record<string, any>, candidates: string[]): any {
-        const keys = Object.keys(row);
-        for (const cand of candidates) {
-          const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
-          for (const k of keys) {
-            if (k.toLowerCase().replace(/[_\s\.]+/g, '') === cleanCand) return row[k];
-          }
-        }
-        for (const cand of candidates) {
-          const cleanCand = cand.toLowerCase().replace(/[_\s\.]+/g, '');
-          for (const k of keys) {
-            const cleanK = k.toLowerCase().replace(/[_\s\.]+/g, '');
-            if (cleanK.includes(cleanCand) || cleanCand.includes(cleanK)) return row[k];
-          }
-        }
-        return null;
-      }
-
       function isGenericCompanyName(name: string): boolean {
         if (!name) return true;
         const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -2041,7 +2308,15 @@ async function startServer() {
       const importedOrdersSummary: any[] = [];
       const db = getDbPool();
 
-      // Pré-carga (Cache em Memória) - Evita Query N+1 no loop
+      // Métricas estruturadas de faturamento e quilometragem do faturamento legando
+      let totalRows = 0;
+      let created = 0;
+      let updated = 0;
+      let errors = 0;
+      let totalKmImported = 0;
+      let totalFinancialCalculated = 0;
+
+      // Pré-carga de usuários (Cache em Memória) - Evita Query N+1 no loop
       let currentUsersList = [...memUsers];
       try {
         const [userRows]: any = await db.query('SELECT * FROM users');
@@ -2055,6 +2330,23 @@ async function startServer() {
         const normName = (u.name || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         usersCacheMap.set(normName, u);
       });
+
+      // Cache de Ordens de Serviço existentes para evitar Query N+1 e duplicidade
+      const existingOrdersMap = new Map<string, { id: string; status: string }>();
+      try {
+        const [rows]: any = await db.query('SELECT id, call_number as callNumber FROM service_orders');
+        for (const r of rows) {
+          const callNum = r.callNumber || r.call_number;
+          if (callNum) {
+            existingOrdersMap.set(String(callNum).trim().toLowerCase(), {
+              id: r.id,
+              status: r.status
+            });
+          }
+        }
+      } catch (e: any) {
+        logDb('WARN', `Falha ao pré-carregar cache de ordens existentes: ${e.message}`);
+      }
 
       const originalFileName = file.originalname || '';
       const cleanFileNameNorm = originalFileName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -2074,86 +2366,143 @@ async function startServer() {
       const batchOrders: any[] = [];
       const pendingNewTechsMap = new Map(); // Para não duplicar criacões dinâmicas no lote
 
-      // Processamento Síncrono sem IO de Rede Bloqueante
+      // Processamento Resiliente e Síncrono de Planilhas
       for (let idx = 0; idx < rawRows.length; idx++) {
         const row = rawRows[idx];
-        const origemRaw = getField(row, ['Origem', 'Orig', 'Source', 'Protocolo']);
-        
-        let rawTechName = '';
-        for (const k of Object.keys(row)) {
-          const normKey = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          if (/tec|prestador|executant|colaborador|responsavel|funcionario/.test(normKey) && row[k]) {
-            rawTechName = String(row[k]).trim();
-            break;
+        try {
+          // Normaliza todas as chaves da linha para mapeamento flexível
+          const normRow: Record<string, any> = {};
+          for (const key of Object.keys(row)) {
+            normRow[normalizeKey(key)] = row[key];
           }
-        }
-        if (!rawTechName) rawTechName = String(getField(row, ['Tecnico', 'Prestador', 'Nome Tecnico']) || '').trim();
 
-        if (shouldIgnoreRow(origemRaw, rawTechName)) {
-           ignoredRowsCount++;
-           continue;
-        }
+          const callNumberRaw = getSinonimoValue(normRow, 'call_number');
+          let rawTechName = getSinonimoValue(normRow, 'technician_name');
 
-        const callNumberRaw = getField(row, ['IdChamado', 'Chamado', 'OS']) || `PS-IMP-${Date.now()}-${idx}`;
-        const dtVisitaRaw = getField(row, ['Dt.Visita', 'Data Visita', 'Data']);
-        const tipoVisitaRaw = getField(row, ['Tipo Visita', 'Serviço', 'Categoria']) || 'Instalação / Higienização';
-        const statusRaw = getField(row, ['Status OS', 'Status', 'Situacao']);
-        
-        let technicianId = '';
-        let techName = '';
-        const cleanTechNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          if (!rawTechName) {
+            for (const k of Object.keys(normRow)) {
+              if (/tec|prestador|executant|colaborador|responsavel|funcionario/.test(k) && normRow[k]) {
+                rawTechName = String(normRow[k]).trim();
+                break;
+              }
+            }
+          }
+          rawTechName = String(rawTechName || '').trim();
 
-        if (isGenericCompanyName(rawTechName)) {
-           technicianId = fileContextTechnician ? String(fileContextTechnician.id) : 'u1';
-           techName = fileContextTechnician ? fileContextTechnician.name : 'Técnico Não Identificado';
-        } else {
-           let existingUser = usersCacheMap.get(cleanTechNameNorm) || pendingNewTechsMap.get(cleanTechNameNorm);
-           
-           if (existingUser) {
-             technicianId = String(existingUser.id);
-             techName = existingUser.name;
-           } else {
-             technicianId = `tech-imp-${Date.now()}-${idx}`;
-             const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
-             const finalEmail = `${slug}${idx}@ohigienizador.com.br`;
+          const origemRaw = normRow['origem'] || normRow['orig'] || normRow['source'] || callNumberRaw;
+
+          if (shouldIgnoreRow(origemRaw, rawTechName)) {
+            ignoredRowsCount++;
+            continue;
+          }
+
+          if (!callNumberRaw) {
+            errors++;
+            continue;
+          }
+
+          totalRows++;
+
+          let technicianId = '';
+          let techName = '';
+          const cleanTechNameNorm = rawTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+          if (isGenericCompanyName(rawTechName)) {
+             technicianId = fileContextTechnician ? String(fileContextTechnician.id) : 'u1';
+             techName = fileContextTechnician ? fileContextTechnician.name : 'Técnico Não Identificado';
+          } else {
+             let existingUser = usersCacheMap.get(cleanTechNameNorm) || pendingNewTechsMap.get(cleanTechNameNorm);
              
-             const newTech = {
-               id: technicianId, name: rawTechName, email: finalEmail, passwordHash: 'Porto@2026', role: 'TECHNICIAN', documentCpf: '000.000.000-00', phone: '(11) 99999-0000', isActive: 1, pixKeyType: 'CPF', pixKey: '', bankName: 'Porto Seguro Bank', bankAgency: '', bankAccount: '', baseCostAllowance: 0, hasSpecialTaxRule: 0, specialTaxRate: 0, createdAt: new Date(), updatedAt: new Date()
-             };
-             pendingNewTechsMap.set(cleanTechNameNorm, newTech);
-             techName = newTech.name;
-           }
-        }
+             if (existingUser) {
+               technicianId = String(existingUser.id);
+               techName = existingUser.name;
+             } else {
+               technicianId = `tech-imp-${Date.now()}-${idx}`;
+               const slug = cleanTechNameNorm.replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'tecnico';
+               const finalEmail = `${slug}${idx}@ohigienizador.com.br`;
+               
+               const newTech = {
+                 id: technicianId, name: rawTechName, email: finalEmail, passwordHash: 'Porto@2026', role: 'TECHNICIAN', documentCpf: '000.000.000-00', phone: '(11) 99999-0000', isActive: 1, pixKeyType: 'CPF', pixKey: '', bankName: 'Porto Seguro Bank', bankAgency: '', bankAccount: '', baseCostAllowance: 0, hasSpecialTaxRule: 0, specialTaxRate: 0, createdAt: new Date(), updatedAt: new Date()
+               };
+               pendingNewTechsMap.set(cleanTechNameNorm, newTech);
+               techName = newTech.name;
+             }
+          }
 
-        const baseServiceFee = parseCurrency(getField(row, ['VALOR DA VISITA', 'Valor', 'Base Fee']));
-        const kmTotalCost = parseCurrency(getField(row, ['KM', 'Km Rodado'])) > 0 ? Number((parseCurrency(getField(row, ['KM', 'Km Rodado'])) * 0.50).toFixed(2)) : 0;
-        const tollCost = parseCurrency(getField(row, ['PEDAGIO', 'Pedagio']));
-        const totalTechnicianGross = Number((baseServiceFee + kmTotalCost + tollCost).toFixed(2));
-        
-        const cleanStatus = String(statusRaw || '').toLowerCase().trim();
-        const finalStatus = (cleanStatus.includes('perdida') || cleanStatus.includes('conclu') || cleanStatus.includes('finaliz')) ? 'COMPLETED' : cleanStatus.includes('canc') ? 'CANCELLED' : cleanStatus.includes('anda') ? 'IN_PROGRESS' : 'PENDING';
-        
-        const scheduledDateStr = parseDateValue(dtVisitaRaw);
-        const dateSlug = scheduledDateStr.split('T')[0].replace(/-/g, '');
-        const orderId = `os-${callNumberRaw}-${dateSlug}`;
+          const baseServiceFee = parseCurrency(getSinonimoValue(normRow, 'base_service_fee'));
+          const dtVisitaRaw = getSinonimoValue(normRow, 'scheduled_date');
+          const scheduledDateStr = parseDateValue(dtVisitaRaw);
 
-        batchOrders.push([
-          orderId, String(callNumberRaw).trim(), String(origemRaw).trim() || null, String(tipoVisitaRaw).trim(), baseServiceFee,
-          String(row.Cliente || 'Cliente Porto Seguro').trim(), '', null, String(row.Cidade || 'São Paulo').trim(), String(row.UF || 'SP').trim().toUpperCase().substring(0, 2),
-          String(row.Bairro || '').trim(), String(row.Endereco || '').trim(), String(row.Numero || '').trim(), null, String(row.CEP || '01001-000').trim(),
-          technicianId, finalStatus, new Date(scheduledDateStr), finalStatus !== 'PENDING' ? new Date(scheduledDateStr) : null, finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED' ? new Date(scheduledDateStr) : null,
-          parseCurrency(getField(row, ['KM', 'Km Rodado'])), 0.50, kmTotalCost, tollCost, 0, totalTechnicianGross, totalTechnicianGross
-        ]);
+          // Extração Resiliente de KM e Pedágio das Células
+          const kmCellValue = getSinonimoValue(normRow, 'km_traveled');
+          const kmTraveled = extractKmValue(kmCellValue);
 
-        importedCount++;
-        if (importedOrdersSummary.length < 15) {
-          importedOrdersSummary.push({ callNumber: callNumberRaw, technicianName: techName, date: scheduledDateStr, totalGross: totalTechnicianGross, status: finalStatus });
+          const tollCellValue = getSinonimoValue(normRow, 'toll_cost');
+          const tollCost = extractTollValue(kmCellValue, tollCellValue);
+
+          // Regra de Corte Histórico (Snapshot Imutável)
+          const execTime = new Date(scheduledDateStr).getTime();
+          const cutoffTime = new Date('2026-07-26T23:59:59').getTime();
+          const isBeforeCutoff = execTime <= cutoffTime;
+
+          let kmRateApplied = 0.75;
+          if (isBeforeCutoff) {
+            kmRateApplied = 0.50;
+          } else {
+            const matchedUser = currentUsersList.find(u => String(u.id) === String(technicianId));
+            if (matchedUser) {
+              kmRateApplied = Number(matchedUser.km_rate ?? matchedUser.kmRate ?? 0.75);
+            }
+          }
+
+          const kmPayout = Number((kmTraveled * kmRateApplied).toFixed(2));
+          const totalTechnicianGross = Number((baseServiceFee + kmPayout + tollCost).toFixed(2));
+
+          totalKmImported += kmTraveled;
+          totalFinancialCalculated += totalTechnicianGross;
+
+          // Mecanismo Upsert (Prevenção de Duplicidade)
+          const cleanCallNumber = String(callNumberRaw).trim();
+          const existing = existingOrdersMap.get(cleanCallNumber.toLowerCase());
+          
+          let orderId = '';
+          if (existing) {
+            orderId = existing.id;
+            updated++;
+          } else {
+            const dateSlug = scheduledDateStr.split('T')[0].replace(/-/g, '');
+            orderId = `os-${cleanCallNumber}-${dateSlug}`;
+            created++;
+          }
+
+          const customerNameRaw = getSinonimoValue(normRow, 'customer_name') || 'Cliente Porto Seguro';
+          const tipoVisitaRaw = normRow['servico'] || normRow['tipo_visita'] || normRow['categoria'] || 'Instalação / Higienização';
+          const statusRaw = normRow['status'] || normRow['situacao'] || 'COMPLETED';
+
+          const cleanStatus = String(statusRaw || '').toLowerCase().trim();
+          const finalStatus = (cleanStatus.includes('perdida') || cleanStatus.includes('conclu') || cleanStatus.includes('finaliz')) ? 'COMPLETED' : cleanStatus.includes('canc') ? 'CANCELLED' : cleanStatus.includes('anda') ? 'IN_PROGRESS' : 'PENDING';
+
+          batchOrders.push([
+            orderId, cleanCallNumber, String(origemRaw).trim() || null, String(tipoVisitaRaw).trim(), baseServiceFee,
+            String(customerNameRaw).trim(), '', null, String(normRow['cidade'] || 'São Paulo').trim(), String(normRow['uf'] || 'SP').trim().toUpperCase().substring(0, 2),
+            String(normRow['bairro'] || '').trim(), String(normRow['endereco'] || '').trim(), String(normRow['numero'] || '').trim(), null, String(normRow['cep'] || '01001-000').trim(),
+            technicianId, finalStatus, new Date(scheduledDateStr), finalStatus !== 'PENDING' ? new Date(scheduledDateStr) : null, finalStatus === 'COMPLETED' || finalStatus === 'CANCELLED' ? new Date(scheduledDateStr) : null,
+            kmTraveled, kmRateApplied, kmPayout, tollCost, 0, totalTechnicianGross, totalTechnicianGross, kmPayout, kmPayout
+          ]);
+
+          importedCount++;
+          if (importedOrdersSummary.length < 15) {
+            importedOrdersSummary.push({ callNumber: cleanCallNumber, technicianName: techName, date: scheduledDateStr, totalGross: totalTechnicianGross, status: finalStatus });
+          }
+        } catch (lineErr: any) {
+          console.error(`Falha ao processar linha ${idx} da importação:`, lineErr.message);
+          errors++;
         }
       }
 
-      // Concorrência Atomic (Batch Insert MariaDB) - Protege contra fragmentação
+      // Concorrência Atômica de Persistência no MariaDB
       try {
-        // 1. Batch Techs
+        // 1. Batch de Técnicos Novos
         const newTechs = Array.from(pendingNewTechsMap.values());
         if (newTechs.length > 0) {
           const techBatchValues = newTechs.map(t => [t.id, t.name, t.email, t.passwordHash, 'TECHNICIAN', 1, 0, 0, 0, t.phone, t.documentCpf, new Date(), new Date()]);
@@ -2163,23 +2512,32 @@ async function startServer() {
           createdTechniciansList.push(...newTechs.map(t => ({ id: t.id, name: t.name, email: t.email })));
         }
 
-        // 2. Batch Orders
+        // 2. Batch de Ordens de Serviço (Upsert Inteligente com ON DUPLICATE KEY UPDATE)
         if (batchOrders.length > 0) {
-          // Dividir em chunks (limite pacotes MySQL)
           const chunkSize = 2000;
           for (let i = 0; i < batchOrders.length; i += chunkSize) {
             const chunk = batchOrders.slice(i, i + chunkSize);
             await db.query(`
               INSERT INTO service_orders (
-                id, call_number, porto_seguro_protocol, service_category, base_service_fee, customer_name, customer_cpf, customer_phone, city, uf, neighborhood, address_street, address_number, address_complement, postal_code, technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto
+                id, call_number, porto_seguro_protocol, service_category, base_service_fee, customer_name, customer_cpf, customer_phone, city, uf, neighborhood, address_street, address_number, address_complement, postal_code, technician_id, status, scheduled_date, started_at, completed_at, km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost, total_technician_gross, faturamento_porto, km_payout, kmPayout
               ) VALUES ? 
               ON DUPLICATE KEY UPDATE 
-                status=VALUES(status), total_technician_gross=VALUES(total_technician_gross), faturamento_porto=VALUES(faturamento_porto), started_at=VALUES(started_at), completed_at=VALUES(completed_at)
+                status=VALUES(status),
+                total_technician_gross=VALUES(total_technician_gross),
+                faturamento_porto=VALUES(faturamento_porto),
+                started_at=VALUES(started_at),
+                completed_at=VALUES(completed_at),
+                km_payout=VALUES(km_payout),
+                kmPayout=VALUES(kmPayout),
+                km_traveled=VALUES(km_traveled),
+                km_rate_applied=VALUES(km_rate_applied),
+                km_total_cost=VALUES(km_total_cost),
+                toll_cost=VALUES(toll_cost)
             `, [chunk]);
           }
         }
       } catch (err: any) {
-        logDb('ERROR', `Falha grave na persistência do lote. Rollback acionado. Erro: ${err.message}`);
+        logDb('ERROR', `Falha grave na persistência do lote de importação. Erro: ${err.message}`);
         return res.status(500).json({ success: false, error: 'Erro de transação no banco de dados. Processamento abortado por segurança estrutural.' });
       }
 
@@ -2187,7 +2545,7 @@ async function startServer() {
         userId: requester?.id || 'system', userName: requester?.name || 'Administrador Master', userRole: requester?.role || 'ADMIN', ipAddress: req.ip, module: 'SERVICE_ORDERS', action: 'DATA_IMPORT', result: 'SUCCESS', details: `Importação massiva otimizada concluída: ${importedCount} ordens via ${file.originalname}.`
       });
 
-      // Recarregar memória após importação
+      // Recarregar memória volátil após a persistência
       try {
         const [reloadRows]: any = await db.query('SELECT * FROM service_orders ORDER BY scheduled_date DESC');
         if (reloadRows && reloadRows.length > 0) {
@@ -2260,7 +2618,20 @@ async function startServer() {
         }
       } catch (err) {}
 
-      res.json({ success: true, message: `${importedCount} ordens e ${techniciansCreatedCount} técnicos via batch.`, importedCount, techniciansCreated: techniciansCreatedCount, ignoredRowsCount, createdTechnicians: createdTechniciansList, sampleOrders: importedOrdersSummary });
+      res.json({
+        success: true,
+        message: `Planilha processada com sucesso: ${created} criadas, ${updated} atualizadas.`,
+        totalRows,
+        created,
+        updated,
+        errors,
+        totalKmImported: Number(totalKmImported.toFixed(2)),
+        totalFinancialCalculated: Number(totalFinancialCalculated.toFixed(2)),
+        techniciansCreated: techniciansCreatedCount,
+        ignoredRowsCount,
+        createdTechnicians: createdTechniciansList,
+        sampleOrders: importedOrdersSummary
+      });
     } catch (err: any) {
       res.status(500).json({ success: false, error: `Erro ao processar planilha (OOM/Parser): ${err.message}` });
     }
@@ -3546,6 +3917,9 @@ async function startServer() {
         startedAt: status === 'IN_PROGRESS' || status === 'COMPLETED' ? osDate.toISOString() : null,
       };
 
+      const calculated = await calculateOrderFinance(newOrder);
+      Object.assign(newOrder, calculated);
+
       const formatDbDate = (iso: string | null) => {
         if (!iso) return null;
         const d = new Date(iso);
@@ -3560,8 +3934,8 @@ async function startServer() {
           address_street, address_number, address_complement, postal_code,
           technician_id, status, scheduled_date, started_at, completed_at,
           km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
-          total_technician_gross, faturamento_porto
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          total_technician_gross, faturamento_porto, km_payout, kmPayout
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newOrder.id,
           newOrder.callNumber,
@@ -3583,13 +3957,15 @@ async function startServer() {
           formatDbDate(newOrder.scheduledDate),
           formatDbDate(newOrder.startedAt),
           null,                                          // completed_at
-          0,                                             // km_traveled
-          0,                                             // km_rate_applied
-          0,                                             // km_total_cost
-          0,                                             // toll_cost
-          0,                                             // support_cost
-          0,                                             // total_technician_gross
-          0                                              // faturamento_porto
+          newOrder.kmTraveled || 0,
+          newOrder.kmRateApplied || 0.75,
+          newOrder.kmTotalCost || 0,
+          newOrder.tollCost || 0,
+          newOrder.supportCost || 0,
+          newOrder.totalTechnicianGross || 0,
+          newOrder.faturamentoPorto || 0,
+          newOrder.kmPayout || 0,
+          newOrder.kmPayout || 0
         ]
       );
 
@@ -3742,9 +4118,18 @@ async function startServer() {
 
     const newSupport = (supportCost !== undefined && supportCost !== null && !isNaN(Number(supportCost)) && Number(supportCost) >= 0) ? Number(supportCost) : Number(current.supportCost || 0);
 
-    const kmRate = Number(memSettings?.kmReimbursementRate || memSettings?.kmRateDefault || 0.5);
-    const newKmCost = newKm * kmRate;
-    const newTotalCost = newBaseFee + newKmCost + newToll + newSupport;
+    const mergedForCalc = {
+      ...current,
+      serviceCategory: newCategory,
+      baseServiceFee: newBaseFee,
+      kmTraveled: newKm,
+      tollCost: newToll,
+      supportCost: newSupport,
+    };
+    const calculated = await calculateOrderFinance(mergedForCalc);
+
+    const newKmCost = calculated.kmTotalCost;
+    const newTotalCost = calculated.totalTechnicianGross;
     const newStatus = (status === 'COMPLETED' || status === 'IN_PROGRESS') ? status : current.status;
 
     // Cadastral values
@@ -3800,6 +4185,12 @@ async function startServer() {
       supportCost: newSupport,
       totalCost: newTotalCost,
       totalTechnicianGross: newTotalCost,
+      kmRateApplied: calculated.kmRateApplied,
+      km_rate_applied: calculated.kmRateApplied,
+      kmPayout: calculated.kmPayout,
+      km_payout: calculated.kmPayout,
+      kmTotalCost: calculated.kmTotalCost,
+      km_total_cost: calculated.kmTotalCost,
       stockSuppliesUsed: updatedStockSupplies,
       observation: observation !== undefined ? observation : current.observation,
       customerSignature: customerSignature !== undefined ? customerSignature : current.customerSignature,
@@ -3833,20 +4224,23 @@ async function startServer() {
              base_service_fee = ?, 
              faturamento_porto = ?, 
              completed_at = ?, 
-              execution_notes = COALESCE(?, execution_notes),
-              customer_name = ?,
-              address_street = ?,
-              address_number = ?,
-              neighborhood = ?,
-              city = ?
+             execution_notes = COALESCE(?, execution_notes),
+             customer_name = ?,
+             address_street = ?,
+             address_number = ?,
+             neighborhood = ?,
+             city = ?,
+             km_rate_applied = ?,
+             km_payout = ?,
+             kmPayout = ?
          WHERE id = ? OR call_number = ?`,
         [
           updatedOrder.status,
           Number(updatedOrder.kmTraveled || 0),
-          Number(updatedOrder.kmCost || 0),
+          Number(updatedOrder.kmTotalCost || 0),
           Number(updatedOrder.tollCost || 0),
           Number(updatedOrder.supportCost || 0),
-          Number(updatedOrder.totalCost || 0),
+          Number(updatedOrder.totalTechnicianGross || 0),
           updatedOrder.serviceCategory || '',
           Number(updatedOrder.baseServiceFee || 0),
           Number(updatedOrder.faturamentoPorto || 0),
@@ -3857,6 +4251,9 @@ async function startServer() {
           numberValue,
           finalNeighborhood,
           updatedOrder.city || null,
+          updatedOrder.kmRateApplied || 0.75,
+          updatedOrder.kmPayout || 0,
+          updatedOrder.kmPayout || 0,
           updatedOrder.id,
           updatedOrder.callNumber,
         ]

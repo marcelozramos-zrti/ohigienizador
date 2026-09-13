@@ -76,8 +76,8 @@ export const MobileAppSimulator: React.FC = () => {
 
   // OS do técnico selecionado
   const techOrders = safeOrders.filter((o) => o && o.technicianId === selectedTechId);
-  const pendingOrProgressOrders = techOrders.filter((o) => o && o.status !== 'COMPLETED' && o.status !== 'CANCELLED');
-  const completedTechOrders = techOrders.filter((o) => o && o.status === 'COMPLETED');
+  const pendingOrProgressOrders = techOrders.filter((o) => o && o.status !== 'COMPLETED' && o.status !== 'CANCELLED' && o.status !== 'LOST_VISIT');
+  const completedTechOrders = techOrders.filter((o) => o && (o.status === 'COMPLETED' || o.status === 'LOST_VISIT'));
 
   // Resumo quinzenal do técnico ativo
   const techSummary = (safeClosing.technicianSummaries || []).find((s) => s && s.technicianId === selectedTechId);

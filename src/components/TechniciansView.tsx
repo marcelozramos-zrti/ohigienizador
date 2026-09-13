@@ -133,6 +133,7 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
     hasSpecialTaxRule: boolean;
     specialTaxRate: number;
     mfaEnabled: boolean;
+    kmRate: number;
   }>({
     name: '',
     email: '',
@@ -149,6 +150,7 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
     hasSpecialTaxRule: false,
     specialTaxRate: 16,
     mfaEnabled: false,
+    kmRate: 0.75,
   });
 
   const safeUsers = useMemo(() => {
@@ -215,6 +217,7 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
       hasSpecialTaxRule: Boolean(tech.hasSpecialTaxRule),
       specialTaxRate: tech.specialTaxRate ?? 16,
       mfaEnabled: Boolean(tech.mfaEnabled),
+      kmRate: tech.km_rate ?? tech.kmRate ?? 0.75,
     });
   };
 
@@ -243,6 +246,7 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
       hasSpecialTaxRule: Boolean(tech.hasSpecialTaxRule),
       specialTaxRate: tech.specialTaxRate ?? 16,
       mfaEnabled: Boolean(tech.mfaEnabled),
+      kmRate: tech.km_rate ?? tech.kmRate ?? 0.75,
     });
   };
 
@@ -339,6 +343,8 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
       hasSpecialTaxRule: editFormData.hasSpecialTaxRule,
       specialTaxRate: Number(editFormData.specialTaxRate),
       mfaEnabled: editFormData.mfaEnabled,
+      kmRate: Number(editFormData.kmRate),
+      km_rate: Number(editFormData.kmRate),
       priceTable: priceTableState,
     });
 
@@ -1385,7 +1391,7 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                       <label className="block text-xs font-bold text-slate-700 uppercase">
                         Ajuda de Custo Mensal (R$)
@@ -1438,6 +1444,26 @@ export const TechniciansView: React.FC<TechniciansViewProps> = ({
                       />
                       <span className="text-[10px] text-slate-500 block">
                         Alíquota para técnicos com retenção (ex: 16%).
+                      </span>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                      <label className="block text-xs font-bold text-slate-700 uppercase">
+                        Taxa de KM (R$/km)
+                      </label>
+                      <input
+                        id="tech-edit-km-rate"
+                        type="number"
+                        min="0"
+                        step="0.05"
+                        value={editFormData.kmRate !== undefined ? editFormData.kmRate : 0.75}
+                        readOnly={currentUser?.role === 'TECHNICIAN'}
+                        onChange={(e) => setEditFormData({ ...editFormData, kmRate: Number(e.target.value) })}
+                        placeholder="Ex: 0.75, 0.50 ou 1.00"
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:bg-slate-50 read-only:opacity-75"
+                      />
+                      <span className="text-[10px] text-slate-500 block">
+                        Valor pago por KM rodado (Padrão: R$ 0.75).
                       </span>
                     </div>
                   </div>

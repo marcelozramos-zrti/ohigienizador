@@ -163,6 +163,8 @@ export async function initializeDatabaseSchema(): Promise<void> {
         hasSpecialTaxRule TINYINT(1) NOT NULL DEFAULT 0,
         specialTaxRate DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
         price_table LONGTEXT NULL,
+        km_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.75,
+        kmRate DECIMAL(5, 2) NOT NULL DEFAULT 0.75,
         createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
         INDEX idx_users_role (role)
@@ -189,6 +191,8 @@ export async function initializeDatabaseSchema(): Promise<void> {
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS hasSpecialTaxRule TINYINT(1) NOT NULL DEFAULT 0",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialTaxRate DECIMAL(5, 2) NOT NULL DEFAULT 0.00",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS price_table LONGTEXT NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS km_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.75",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS kmRate DECIMAL(5, 2) NOT NULL DEFAULT 0.75",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS createdAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3)",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS updatedAt DATETIME(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
     ];
@@ -218,12 +222,15 @@ export async function initializeDatabaseSchema(): Promise<void> {
         addressComplement VARCHAR(50) NULL,
         postalCode VARCHAR(10) NOT NULL,
         technicianId VARCHAR(36) NULL,
-        status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED') NOT NULL DEFAULT 'PENDING',
+        status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'LOST_VISIT') NOT NULL DEFAULT 'PENDING',
         scheduledDate DATETIME(3) NOT NULL,
         startedAt DATETIME(3) NULL,
         completedAt DATETIME(3) NULL,
         kmTraveled DECIMAL(8, 2) NOT NULL DEFAULT 0.00,
         kmRateApplied DECIMAL(8, 2) NOT NULL DEFAULT 0.50,
+        km_rate_applied DECIMAL(8, 2) NOT NULL DEFAULT 0.50,
+        kmPayout DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        km_payout DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         kmTotalCost DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         tollCost DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         supportCost DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
@@ -234,8 +241,10 @@ export async function initializeDatabaseSchema(): Promise<void> {
         tollReceiptUrl VARCHAR(255) NULL,
         paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING',
         paymentDate DATETIME(3) NULL,
+        active_call_token VARCHAR(60) AS (IF(status = 'IN_PROGRESS', callNumber, NULL)) PERSISTENT,
         createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        UNIQUE KEY uq_active_call_token (active_call_token),
         INDEX idx_os_status (status),
         INDEX idx_os_tech (technicianId),
         INDEX idx_os_payment (paymentStatus),
@@ -251,6 +260,12 @@ export async function initializeDatabaseSchema(): Promise<void> {
       "ALTER TABLE service_orders ADD INDEX idx_os_callNumber (callNumber)",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING'",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS paymentDate DATETIME(3) NULL",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS km_rate_applied DECIMAL(8, 2) NOT NULL DEFAULT 0.50",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS km_payout DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS kmPayout DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE service_orders MODIFY COLUMN status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'LOST_VISIT') NOT NULL DEFAULT 'PENDING'",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS active_call_token VARCHAR(60) AS (IF(status = 'IN_PROGRESS', callNumber, NULL)) PERSISTENT",
+      "ALTER TABLE service_orders ADD UNIQUE INDEX uq_active_call_token (active_call_token)",
     ];
 
     for (const stmt of orderAlterStatements) {
@@ -323,6 +338,44 @@ export async function initializeDatabaseSchema(): Promise<void> {
     `);
 
     console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db` (incluindo audit_logs).');
+
+    // Executar saneamento retroativo de base de dados para taxas de KM (Corte Histórico 26/07/2026)
+    try {
+      // 1. Forçar km_rate_applied = 0.50 para todos os chamados com data de execução <= '2026-07-26 23:59:59'
+      await db.query(`
+        UPDATE service_orders
+        SET km_rate_applied = 0.50, kmRateApplied = 0.50
+        WHERE scheduled_date <= '2026-07-26 23:59:59' OR scheduledDate <= '2026-07-26 23:59:59'
+      `);
+
+      // 2. Para chamados pós cutoff, aplicar a taxa do técnico (se houver) ou fallback de 0.75
+      await db.query(`
+        UPDATE service_orders o
+        LEFT JOIN users u ON o.technicianId = u.id OR o.technician_id = u.id
+        SET o.km_rate_applied = COALESCE(u.km_rate, u.kmRate, 0.75),
+            o.kmRateApplied = COALESCE(u.km_rate, u.kmRate, 0.75)
+        WHERE (o.scheduled_date > '2026-07-26 23:59:59' OR o.scheduledDate > '2026-07-26 23:59:59')
+      `);
+
+      // 3. Preencher km_payout e kmPayout
+      await db.query(`
+        UPDATE service_orders
+        SET km_payout = ROUND(COALESCE(km_traveled, kmTraveled, 0) * km_rate_applied, 2),
+            kmPayout = ROUND(COALESCE(km_traveled, kmTraveled, 0) * km_rate_applied, 2),
+            kmTotalCost = ROUND(COALESCE(km_traveled, kmTraveled, 0) * km_rate_applied, 2)
+      `);
+
+      // 4. Atualizar total_technician_gross e totalTechnicianGross
+      await db.query(`
+        UPDATE service_orders
+        SET total_technician_gross = ROUND(COALESCE(base_service_fee, baseServiceFee, 0) + km_payout + COALESCE(toll_cost, tollCost, 0) + COALESCE(support_cost, supportCost, 0), 2),
+            totalTechnicianGross = ROUND(COALESCE(base_service_fee, baseServiceFee, 0) + km_payout + COALESCE(toll_cost, tollCost, 0) + COALESCE(support_cost, supportCost, 0), 2)
+      `);
+
+      console.log('[MariaDB] Saneamento retroativo de dados financeiros executado com sucesso.');
+    } catch (sanitizationErr: any) {
+      console.warn(`[MariaDB Sanitization Notice] Falha ao executar saneamento automático: ${sanitizationErr.message}`);
+    }
   } catch (err: any) {
     console.warn(`[MariaDB] Inicialização de schema adiada: ${err.message}`);
   }

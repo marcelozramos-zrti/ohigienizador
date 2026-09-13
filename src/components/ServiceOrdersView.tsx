@@ -221,6 +221,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
           else if (os.status === 'IN_PROGRESS') statusText = 'em andamento em rota';
           else if (os.status === 'COMPLETED') statusText = 'finalizada concluida concluída';
           else if (os.status === 'CANCELLED') statusText = 'cancelada';
+          else if (os.status === 'LOST_VISIT') statusText = 'visita perdida vp';
 
           const searchableFields = [
             (os.callNumber || '').toLowerCase(),
@@ -328,6 +329,34 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
         'success'
       );
       setOrderToDelete(null);
+    }
+  };
+
+  const handleQuickFinalize = (os: ServiceOrder) => {
+    const missingFields: string[] = [];
+    if (!os.technicianId) missingFields.push('Técnico Responsável');
+    if (!os.serviceCategory) missingFields.push('Categoria do Serviço');
+    if (!os.baseServiceFee || Number(os.baseServiceFee) <= 0) missingFields.push('Taxa Base');
+    
+    // Validar se o KM foi lançado para finalização
+    if (os.kmTraveled === undefined || os.kmTraveled === null || os.kmTraveled <= 0) {
+      missingFields.push('Deslocamento (KM)');
+    }
+
+    if (missingFields.length > 0) {
+      addToast(
+        'Lançamento de KM Requerido',
+        `Para finalizar a OS #${os.callNumber}, você deve lançar a quilometragem percorrida no modal de edição.`,
+        'warning'
+      );
+      setEditingOrder(os);
+    } else {
+      updateServiceOrder(os.id, { status: 'COMPLETED' });
+      addToast(
+        'OS Finalizada',
+        `A Ordem de Serviço #${os.callNumber} foi finalizada com sucesso!`,
+        'success'
+      );
     }
   };
 
@@ -565,6 +594,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                 <option value="IN_PROGRESS">Em Andamento</option>
                 <option value="COMPLETED">Finalizadas</option>
                 <option value="CANCELLED">Canceladas</option>
+                <option value="LOST_VISIT">Visita Perdida (VP)</option>
               </select>
             </div>
             )}
@@ -705,7 +735,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
       )}
 
       {/* Orders High Density DataGrid with Clickable Excel-like Column Headers */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+      <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto w-full">
           <table className="w-full text-left text-xs min-w-fit">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase font-bold text-[10px] tracking-wider select-none">
@@ -823,6 +853,9 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                           )}
                           {os.status === 'CANCELLED' && (
                             <span className="w-2 h-9 rounded-[2px] bg-slate-400 shrink-0 inline-block mr-3" title="Cancelada" />
+                          )}
+                          {os.status === 'LOST_VISIT' && (
+                            <span className="w-2 h-9 rounded-[2px] bg-indigo-500 shrink-0 inline-block mr-3" title="Visita Perdida" />
                           )}
                           <div>
                             <div className="font-mono font-bold text-[#003366] text-sm">
@@ -1012,7 +1045,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                                 }
                                 setEditingDateOrderId(null);
                               } else if (e.key === 'Escape') {
-                                setEditingDateOrderId(null);
+                                  setEditingDateOrderId(null);
                               }
                             }}
                             autoFocus
@@ -1109,12 +1142,12 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                           </button>
 
                           {/* Editar */}
-                          {currentUser.role !== 'TECHNICIAN' && (
+                          {(currentUser.role !== 'TECHNICIAN' || os.technicianId === currentUser.id) && (
                             <button
                               type="button"
                               onClick={() => setEditingOrder(os)}
                               className="p-1.5 rounded-lg text-slate-500 hover:text-[#003366] hover:bg-slate-100 transition-colors cursor-pointer"
-                              title="Editar"
+                              title="Editar / Lançar KM"
                               aria-label="Editar"
                             >
                               <Pencil className="h-4 w-4" />
@@ -1142,6 +1175,203 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Listagem Mobile em Cards Individuais */}
+      <div className="block md:hidden space-y-4">
+        {sortedOrders.length === 0 ? (
+          <div className="bg-white rounded-xl p-8 text-center text-slate-400 border border-slate-200">
+            <p className="font-semibold text-slate-600 text-sm">
+              Nenhuma ordem de serviço encontrada com os filtros selecionados.
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Altere os filtros acima ou limpe o campo de busca.
+            </p>
+          </div>
+        ) : (
+          sortedOrders.map((os) => {
+            const scheduleInfo = formatScheduledDateTime(os.scheduledDate);
+            const matchedTech = safeUsers.find(
+              (u) =>
+                u.id === os.technicianId ||
+                (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase())
+            );
+            const displayName = matchedTech?.name || os.technicianName || null;
+            const repasseStr = Number(os.totalTechnicianGross || os.baseServiceFee || 0).toFixed(2);
+
+            return (
+              <div 
+                key={os.id} 
+                className="bg-white rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all p-4 space-y-3.5 relative overflow-hidden"
+              >
+                {/* Linha indicadora de status no topo esquerdo */}
+                <div className={`absolute top-0 left-0 right-0 h-1.5 ${
+                  os.status === 'IN_PROGRESS' ? 'bg-amber-400 animate-pulse' :
+                  os.status === 'COMPLETED' ? 'bg-emerald-500' :
+                  os.status === 'LOST_VISIT' ? 'bg-indigo-500' :
+                  os.status === 'CANCELLED' ? 'bg-slate-400' : 'bg-rose-500'
+                }`} />
+
+                {/* Cabeçalho do Card */}
+                <div className="flex items-center justify-between pt-1">
+                  <div className="flex flex-col">
+                    <span className="font-mono font-black text-sm text-[#003366]">
+                      #{os.callNumber}
+                    </span>
+                    {os.portoSeguroProtocol && (
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Prot: {os.portoSeguroProtocol}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Badge de Status */}
+                  <div>
+                    {os.status === 'IN_PROGRESS' && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200">
+                        Em Andamento
+                      </span>
+                    )}
+                    {os.status === 'PENDING' && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-50 text-rose-600 border border-rose-200">
+                        Pendente
+                      </span>
+                    )}
+                    {os.status === 'COMPLETED' && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        Concluído
+                      </span>
+                    )}
+                    {os.status === 'CANCELLED' && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-50 text-slate-500 border border-slate-200">
+                        Cancelado
+                      </span>
+                    )}
+                    {os.status === 'LOST_VISIT' && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        Visita Perdida (VP)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Corpo do Card */}
+                <div className="space-y-2">
+                  {/* Cliente */}
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cliente</span>
+                    <span className="text-sm font-bold text-slate-800 block">
+                      {os.customerName}
+                    </span>
+                  </div>
+
+                  {/* Categoria do serviço */}
+                  <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-base shrink-0">🛠️</span>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-xs font-bold text-slate-700 truncate">
+                        {os.serviceCategory}
+                      </span>
+                      {(() => {
+                        const prod = os.additionalProduct || os.supportProduct || os.productName || '';
+                        let prodName = '';
+                        if (prod === "Refil de Purificador" || prod === "Refil Purificador") prodName = "Refil Purificador";
+                        else if (prod) prodName = prod;
+                        else if (os.supportCost === 60) prodName = "Suporte Fixo TV";
+                        else if (os.supportCost === 120) prodName = "Suporte Articulado TV";
+                        else if (os.supportCost === 40) prodName = "Refil Purificador";
+                        else if (os.supportCost === 30) prodName = "Kit Limpeza Extra";
+                        
+                        return prodName && prodName !== 'Nenhum' ? (
+                          <span className="text-[10px] text-slate-500 font-bold">📦 Adicional: {prodName}</span>
+                        ) : null;
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Endereço */}
+                  <div className="text-xs text-slate-600 space-y-0.5">
+                    <div className="flex items-start gap-1">
+                      <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
+                      <span>
+                        {os.addressStreet}, {os.addressNumber} {os.addressComplement ? ` - ${os.addressComplement}` : ''}
+                        <span className="block text-[11px] text-slate-500 font-medium">
+                          {os.neighborhood} • {os.city} - {os.uf}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Linha Operacional */}
+                  <div className="grid grid-cols-2 gap-2 bg-slate-50/50 p-2 rounded-lg text-xs font-mono text-slate-600 border border-slate-100">
+                    <div className="flex items-center gap-1.5">
+                      <span>🚗</span>
+                      <span>KM: <strong>{os.kmTraveled ?? 0} km</strong></span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span>💳</span>
+                      <span>Pedágio: <strong>R$ {Number(os.tollCost ?? 0).toFixed(2)}</strong></span>
+                    </div>
+                    <div className="col-span-2 text-[10px] text-slate-500 flex items-center gap-1 font-sans font-medium mt-0.5">
+                      <Calendar className="h-3 w-3 text-cyan-600" />
+                      <span>{scheduleInfo.date} {scheduleInfo.time ? `às ${scheduleInfo.time}` : ''}</span>
+                    </div>
+                  </div>
+
+                  {/* Repasse Técnico em Destaque */}
+                  <div className="flex items-center justify-between bg-emerald-50/40 border border-emerald-100 p-2.5 rounded-xl">
+                    <span className="text-xs font-bold text-emerald-800 flex items-center gap-1">
+                      <span>💰</span>
+                      <span>Repasse Técnico:</span>
+                    </span>
+                    <span className="text-sm font-black text-emerald-700">
+                      R$ {repasseStr}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Rodapé de Ações (Acessível ao polegar) */}
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                  {/* Botão Principal de Edição / Lançar KM */}
+                  <button
+                    type="button"
+                    onClick={() => setEditingOrder(os)}
+                    className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors flex items-center justify-center space-x-1"
+                  >
+                    <Pencil className="h-3.5 w-3.5 text-slate-500" />
+                    <span>Lançar KM / Editar</span>
+                  </button>
+
+                  {/* Botão Secundário de Finalizar (se não estiver concluído) */}
+                  {os.status !== 'COMPLETED' && os.status !== 'CANCELLED' ? (
+                    <button
+                      type="button"
+                      onClick={() => handleQuickFinalize(os)}
+                      className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-lg transition-all flex items-center justify-center space-x-1 shadow-2xs hover:shadow-sm"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 text-cyan-200" />
+                      <span>Finalizar</span>
+                    </button>
+                  ) : (
+                    <div className="flex-1 py-2 bg-slate-50 border border-slate-100 text-slate-400 text-xs font-semibold text-center rounded-lg">
+                      {os.status === 'COMPLETED' ? '✓ Finalizada' : '✖ Cancelada'}
+                    </div>
+                  )}
+
+                  {/* Ver Detalhes (olho) */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(os)}
+                    className="p-2 rounded-lg text-slate-500 hover:text-cyan-700 hover:bg-cyan-50 transition-colors border border-slate-200"
+                    title="Ver Detalhes completos"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Confirmation Modal for Delete */}
@@ -1333,7 +1563,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
             {/* Modal Footer */}
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-              {currentUser.role !== 'TECHNICIAN' ? (
+              {(currentUser?.role !== 'TECHNICIAN' || selectedOrder?.technicianId === currentUser?.id) ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -1344,7 +1574,7 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                   className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg text-xs transition-colors cursor-pointer"
                 >
                   <Pencil className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>Editar OS / Trocar Técnico</span>
+                  <span>{currentUser?.role === 'TECHNICIAN' ? 'Lançar KM / Editar OS' : 'Editar OS / Trocar Técnico'}</span>
                 </button>
               ) : (
                 <div />
@@ -1369,6 +1599,17 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
           onClose={() => setEditingOrder(null)}
         />
       )}
+
+      {/* Botão Flutuante (FAB) "+ Nova OS" no Mobile */}
+      <button
+        type="button"
+        onClick={onOpenNewOrder}
+        className="block md:hidden fixed bottom-6 right-6 z-50 bg-[#003366] hover:bg-[#002244] text-white font-bold p-3.5 rounded-full shadow-lg flex items-center justify-center space-x-2 transition-all hover:scale-105 active:scale-95"
+        title="Nova OS"
+      >
+        <PlusCircle className="h-5 w-5 text-cyan-400 animate-pulse" />
+        <span className="text-xs">Nova OS</span>
+      </button>
     </div>
   );
 };

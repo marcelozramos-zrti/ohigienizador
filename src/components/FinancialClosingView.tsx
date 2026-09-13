@@ -220,6 +220,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
       (os) =>
         os &&
         (os.status === 'COMPLETED' ||
+          os.status === 'LOST_VISIT' ||
           (os as any).statusOS === 'COMPLETED' ||
           os.status === 'VISITA_PERDIDA' ||
           (os.serviceCategory && os.serviceCategory.toLowerCase().includes('perdida'))) &&
@@ -882,6 +883,8 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     const mobileStatus =
                       os.status === 'COMPLETED'
                         ? 'Concluído em Campo'
+                        : os.status === 'LOST_VISIT'
+                        ? 'Visita Perdida (VP)'
                         : os.status === 'IN_PROGRESS'
                         ? 'Em Rota'
                         : os.status === 'CANCELLED'
@@ -1079,7 +1082,7 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 19. Data Pagto */}
                         <td className="py-2.5 px-3 text-slate-600 border-r border-slate-100 whitespace-nowrap text-center font-mono text-[11px]">
-                          {os.status === 'COMPLETED' && os.paymentDate ? (
+                          {(os.status === 'COMPLETED' || os.status === 'LOST_VISIT') && os.paymentDate ? (
                             <span>
                               {new Date(os.paymentDate).toLocaleDateString('pt-BR')}{' '}
                               <span className="text-[10px] text-slate-400">
@@ -1093,10 +1096,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                         {/* 20. Ações / Quitação */}
                         <td className="py-2 px-3 text-center whitespace-nowrap">
-                          {os.status !== 'COMPLETED' ? (
+                          {os.status !== 'COMPLETED' && os.status !== 'LOST_VISIT' ? (
                             <span
                               className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-400 bg-slate-50 border border-slate-200 rounded-md cursor-not-allowed"
-                              title="Apenas chamados finalizados (COMPLETED) geram repasse ao técnico e podem receber baixa de pagamento"
+                              title="Apenas chamados finalizados (COMPLETED/LOST_VISIT) geram repasse ao técnico e podem receber baixa de pagamento"
                             >
                               <Clock className="w-3 h-3 text-slate-400" />
                               Aguardando Conclusão

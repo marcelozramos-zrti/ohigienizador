@@ -68,7 +68,7 @@ export interface AuditLog {
   details?: string;
 }
 
-export type OsStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type OsStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'LOST_VISIT';
 
 export type MovementType =
   | 'INCOME'
@@ -125,6 +125,8 @@ export interface User {
 
   // Tabela de Preços de Serviços Customizada por Técnico (Preposto / Negociado)
   priceTable?: TechnicianPriceTableItem[];
+  km_rate?: number;
+  kmRate?: number;
 }
 
 export interface TechnicianPriceTableItem {
