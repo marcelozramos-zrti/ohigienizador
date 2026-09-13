@@ -3817,6 +3817,81 @@ async function startServer() {
   });
 
   // 9.3.b Endpoint Inbound para o N8N Criar uma OS (POST /api/n8n/webhook/order-create)
+  function determineBaseServiceFee(serviceCategory: string): number {
+    if (!serviceCategory) return 50.00;
+    const cat = serviceCategory.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+    // Visita Perdida (VP)
+    if (cat.includes('visita perdida') || cat.includes('vp')) {
+      return 40.00;
+    }
+
+    // Instalações de TV
+    if (cat.includes('tv') || cat.includes('televisao') || cat.includes('sup. tv') || cat.includes('suporte tv')) {
+      // TV 99 a 115 / acima de 98
+      if (
+        cat.includes('99') || cat.includes('100') || cat.includes('101') || cat.includes('102') || cat.includes('103') ||
+        cat.includes('104') || cat.includes('105') || cat.includes('106') || cat.includes('107') || cat.includes('108') ||
+        cat.includes('109') || cat.includes('110') || cat.includes('111') || cat.includes('112') || cat.includes('113') ||
+        cat.includes('114') || cat.includes('115') || cat.includes('acima de 98') || cat.includes('acima 98') ||
+        cat.includes('acima de 99') || cat.includes('acima 99')
+      ) {
+        return 150.00;
+      }
+      // TV 50 a 65 / 66 a 98 / acima de 55
+      if (
+        cat.includes('50') || cat.includes('51') || cat.includes('52') || cat.includes('53') || cat.includes('54') ||
+        cat.includes('55') || cat.includes('56') || cat.includes('57') || cat.includes('58') || cat.includes('59') ||
+        cat.includes('60') || cat.includes('61') || cat.includes('62') || cat.includes('63') || cat.includes('64') ||
+        cat.includes('65') || cat.includes('66') || cat.includes('67') || cat.includes('68') || cat.includes('69') ||
+        cat.includes('70') || cat.includes('71') || cat.includes('72') || cat.includes('73') || cat.includes('74') ||
+        cat.includes('75') || cat.includes('76') || cat.includes('77') || cat.includes('78') || cat.includes('79') ||
+        cat.includes('80') || cat.includes('81') || cat.includes('82') || cat.includes('83') || cat.includes('84') ||
+        cat.includes('85') || cat.includes('86') || cat.includes('87') || cat.includes('88') || cat.includes('89') ||
+        cat.includes('90') || cat.includes('91') || cat.includes('92') || cat.includes('93') || cat.includes('94') ||
+        cat.includes('95') || cat.includes('96') || cat.includes('97') || cat.includes('98') || cat.includes('66 a 98') ||
+        cat.includes('acima de 55') || cat.includes('acima 55')
+      ) {
+        return 80.00;
+      }
+      // TV até 49 / até 55
+      if (cat.includes('ate 49') || cat.includes('ate 55') || cat.includes('49') || /ate\s*\d+/.test(cat)) {
+        return 70.00;
+      }
+      return 80.00;
+    }
+
+    // Higienização e Impermeabilização
+    if (cat.includes('higieniz') || cat.includes('impermeab') || cat.includes('sofa') || cat.includes('colchao') || cat.includes('hig')) {
+      if (cat.includes('sofa 3') || cat.includes('3 lugares') || cat.includes('sofa cama') || cat.includes('cama')) {
+        return 140.00;
+      }
+      if (cat.includes('sofa 2') || cat.includes('2 lugares')) {
+        return 120.00;
+      }
+      if (cat.includes('colchao') || cat.includes('casal') || cat.includes('padrao')) {
+        return 130.00;
+      }
+    }
+
+    // Linha Branca & Instalações Diversas
+    if (
+      cat.includes('lava e seca') || cat.includes('lavadora') || cat.includes('secadora') || cat.includes('lava loucas') ||
+      cat.includes('purificador') || cat.includes('depurador') || cat.includes('coifa')
+    ) {
+      return 50.00;
+    }
+    if (cat.includes('refrigerador') || cat.includes('geladeira') || cat.includes('side by side') || cat.includes('syde by syde')) {
+      return 60.00;
+    }
+    if (cat.includes('home theater')) {
+      return 80.00;
+    }
+
+    return 50.00;
+  }
+
+  // 9.3.b Endpoint Inbound para o N8N Criar uma OS (POST /api/n8n/webhook/order-create)
   app.post(['/api/n8n/webhook/order-create', '/api/n8n/orders/create'], async (req, res) => {
     if (!validateN8nAuth(req)) {
       return res.status(401).json({
@@ -3831,102 +3906,122 @@ async function startServer() {
       customerPhone,
       customerCpf,
       serviceCategory,
-      technicianPhone,
+      technicianId: bodyTechId,
+      qraCode,
+      technicianName: bodyTechName,
       city,
       neighborhood,
       addressStreet,
       addressNumber,
+      addressComplement,
       postalCode,
-      status,
+      kmTraveled,
+      tollCost,
+      scheduledAt,
+      scheduledDate,
       observation
     } = req.body || {};
 
     if (!customerName) {
       return res.status(400).json({ success: false, error: 'O nome do cliente (customerName) é obrigatório.' });
     }
+    if (!callNumber) {
+      return res.status(400).json({ success: false, error: 'O número do chamado (callNumber) é obrigatório.' });
+    }
 
     try {
-      let technicianId = null;
-      let technicianName = 'Técnico Não Definido';
-      
-      if (technicianPhone) {
-        const cleanPhone = String(technicianPhone).replace(/\D/g, '');
-        const foundTech = memUsers.find(u => {
-          const uPhone = (u.phone || '').replace(/\D/g, '');
-          return uPhone.length >= 8 && (uPhone.endsWith(cleanPhone.slice(-8)) || cleanPhone.endsWith(uPhone.slice(-8)));
+      const db = getDbPool();
+
+      // Trava de Duplicidade em Andamento
+      const [existing]: any = await db.query(
+        "SELECT id, status FROM service_orders WHERE call_number = ? AND status = 'IN_PROGRESS' LIMIT 1",
+        [String(callNumber).trim()]
+      );
+      if (existing && existing.length > 0) {
+        return res.status(409).json({
+          success: false,
+          error: "Ordem de serviço já cadastrada e em andamento."
         });
-        if (foundTech) {
-          technicianId = foundTech.id;
-          technicianName = foundTech.name;
-        } else {
-          const defaultTech = memUsers.find(u => u.status === 'ACTIVE' && u.role === 'TECHNICIAN');
-          if (defaultTech) {
-            technicianId = defaultTech.id;
-            technicianName = defaultTech.name;
+      }
+
+      // 1. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
+      let technicianId = null;
+      let technicianName = bodyTechName || 'Técnico Não Definido';
+      let km_rate_applied = 0.75;
+
+      if (bodyTechId) {
+        const [techRows]: any = await db.query(
+          "SELECT id, name, km_rate FROM users WHERE id = ? LIMIT 1",
+          [bodyTechId]
+        );
+        if (techRows && techRows.length > 0) {
+          technicianId = techRows[0].id;
+          technicianName = techRows[0].name;
+          km_rate_applied = techRows[0].km_rate ? Number(techRows[0].km_rate) : 0.75;
+        }
+      } else if (qraCode || bodyTechName) {
+        let techFound = null;
+
+        if (qraCode) {
+          const [qraRows]: any = await db.query(
+            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND (qra_code = ? OR qra = ? OR LOWER(name) = LOWER(?)) LIMIT 1",
+            [qraCode, qraCode, qraCode]
+          );
+          if (qraRows && qraRows.length > 0) {
+            techFound = qraRows[0];
           }
+        }
+
+        if (!techFound && bodyTechName) {
+          const [nameRows]: any = await db.query(
+            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND LOWER(name) LIKE LOWER(?) LIMIT 1",
+            [`%${bodyTechName}%`]
+          );
+          if (nameRows && nameRows.length > 0) {
+            techFound = nameRows[0];
+          }
+        }
+
+        if (techFound) {
+          technicianId = techFound.id;
+          technicianName = techFound.name;
+          km_rate_applied = techFound.km_rate ? Number(techFound.km_rate) : 0.75;
+        } else {
+          technicianId = null;
+          technicianName = bodyTechName || 'Técnico Não Definido';
+          km_rate_applied = 0.75;
         }
       } else {
         const defaultTech = memUsers.find(u => u.status === 'ACTIVE' && u.role === 'TECHNICIAN');
         if (defaultTech) {
           technicianId = defaultTech.id;
           technicianName = defaultTech.name;
+          km_rate_applied = defaultTech.km_rate ? Number(defaultTech.km_rate) : 0.75;
         }
       }
 
-      const osDate = new Date();
-      let normalizedCallNumber = callNumber ? String(callNumber).trim() : '';
-      const currentYear = osDate.getFullYear();
-      
-      if (!normalizedCallNumber) {
-        normalizedCallNumber = `PS-${currentYear}-${Math.floor(Math.random() * 9000 + 1000)}`;
-      } else if (/^\d{4,6}$/.test(normalizedCallNumber)) {
-        normalizedCallNumber = `PS-${currentYear}-${normalizedCallNumber}`;
-      } else if (/^\d{4}[\-\s]\d{4,6}$/.test(normalizedCallNumber)) {
-        normalizedCallNumber = `PS-${normalizedCallNumber.replace(/\s/g, '-')}`;
+      // 2. DETERMINAÇÃO DO REPASSE BASE CONFORME SERVIÇO / ESCOPO
+      let baseServiceFee = Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
+      if (!baseServiceFee) {
+        baseServiceFee = determineBaseServiceFee(serviceCategory);
       }
-      // Preserva prefixos originais se já existirem
-      
-      const safeIdSuffix = normalizedCallNumber.toLowerCase().replace(/[^a-z0-9\-]/g, '');
-      const newId = `os-${safeIdSuffix}-${Date.now()}`;
-      
-      const newOrder: any = {
-        id: newId,
-        callNumber: normalizedCallNumber,
-        customerName: customerName,
-        customerPhone: customerPhone || '',
-        customerCpf: customerCpf || '',
-        serviceCategory: serviceCategory || 'Higienização / Instalação',
-        technicianId: technicianId,
-        technicianName: technicianName,
-        city: city || 'São Paulo',
-        neighborhood: neighborhood || 'A definir',
-        addressStreet: addressStreet || 'A definir',
-        addressNumber: addressNumber || 'S/N',
-        status: status || 'IN_PROGRESS',
-        observation: observation || 'Aberta via WhatsApp pelo técnico',
-        scheduledDate: osDate.toISOString(),
-        createdAt: osDate.toISOString(),
-        kmTraveled: 0,
-        kmCost: 0,
-        tollCost: 0,
-        supportCost: 0,
-        totalCost: 0,
-        totalTechnicianGross: 0,
-        baseServiceFee: 0,
-        faturamentoPorto: 0,
-        startedAt: status === 'IN_PROGRESS' || status === 'COMPLETED' ? osDate.toISOString() : null,
-      };
 
-      const calculated = await calculateOrderFinance(newOrder);
-      Object.assign(newOrder, calculated);
+      // 3. CÁLCULO FINANCEIRO COMPLETO (SNAPSHOT NO CADASTRO)
+      const parsedKm = Number(kmTraveled || 0);
+      const parsedToll = Number(tollCost || 0);
+      const kmPayout = Number((parsedKm * km_rate_applied).toFixed(2));
+      const totalTechnicianGross = Number((baseServiceFee + kmPayout + parsedToll).toFixed(2));
 
-      const formatDbDate = (iso: string | null) => {
-        if (!iso) return null;
-        const d = new Date(iso);
+      const osDate = new Date(scheduledAt || scheduledDate || new Date());
+      const formatDbDate = (d: Date | null) => {
+        if (!d) return null;
         return !isNaN(d.getTime()) ? d.toISOString().slice(0, 19).replace('T', ' ') : null;
       };
 
-      const db = getDbPool();
+      const safeIdSuffix = String(callNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
+      const newId = `os-${safeIdSuffix}-${Date.now()}`;
+
+      // 4. GRAVAÇÃO NO MARIADB (INSERT COM TRAVA DE DUPLICIDADE)
       await db.execute(
         `INSERT INTO service_orders (
           id, call_number, porto_seguro_protocol, service_category, base_service_fee,
@@ -3937,39 +4032,67 @@ async function startServer() {
           total_technician_gross, faturamento_porto, km_payout, kmPayout
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          newOrder.id,
-          newOrder.callNumber,
-          '',                                            // porto_seguro_protocol
-          newOrder.serviceCategory || 'Higienização / Instalação',
-          0,                                             // base_service_fee
-          newOrder.customerName,
-          customerCpf || '',                             // customer_cpf
-          customerPhone || '',                           // customer_phone
-          city || 'São Paulo',                           // city
-          'SP',                                          // uf
-          neighborhood || 'A definir',                   // neighborhood
-          addressStreet || 'A definir',                  // address_street
-          addressNumber || 'S/N',                        // address_number
-          '',                                            // address_complement
-          postalCode || '',                              // postal_code
-          newOrder.technicianId,
-          newOrder.status || 'IN_PROGRESS',
-          formatDbDate(newOrder.scheduledDate),
-          formatDbDate(newOrder.startedAt),
-          null,                                          // completed_at
-          newOrder.kmTraveled || 0,
-          newOrder.kmRateApplied || 0.75,
-          newOrder.kmTotalCost || 0,
-          newOrder.tollCost || 0,
-          newOrder.supportCost || 0,
-          newOrder.totalTechnicianGross || 0,
-          newOrder.faturamentoPorto || 0,
-          newOrder.kmPayout || 0,
-          newOrder.kmPayout || 0
+          newId,
+          String(callNumber).trim(),
+          '',
+          serviceCategory || 'Higienização / Instalação',
+          baseServiceFee,
+          customerName,
+          customerCpf || '',
+          customerPhone || '',
+          city || 'São Paulo',
+          req.body.uf || 'SP',
+          neighborhood || 'A definir',
+          addressStreet || 'A definir',
+          addressNumber || 'S/N',
+          addressComplement || '',
+          postalCode || '',
+          technicianId,
+          'IN_PROGRESS',
+          formatDbDate(osDate),
+          formatDbDate(osDate),
+          null,
+          parsedKm,
+          km_rate_applied,
+          kmPayout,
+          parsedToll,
+          0,
+          totalTechnicianGross,
+          totalTechnicianGross,
+          kmPayout,
+          kmPayout
         ]
       );
 
-      memOrders.unshift(newOrder);
+      // Sincronizar memória volátil
+      const newOrderMem: any = {
+        id: newId,
+        callNumber: String(callNumber).trim(),
+        customerName: customerName,
+        customerPhone: customerPhone || '',
+        customerCpf: customerCpf || '',
+        serviceCategory: serviceCategory || 'Higienização / Instalação',
+        technicianId: technicianId,
+        technicianName: technicianName,
+        city: city || 'São Paulo',
+        neighborhood: neighborhood || 'A definir',
+        addressStreet: addressStreet || 'A definir',
+        addressNumber: addressNumber || 'S/N',
+        status: 'IN_PROGRESS',
+        observation: observation || 'Inserida automaticamente via n8n',
+        scheduledDate: osDate.toISOString(),
+        createdAt: new Date().toISOString(),
+        kmTraveled: parsedKm,
+        kmCost: kmPayout,
+        tollCost: parsedToll,
+        supportCost: 0,
+        totalCost: totalTechnicianGross,
+        totalTechnicianGross,
+        baseServiceFee,
+        faturamentoPorto: totalTechnicianGross,
+        startedAt: osDate.toISOString(),
+      };
+      memOrders.unshift(newOrderMem);
 
       await recordAudit({
         userId: 'n8n-bot',
@@ -3978,22 +4101,40 @@ async function startServer() {
         ipAddress: req.ip,
         module: 'SERVICE_ORDERS',
         action: 'OS_CREATE',
-        affectedRecordId: newOrder.id,
+        affectedRecordId: newId,
         affectedRecordType: 'service_order',
         result: 'SUCCESS',
-        details: `OS ${newOrder.callNumber} criada via N8N/WhatsApp. Cliente: ${newOrder.customerName}, Técnico: ${technicianName}`,
+        details: `OS ${callNumber} criada via N8N/Fast-Track. Cliente: ${customerName}, Técnico: ${technicianName}`,
       });
 
-      console.log(`[N8N Webhook] OS ${newOrder.callNumber} (ID: ${newOrder.id}) criada com sucesso no MariaDB.`);
+      console.log(`[N8N Webhook] OS ${callNumber} (ID: ${newId}) criada com sucesso no MariaDB.`);
 
+      // 5. ASSINATURA DE RETORNO JSON PADRONIZADA
       res.json({
         success: true,
-        message: 'OS criada com sucesso',
-        data: newOrder
+        data: {
+          id: newId,
+          callNumber: String(callNumber).trim(),
+          customerName: customerName,
+          serviceCategory: serviceCategory || 'Higienização / Instalação',
+          technicianId: technicianId,
+          technicianName: technicianName,
+          baseServiceFee: Number(baseServiceFee.toFixed(2)),
+          kmRateApplied: km_rate_applied,
+          kmTraveled: parsedKm,
+          tollCost: parsedToll,
+          totalTechnicianGross: Number(totalTechnicianGross.toFixed(2)),
+          addressStreet: addressStreet || 'A definir',
+          addressNumber: addressNumber || 'S/N',
+          neighborhood: neighborhood || 'A definir',
+          city: city || 'São Paulo',
+          status: 'IN_PROGRESS',
+          scheduledDate: formatDbDate(osDate)
+        }
       });
 
     } catch (err: any) {
-      console.error(`[N8N Webhook ERROR] Falha ao criar OS:`, err?.message || err);
+      console.error(`[N8N Webhook ERROR] Falha ao criar OS via n8n:`, err?.message || err);
       res.status(500).json({ success: false, error: 'Falha ao criar OS no banco de dados: ' + (err?.message || JSON.stringify(err)) });
     }
   });
