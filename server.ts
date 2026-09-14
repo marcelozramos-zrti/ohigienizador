@@ -4139,6 +4139,136 @@ async function startServer() {
     }
   });
 
+  // 9.2.c Endpoint Inbound para Atualização Rápida de Quilometragem (/api/n8n/webhook/order-update-km)
+  app.post(['/api/n8n/webhook/order-update-km', '/api/n8n/orders/update-km'], async (req, res) => {
+    if (!validateN8nAuth(req)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Não autorizado: Token/API Key inválida.',
+      });
+    }
+
+    const { callNumberPartial, kmTraveled, tollCost } = req.body || {};
+
+    if (!callNumberPartial) {
+      return res.status(400).json({ success: false, error: 'O parâmetro callNumberPartial é obrigatório.' });
+    }
+    if (kmTraveled === undefined || kmTraveled === null) {
+      return res.status(400).json({ success: false, error: 'O parâmetro kmTraveled é obrigatório.' });
+    }
+
+    try {
+      const db = getDbPool();
+      const cleanPartial = String(callNumberPartial).trim();
+
+      // Busca resiliente por aproximação
+      const [rows]: any = await db.query(
+        "SELECT * FROM service_orders WHERE call_number LIKE CONCAT('%', ?, '%') ORDER BY id DESC LIMIT 1",
+        [cleanPartial]
+      );
+
+      if (!rows || rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Ordem de serviço não localizada com o número informado."
+        });
+      }
+
+      const order = rows[0];
+
+      // Determinação da taxa de KM do técnico associado
+      let kmRate = 0.75;
+      let techName = order.technician_name || 'Técnico Não Definido';
+
+      if (order.technician_id) {
+        const [techRows]: any = await db.query(
+          "SELECT id, name, km_rate, kmRate FROM users WHERE id = ? LIMIT 1",
+          [order.technician_id]
+        );
+        if (techRows && techRows.length > 0) {
+          const tech = techRows[0];
+          techName = tech.name || techName;
+          kmRate = tech.km_rate !== undefined && tech.km_rate !== null
+            ? Number(tech.km_rate)
+            : (tech.kmRate !== undefined && tech.kmRate !== null ? Number(tech.kmRate) : 0.75);
+        }
+      }
+
+      // Regra de precificação especial para Bruna ou taxa cadastrada como 1.41
+      const isBruna = techName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes('bruna');
+      if (isBruna || kmRate === 1.41) {
+        kmRate = 1.41;
+      }
+
+      // Recálculo financeiro completo
+      const parsedKm = Number(kmTraveled);
+      const kmPayout = Number((parsedKm * kmRate).toFixed(2));
+      const tollAmount = tollCost !== undefined ? Number(tollCost) : Number(order.toll_cost || 0);
+      const baseFee = Number(order.base_service_fee || 0);
+      const totalTechnicianGross = Number((baseFee + kmPayout + tollAmount).toFixed(2));
+
+      // Persistência atualizada no MariaDB
+      await db.execute(
+        `UPDATE service_orders 
+         SET km_traveled = ?, km_rate_applied = ?, toll_cost = ?, total_technician_gross = ?, updated_at = NOW() 
+         WHERE id = ?`,
+        [parsedKm, kmRate, tollAmount, totalTechnicianGross, order.id]
+      );
+
+      // Sincronização do cache em memória volátil
+      const memIndex = memOrders.findIndex((o: any) => String(o.id) === String(order.id));
+      if (memIndex !== -1) {
+        memOrders[memIndex].kmTraveled = parsedKm;
+        memOrders[memIndex].kmRateApplied = kmRate;
+        memOrders[memIndex].kmTotalCost = kmPayout;
+        memOrders[memIndex].kmPayout = kmPayout;
+        memOrders[memIndex].tollCost = tollAmount;
+        memOrders[memIndex].totalTechnicianGross = totalTechnicianGross;
+        memOrders[memIndex].totalCost = totalTechnicianGross;
+        memOrders[memIndex].faturamentoPorto = totalTechnicianGross;
+      }
+
+      // Registro no log de auditoria operacional
+      await recordAudit({
+        userId: 'n8n-bot',
+        userName: 'N8N WhatsApp Bot',
+        userRole: 'OPERATIONAL',
+        ipAddress: req.ip,
+        module: 'SERVICE_ORDERS',
+        action: 'OS_UPDATE',
+        affectedRecordId: order.id,
+        affectedRecordType: 'service_order',
+        result: 'SUCCESS',
+        details: `Quilometragem atualizada de forma resiliente via WhatsApp: ${parsedKm}km (Técnico: ${techName}, Repasse KM: R$ ${kmPayout}).`,
+      });
+
+      console.log(`[N8N Webhook] OS ${order.call_number} atualizada via update-km (KM: ${parsedKm}, Gross: ${totalTechnicianGross}).`);
+
+      // Assinatura JSON de retorno estruturado
+      res.json({
+        success: true,
+        data: {
+          id: order.id,
+          callNumber: order.call_number,
+          customerName: order.customer_name,
+          technicianName: techName,
+          serviceCategory: order.service_category,
+          baseServiceFee: Number(baseFee.toFixed(2)),
+          kmRateApplied: kmRate,
+          kmTraveled: parsedKm,
+          kmPayout: kmPayout,
+          tollCost: Number(tollAmount.toFixed(2)),
+          totalTechnicianGross: Number(totalTechnicianGross.toFixed(2)),
+          status: order.status
+        }
+      });
+
+    } catch (err: any) {
+      console.error(`[N8N Webhook ERROR] Falha ao atualizar quilometragem de OS via n8n:`, err?.message || err);
+      res.status(500).json({ success: false, error: 'Falha interna ao atualizar quilometragem de OS: ' + (err?.message || JSON.stringify(err)) });
+    }
+  });
+
   // 9.3 Endpoint Inbound para o N8N Atualizar ou Concluir uma OS (POST /api/n8n/webhook/order-update)
   app.post(['/api/n8n/webhook/order-update', '/api/n8n/orders/update'], async (req, res) => {
     if (!validateN8nAuth(req)) {
