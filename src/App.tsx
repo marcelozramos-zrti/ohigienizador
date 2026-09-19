@@ -12,6 +12,7 @@ import { MobileAppSimulator } from './components/MobileAppSimulator';
 import { SettingsView } from './components/SettingsView';
 import { AuditLogsView } from './components/AuditLogsView';
 import { DataImportView } from './components/DataImportView';
+import { PriceTablesView } from './components/PriceTablesView';
 import { NewServiceOrderModal } from './components/NewServiceOrderModal';
 import { LoginView } from './components/LoginView';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
@@ -96,6 +97,8 @@ const MainLayout: React.FC = () => {
             {activeTab === 'finance' && (
               <FinancialClosingView onOpenNewAdvance={() => setShowNewAdvanceModal(true)} />
             )}
+
+            {activeTab === 'prices' && <PriceTablesView />}
 
             {activeTab === 'stock' && <InventoryView />}
 

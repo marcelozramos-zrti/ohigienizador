@@ -97,6 +97,178 @@ export const DataImportView: React.FC = () => {
     error?: string;
   } | null>(null);
 
+  const [activeSubTab, setActiveSubTab] = useState<'operacional' | 'tabela_precos' | 'estoque'>('operacional');
+  const [portoPrices, setPortoPrices] = useState<any[]>([]);
+  const [portoPricesLoading, setPortoPricesLoading] = useState<boolean>(false);
+  const [portoPricesEffectiveDate, setPortoPricesEffectiveDate] = useState<string>('2026-07-29');
+  const [portoPriceUploading, setPortoPriceUploading] = useState<boolean>(false);
+  const [portoPricePreviewRows, setPortoPricePreviewRows] = useState<any[]>([]);
+  const [isPortoPreviewing, setIsPortoPreviewing] = useState<boolean>(false);
+  const [portoPriceEffectiveDatePreview, setPortoPriceEffectiveDatePreview] = useState<string>('2026-07-29');
+  const [portoPriceSelectedFile, setPortoPriceSelectedFile] = useState<File | null>(null);
+
+  const formatIsoDateToBr = (isoStr: string) => {
+    if (!isoStr) return '';
+    const dateOnly = isoStr.split('T')[0];
+    const parts = dateOnly.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`; // "2026-07-29" -> "29/07/2026"
+    }
+    const slashParts = dateOnly.split('/');
+    if (slashParts.length === 3) {
+      return dateOnly; // Já está formatado
+    }
+    return isoStr;
+  };
+
+  const fetchPortoPrices = async () => {
+    setPortoPricesLoading(true);
+    try {
+      const response = await fetch('/api/admin/porto-prices');
+      const data = await response.json();
+      if (data.success) {
+        setPortoPrices(data.data || []);
+        if (data.data && data.data.length > 0) {
+          setPortoPricesEffectiveDate(data.data[0].effective_date || '2026-07-29');
+        }
+      }
+    } catch (err) {
+      console.error("[Porto Prices Fetch Error]", err);
+    } finally {
+      setPortoPricesLoading(false);
+    }
+  };
+
+  const handlePreviewPortoPrices = async (file: File) => {
+    setPortoPriceUploading(true);
+    setPortoPriceSelectedFile(file);
+    addLog('INFO', `Lendo planilha de preços Porto Seguro: ${file.name}`);
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      
+      const sheetName = workbook.SheetNames.find(name => 
+        name.toLowerCase().includes('tabela de precos') || 
+        name.toLowerCase().includes('precos') || 
+        name.toLowerCase().includes('porto')
+      ) || workbook.SheetNames[0];
+      
+      const worksheet = workbook.Sheets[sheetName];
+      if (!worksheet) {
+        addToast('Aba Não Encontrada', 'Aba "Tabela de Preços" não foi encontrada no arquivo.', 'error');
+        addLog('ERROR', 'Aba "Tabela de Preços" não foi encontrada no arquivo.');
+        return;
+      }
+
+      const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+      if (rows.length < 5) {
+        addToast('Arquivo Muito Curto', 'A planilha de preços está vazia ou mal estruturada (menos de 5 linhas).', 'error');
+        addLog('ERROR', 'A planilha de preços está vazia ou mal estruturada.');
+        return;
+      }
+
+      // Extrair a data de vigência preservando a string original (ex: regex /(\d{2}\/\d{2}\/\d{4})/ na célula A1 -> "29/07/2026")
+      let effectiveDateStr = '29/07/2026'; 
+      for (let i = 0; i < Math.min(rows.length, 15); i++) {
+        const rowText = rows[i].map((cell: any) => String(cell || '')).join(' ');
+        const match = rowText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (match) {
+          effectiveDateStr = match[0]; // e.g. "29/07/2026"
+          break;
+        }
+      }
+
+      setPortoPriceEffectiveDatePreview(effectiveDateStr);
+
+      const parsedPrices: any[] = [];
+      for (let i = 4; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length < 2) continue;
+
+        const category = String(row[0] || '').trim();
+        const serviceName = String(row[1] || '').trim();
+        if (!category || !serviceName || serviceName.toLowerCase().includes('serviço') || category.toLowerCase().includes('categoria')) {
+          continue; 
+        }
+
+        const completedPrice = Number(row[2]) || 0;
+        const additionalPrice = Number(row[3]) || 0;
+
+        // Coluna E (índice 4): additional_item_price. Converter vazios ou hífens para 0.00.
+        const rawAdditionalItem = row[4];
+        let additionalItemPrice = 0;
+        if (rawAdditionalItem !== undefined && rawAdditionalItem !== null) {
+          const cleanStr = String(rawAdditionalItem).replace(/[\s\-R$]/g, '').replace(',', '.').trim();
+          additionalItemPrice = cleanStr === '' || cleanStr === '-' ? 0 : (Number(cleanStr) || 0);
+        }
+
+        parsedPrices.push({
+          category,
+          service_name: serviceName,
+          completed_price: completedPrice,
+          additional_price: additionalPrice,
+          additional_item_price: additionalItemPrice
+        });
+      }
+
+      setPortoPricePreviewRows(parsedPrices);
+      setIsPortoPreviewing(true);
+      addLog('SUCCESS', `Planilha de preços Porto Seguro processada! ${parsedPrices.length} serviços encontrados para vigência ${effectiveDateStr}.`);
+      addToast(
+        'Planilha Processada',
+        `Carregados ${parsedPrices.length} itens para a pré-visualização.`,
+        'success'
+      );
+    } catch (err: any) {
+      addLog('ERROR', `Erro ao analisar planilha de preços Porto Seguro: ${err.message}`);
+      addToast('Erro ao Analisar', `Não foi possível interpretar a planilha Excel: ${err.message}`, 'error');
+    } finally {
+      setPortoPriceUploading(false);
+    }
+  };
+
+  const handleConfirmPortoPrices = async () => {
+    setPortoPriceUploading(true);
+    addLog('INFO', `Gravando ${portoPricePreviewRows.length} itens de preço no servidor...`);
+    try {
+      const response = await fetch('/api/admin/import/porto-prices/confirm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prices: portoPricePreviewRows,
+          effectiveDate: portoPriceEffectiveDatePreview,
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        addLog('SUCCESS', `Tabela de Preços gravada com sucesso! Novas: ${data.data?.importedCount || 0}, Atualizadas: ${data.data?.updatedCount || 0}.`);
+        addToast(
+          'Tabela Gravada',
+          `Tabela de Preços gravada com sucesso! Novas: ${data.data?.importedCount || 0}, Atualizadas: ${data.data?.updatedCount || 0}.`,
+          'success'
+        );
+        setIsPortoPreviewing(false);
+        setPortoPricePreviewRows([]);
+        setPortoPriceSelectedFile(null);
+        fetchPortoPrices();
+      } else {
+        addLog('ERROR', `Erro ao gravar tabela: ${data.error || data.message || 'Erro desconhecido'}`);
+        addToast('Erro ao Gravar', data.error || data.message || 'Ocorreu um erro ao salvar a tabela de preços.', 'error');
+      }
+    } catch (err: any) {
+      addLog('ERROR', `Erro de rede ao salvar tabela de preços: ${err.message}`);
+      addToast('Erro de Rede', `Não foi possível comunicar com o servidor: ${err.message}`, 'error');
+    } finally {
+      setPortoPriceUploading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPortoPrices();
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addLog = (level: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR', message: string) => {
@@ -688,7 +860,53 @@ export const DataImportView: React.FC = () => {
 
   return (
     <div id="data-import-view" className="space-y-6 max-w-7xl mx-auto pb-12">
-      {/* Top Action Bar */}
+      {/* Cabeçalho da Central de Importações */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
+        <div>
+          <h1 className="text-xl font-extrabold text-[#003366] tracking-tight">
+            Central de Importações Administrativa
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Gestão consolidada de fechamentos Porto Seguro, tabelas de preço de serviços contratuais e controle futuro de insumos.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
+          <button
+            onClick={() => setActiveSubTab('operacional')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeSubTab === 'operacional'
+                ? 'bg-[#003366] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Fechamento Operacional
+          </button>
+          <button
+            onClick={() => setActiveSubTab('tabela_precos')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeSubTab === 'tabela_precos'
+                ? 'bg-[#003366] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Tabela de Preços Porto
+          </button>
+          <button
+            onClick={() => setActiveSubTab('estoque')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeSubTab === 'estoque'
+                ? 'bg-[#003366] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Estoque & Insumos
+          </button>
+        </div>
+      </div>
+
+      {activeSubTab === 'operacional' && (
+        <div className="space-y-6">
+          {/* Top Action Bar */}
       <div className="flex items-center justify-end gap-3">
         <button
           id="btn-download-template"
@@ -1306,6 +1524,280 @@ export const DataImportView: React.FC = () => {
           ))}
         </div>
       </div>
+        </div>
+      )}
+
+      {activeSubTab === 'tabela_precos' && (
+        <div className="space-y-6">
+          {isPortoPreviewing && portoPricePreviewRows.length > 0 ? (
+            <div className="space-y-4 animate-fadeIn">
+              {/* Header da Prévia de Preços */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-200 rounded-full text-xs font-black uppercase tracking-wider">
+                      Modo Pré-Visualização
+                    </span>
+                    <h3 className="text-lg font-black text-slate-900">
+                      Novas Regras Contratuais ({portoPricePreviewRows.length} itens encontrados)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Arquivo: <strong className="text-slate-700">{portoPriceSelectedFile?.name}</strong> &bull; Vigência Detectada na Planilha: <strong className="text-blue-700">{portoPriceEffectiveDatePreview || 'Não Identificada'}</strong>
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Revise os preços abaixo. Ao clicar em confirmar, o sistema atualizará o catálogo contratual e reajustará os repasses futuros automaticamente.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={portoPriceUploading}
+                    onClick={() => {
+                      setIsPortoPreviewing(false);
+                      setPortoPricePreviewRows([]);
+                      setPortoPriceSelectedFile(null);
+                    }}
+                    className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+                  >
+                    Descartar
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={portoPriceUploading}
+                    onClick={handleConfirmPortoPrices}
+                    className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-black rounded-lg text-xs flex items-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    {portoPriceUploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                    <span>{portoPriceUploading ? 'Gravando no Servidor...' : 'Confirmar e Gravar Tabela'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabela de Preview de Preços */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+                <div className="p-4 border-b border-slate-100">
+                  <h4 className="text-xs font-extrabold uppercase text-slate-500 tracking-wider">
+                    Lista de Novos Valores Contratuais a Serem Gravados
+                  </h4>
+                </div>
+                <div className="overflow-x-auto max-h-[500px]">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-[10px] border-b border-slate-100 sticky top-0 z-10">
+                      <tr>
+                        <th className="py-3 px-4">CATEGORIA</th>
+                        <th className="py-3 px-4">NOME DO SERVIÇO</th>
+                        <th className="py-3 px-4 text-right">CONCLUÍDO (OS NORMAL)</th>
+                        <th className="py-3 px-4 text-right">VENDA NO LOCAL (NOVO SERVIÇO)</th>
+                        <th className="py-3 px-4 text-right">ITEM ADICIONAL (ALMOFADA/ASSENTO)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {portoPricePreviewRows.map((item, idx) => {
+                        const existingMatch = portoPrices.find(
+                          (p) => p.category.toLowerCase() === item.category.toLowerCase() && p.service_name.toLowerCase() === item.service_name.toLowerCase()
+                        );
+                        const isNew = !existingMatch;
+                        const priceChanged = existingMatch && (
+                          Number(existingMatch.completed_price) !== Number(item.completed_price) || 
+                          Number(existingMatch.additional_price) !== Number(item.additional_price) ||
+                          Number(existingMatch.additional_item_price || 0) !== Number(item.additional_item_price || 0)
+                        );
+
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-3 px-4 font-bold text-slate-800">
+                              <div className="flex items-center gap-2">
+                                <span>{item.category}</span>
+                                {isNew && (
+                                  <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold text-[8px] uppercase">Novo</span>
+                                )}
+                                {priceChanged && (
+                                  <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-bold text-[8px] uppercase">Alterado</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-slate-600">{item.service_name}</td>
+                            <td className="py-3 px-4 text-right">
+                              <span className="inline-flex items-center px-2 py-1 rounded bg-emerald-50 text-emerald-800 font-extrabold font-mono text-xs border border-emerald-100 shadow-2xs">
+                                R$ {Number(item.completed_price).toFixed(2)}
+                              </span>
+                              {existingMatch && Number(existingMatch.completed_price) !== Number(item.completed_price) && (
+                                <span className="block text-[10px] text-slate-400 line-through">De: R$ {Number(existingMatch.completed_price).toFixed(2)}</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <span className="text-slate-500 font-mono">R$ {Number(item.additional_price).toFixed(2)}</span>
+                              {existingMatch && Number(existingMatch.additional_price) !== Number(item.additional_price) && (
+                                <span className="block text-[10px] text-slate-400 line-through">De: R$ {Number(existingMatch.additional_price).toFixed(2)}</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {Number(item.additional_item_price || 0) === 0 ? (
+                                <span className="text-slate-300 font-bold font-mono">—</span>
+                              ) : (
+                                <span className="text-slate-600 font-mono font-bold">R$ {Number(item.additional_item_price).toFixed(2)}</span>
+                              )}
+                              {existingMatch && Number(existingMatch.additional_item_price || 0) !== Number(item.additional_item_price || 0) && (
+                                <span className="block text-[10px] text-slate-400 line-through">De: R$ {Number(existingMatch.additional_item_price || 0).toFixed(2)}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Card de Resumo da Tabela de Preços */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-4">
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-600">Vigência Ativa</span>
+                    <h3 className="text-2xl font-black text-slate-900 mt-1">
+                      {portoPricesEffectiveDate ? formatIsoDateToBr(portoPricesEffectiveDate) : '29/07/2026'}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Data em que a tabela contratual oficial de repasse e faturamento entrou em vigência.
+                    </p>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500">Serviços Catalogados</p>
+                      <p className="text-xl font-bold text-slate-800 mt-0.5">{portoPrices.length} itens</p>
+                    </div>
+                    <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 rounded-full text-xs font-bold">
+                      Sincronizado via BD
+                    </span>
+                  </div>
+                </div>
+
+                {/* Upload de Nova Tabela Contratual */}
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-4">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <UploadCloud className="w-5 h-5 text-blue-600" />
+                    Subir Nova Tabela Contratual Porto Seguro
+                  </h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Carregue uma planilha Excel (.xlsx) contendo as novas colunas e valores contratuais. O sistema processará as palavras-chave e apresentará uma prévia de formatação antes de aplicar as mudanças.
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="file"
+                      id="porto-price-file-upload"
+                      accept=".xlsx, .xls"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          handlePreviewPortoPrices(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={portoPriceUploading}
+                      onClick={() => document.getElementById('porto-price-file-upload')?.click()}
+                      className="px-4 py-2.5 bg-[#003366] hover:bg-[#00264d] text-white font-bold rounded-lg text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {portoPriceUploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                      <span>{portoPriceUploading ? 'Lendo Arquivo...' : 'Subir Nova Tabela'}</span>
+                    </button>
+                    <span className="text-[11px] text-slate-400">Suporta arquivos Excel .xlsx oficiais</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela de Preços Catalogada */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Lista de Preços de Serviços Contratuais
+                  </h3>
+                  <span className="px-2.5 py-1 bg-blue-100 text-blue-900 rounded-full text-xs font-bold">
+                    Tabela Ativa
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  {portoPricesLoading ? (
+                    <div className="p-12 text-center text-xs text-slate-500 flex flex-col items-center gap-3">
+                      <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
+                      <span>Carregando itens contratuais...</span>
+                    </div>
+                  ) : portoPrices.length === 0 ? (
+                    <div className="p-12 text-center text-xs text-slate-500">
+                      Nenhum preço de serviço cadastrado no banco de dados.
+                    </div>
+                  ) : (
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-[10px] border-b border-slate-100">
+                        <tr>
+                          <th className="py-3 px-4">Categoria</th>
+                          <th className="py-3 px-4">Nome do Serviço</th>
+                          <th className="py-3 px-4">Palavras-chave</th>
+                          <th className="py-3 px-4 text-right">Preço Concluído</th>
+                          <th className="py-3 px-4 text-right">Preço Adicional</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {portoPrices.map((item, idx) => (
+                          <tr key={item.id || idx} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-3 px-4 font-bold text-slate-800">{item.category}</td>
+                            <td className="py-3 px-4 text-slate-600">{item.service_name}</td>
+                            <td className="py-3 px-4 font-mono text-[10px] text-slate-500">{item.search_keywords || 'N/A'}</td>
+                            <td className="py-3 px-4 text-right font-bold text-emerald-700">R$ {Number(item.completed_price).toFixed(2)}</td>
+                            <td className="py-3 px-4 text-right text-slate-500">R$ {Number(item.additional_price || 0).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeSubTab === 'estoque' && (
+        <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-xs space-y-6 text-center max-w-2xl mx-auto my-6 animate-fadeIn">
+          <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+            <Layers className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <div className="inline-block px-3 py-1 bg-amber-100 text-amber-900 border border-amber-200 rounded-full font-extrabold text-[11px] uppercase tracking-wider">
+              Planejado / Futuro
+            </div>
+            <h3 className="text-xl font-extrabold text-slate-900">
+              Controle de Estoque & Insumos Integrado
+            </h3>
+            <p className="text-xs text-slate-500 leading-relaxed max-w-md mx-auto">
+              Este módulo gerenciará o inventário físico de insumos em tempo real. No momento, o sistema já realiza a baixa automática estrutural do item de estoque padrão <code className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-amber-700">SUP-TV-44-70</code> (Custo: R$ 28.00) quando um chamado da Porto Seguro é registrado contendo a inclusão de suporte fixo de TV.
+            </p>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-left">
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+              <span className="text-[10px] font-bold text-slate-400 block uppercase">Item Monitorado</span>
+              <span className="text-xs font-extrabold text-slate-800">SUP-TV-44-70</span>
+              <span className="text-[11px] text-slate-500 block mt-0.5">Suporte de TV Fixo (44" a 70")</span>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+              <span className="text-[10px] font-bold text-slate-400 block uppercase">Custo Unitário</span>
+              <span className="text-xs font-extrabold text-emerald-700 font-mono">R$ 28,00</span>
+              <span className="text-[11px] text-slate-500 block mt-0.5">Debitador automático no repasse</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

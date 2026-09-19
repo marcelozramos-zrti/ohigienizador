@@ -47,6 +47,8 @@ export type AuditAction =
   | 'DB_CONFIG_UPDATE'
   | 'DATA_EXPORT'
   | 'DATA_IMPORT'
+  | 'KM_BUFFERED'
+  | 'KM_ATTACHED_FROM_BUFFER'
   | 'ACCESS_DENIED';
 
 export type AuditResult = 'SUCCESS' | 'BLOCKED' | 'FAILED';

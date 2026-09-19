@@ -244,6 +244,10 @@ export async function initializeDatabaseSchema(): Promise<void> {
         paymentStatus VARCHAR(30) NOT NULL DEFAULT 'PENDING',
         paymentDate DATETIME(3) NULL,
         active_call_token VARCHAR(60) AS (IF(status = 'IN_PROGRESS', callNumber, NULL)) PERSISTENT,
+        is_cross_selling TINYINT(1) NOT NULL DEFAULT 0,
+        additional_items_qty INT NOT NULL DEFAULT 0,
+        additional_item_unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        porto_billing_value DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
         UNIQUE KEY uq_active_call_token (active_call_token),
@@ -268,9 +272,46 @@ export async function initializeDatabaseSchema(): Promise<void> {
       "ALTER TABLE service_orders MODIFY COLUMN status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'LOST_VISIT') NOT NULL DEFAULT 'PENDING'",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS active_call_token VARCHAR(60) AS (IF(status = 'IN_PROGRESS', callNumber, NULL)) PERSISTENT",
       "ALTER TABLE service_orders ADD UNIQUE INDEX uq_active_call_token (active_call_token)",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS service_motive VARCHAR(255) NULL",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS porto_billing_value DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS has_bracket TINYINT(1) NOT NULL DEFAULT 0",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS bracket_cost DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS is_cross_selling TINYINT(1) NOT NULL DEFAULT 0",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS additional_items_qty INT NOT NULL DEFAULT 0",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS additional_item_unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00"
     ];
 
     for (const stmt of orderAlterStatements) {
+      await db.query(stmt).catch((err: any) => {
+        console.warn(`[MariaDB Migration Notice] ${stmt}: ${err.message}`);
+      });
+    }
+
+    // 2.b. porto_service_prices table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS porto_service_prices (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        category VARCHAR(100) NOT NULL,
+        service_name VARCHAR(255) NOT NULL,
+        search_keywords VARCHAR(255) NULL,
+        completed_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        additional_price DECIMAL(10,2) DEFAULT 0.00,
+        additional_item_price DECIMAL(10,2) DEFAULT 0.00,
+        effective_date DATE DEFAULT '2026-07-29',
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Ensure all columns exist in porto_service_prices
+    const portoAlterStatements = [
+      "ALTER TABLE porto_service_prices ADD COLUMN IF NOT EXISTS completed_price DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT 'Valor padrão da OS concluída'",
+      "ALTER TABLE porto_service_prices ADD COLUMN IF NOT EXISTS additional_price DECIMAL(10,2) DEFAULT 0.00 COMMENT 'Valor de novo serviço comercializado no local'",
+      "ALTER TABLE porto_service_prices ADD COLUMN IF NOT EXISTS additional_item_price DECIMAL(10,2) DEFAULT 0.00 COMMENT 'Valor unitário por almofada/assento adicional em estofados'"
+    ];
+
+    for (const stmt of portoAlterStatements) {
       await db.query(stmt).catch((err: any) => {
         console.warn(`[MariaDB Migration Notice] ${stmt}: ${err.message}`);
       });
@@ -339,7 +380,38 @@ export async function initializeDatabaseSchema(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db` (incluindo audit_logs).');
+    // 6. technician_custom_rates table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS technician_custom_rates (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        technician_id VARCHAR(100) NOT NULL,
+        service_category VARCHAR(100) NOT NULL,
+        custom_fee DECIMAL(10,2) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_tech_service (technician_id, service_category)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 7. pending_km_buffer table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS pending_km_buffer (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        call_number_partial VARCHAR(50) NOT NULL,
+        km_traveled DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        toll_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        technician_name VARCHAR(150),
+        technician_id VARCHAR(100),
+        sender_phone VARCHAR(50),
+        is_lost_visit BOOLEAN DEFAULT FALSE,
+        status ENUM('PENDING', 'ATTACHED') DEFAULT 'PENDING',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        attached_at TIMESTAMP NULL,
+        INDEX idx_call_partial (call_number_partial),
+        INDEX idx_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    console.log('[MariaDB] Tabelas verificadas/atualizadas com sucesso no banco `higienizador_db` (incluindo audit_logs, technician_custom_rates e pending_km_buffer).');
 
     // Executar saneamento retroativo de base de dados para taxas de KM (Corte Histórico 26/07/2026)
     try {

@@ -22,6 +22,8 @@ async function startServer() {
   let memStock: any[] = [...INITIAL_STOCK];
   let memMovements: any[] = [...INITIAL_MOVEMENTS];
   let memSettings: any = { ...INITIAL_SETTINGS };
+  let memPortoPrices: any[] = [];
+  let memTechnicianCustomRates: any[] = [];
   let memAuditLogs: AuditLog[] = [
     {
       id: 'audit-init-1',
@@ -55,7 +57,18 @@ async function startServer() {
   }
 
   // Inicializar esquema do banco
-  initializeDatabaseSchema().catch(() => {});
+  initializeDatabaseSchema().then(async () => {
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query("SELECT * FROM porto_service_prices WHERE active = TRUE");
+      if (rows && rows.length > 0) {
+        memPortoPrices = rows;
+        console.log(`[MariaDB] Cache de preços Porto inicializado com ${memPortoPrices.length} registros.`);
+      }
+    } catch (err: any) {
+      console.warn("[MariaDB] Falha ao preencher cache de preços Porto:", err.message);
+    }
+  }).catch(() => {});
 
   // =========================================================================
   // LOGGING & AUDIT SYSTEM (Mandatório conforme Especificação Técnica)
@@ -148,6 +161,127 @@ async function startServer() {
     }
 
     return entry;
+  }
+
+  // Helper para verificar e anexar quilometragens pendentes do buffer de espera (Pending KM Buffer)
+  async function checkAndAttachPendingKm(callNumber: string, orderId: string, kmRateApplied: number, reqIp?: string): Promise<boolean> {
+    try {
+      const db = getDbPool();
+      const cleanCallNumber = String(callNumber).trim();
+      
+      // Busca resiliente em ambas direções
+      const [pendingRows]: any = await db.query(
+        `SELECT * FROM pending_km_buffer 
+         WHERE status = 'PENDING' 
+           AND (LOWER(?) LIKE CONCAT('%', LOWER(call_number_partial), '%') 
+                OR LOWER(call_number_partial) LIKE CONCAT('%', LOWER(?), '%'))
+         ORDER BY id DESC LIMIT 1`,
+        [cleanCallNumber, cleanCallNumber]
+      );
+
+      if (pendingRows && pendingRows.length > 0) {
+        const pending = pendingRows[0];
+        const bufferedKm = Number(pending.km_traveled);
+        const bufferedToll = Number(pending.toll_cost);
+        const isBufferedLostVisit = !!pending.is_lost_visit;
+
+        // Recuperar a OS criada para obter seus valores base
+        const [osRows]: any = await db.query("SELECT * FROM service_orders WHERE id = ? LIMIT 1", [orderId]);
+        if (!osRows || osRows.length === 0) return false;
+        const order = osRows[0];
+
+        let finalBaseFee = Number(order.base_service_fee || 0);
+        let finalPortoBilling = Number(order.porto_billing_value || 0);
+        let finalMotiveText = order.service_motive || 'Higienização / Instalação';
+
+        if (isBufferedLostVisit) {
+          finalMotiveText = 'Visita Perdida / Improdutiva';
+          finalBaseFee = 40.00;
+          finalPortoBilling = 35.00;
+        }
+
+        const kmPayout = Number((bufferedKm * kmRateApplied).toFixed(2));
+        const totalTechnicianGross = Number((finalBaseFee + kmPayout + bufferedToll).toFixed(2));
+
+        // 1. Atualizar a Ordem de Serviço
+        await db.execute(
+          `UPDATE service_orders 
+           SET km_traveled = ?, 
+               km_rate_applied = ?, 
+               km_total_cost = ?,
+               km_payout = ?,
+               kmPayout = ?,
+               toll_cost = ?, 
+               total_technician_gross = ?, 
+               base_service_fee = ?,
+               porto_billing_value = ?,
+               faturamento_porto = ?,
+               service_motive = ?,
+               status = 'COMPLETED', 
+               completed_at = NOW(), 
+               updated_at = NOW() 
+           WHERE id = ?`,
+          [
+            bufferedKm, 
+            kmRateApplied, 
+            kmPayout, 
+            kmPayout, 
+            kmPayout, 
+            bufferedToll, 
+            totalTechnicianGross, 
+            finalBaseFee, 
+            finalPortoBilling, 
+            finalPortoBilling,
+            finalMotiveText, 
+            orderId
+          ]
+        );
+
+        // 2. Sincronizar cache em memória volátil
+        const memIndex = memOrders.findIndex((o: any) => String(o.id) === String(orderId));
+        if (memIndex !== -1) {
+          memOrders[memIndex].kmTraveled = bufferedKm;
+          memOrders[memIndex].kmRateApplied = kmRateApplied;
+          memOrders[memIndex].kmCost = kmPayout;
+          memOrders[memIndex].kmPayout = kmPayout;
+          memOrders[memIndex].tollCost = bufferedToll;
+          memOrders[memIndex].baseServiceFee = finalBaseFee;
+          memOrders[memIndex].portoBillingValue = finalPortoBilling;
+          memOrders[memIndex].porto_billing_value = finalPortoBilling;
+          memOrders[memIndex].service_motive = finalMotiveText;
+          memOrders[memIndex].totalTechnicianGross = totalTechnicianGross;
+          memOrders[memIndex].totalCost = totalTechnicianGross;
+          memOrders[memIndex].status = 'COMPLETED';
+          memOrders[memIndex].completedAt = new Date().toISOString();
+        }
+
+        // 3. Marcar o buffer como anexado/consumido
+        await db.execute(
+          "UPDATE pending_km_buffer SET status = 'ATTACHED', attached_at = NOW() WHERE id = ?",
+          [pending.id]
+        );
+
+        // 4. Gravar auditoria
+        await recordAudit({
+          userId: 'system',
+          userName: 'Gerenciador de Buffer KM',
+          userRole: 'OPERATIONAL',
+          ipAddress: reqIp || '127.0.0.1',
+          module: 'SERVICE_ORDERS',
+          action: 'KM_ATTACHED_FROM_BUFFER',
+          affectedRecordId: orderId,
+          affectedRecordType: 'service_order',
+          result: 'SUCCESS',
+          details: `Quilometragem do buffer anexada automaticamente à OS ${cleanCallNumber} (KM: ${bufferedKm}, Pedágio: ${bufferedToll}). Status final setado para COMPLETED.`,
+        });
+
+        console.log(`[Pending KM Buffer] Quilometragem pendente vinculada automaticamente à nova OS ${cleanCallNumber}.`);
+        return true;
+      }
+    } catch (err: any) {
+      console.error("[Pending KM Buffer Error] Falha ao verificar ou anexar quilometragem pendente:", err);
+    }
+    return false;
   }
 
   // Helper para obter o usuário requisitante autenticado a partir dos headers
@@ -2638,6 +2772,771 @@ async function startServer() {
   });
 
   // =========================================================================
+  // 5.1.b IMPORT OF CONTRACTUAL PORTO PRICES (.xlsx via multer & xlsx)
+  // =========================================================================
+  app.post('/api/admin/import/porto-prices', uploadExcel.single('file'), async (req, res) => {
+    const requester = await getRequester(req);
+
+    if (requester && requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de importar preços contratuais da Porto.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas o Administrador Master pode realizar importação de preços Porto.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'Por favor, envie um arquivo de planilha (.xlsx).' });
+    }
+
+    try {
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      
+      const sheetName = workbook.SheetNames.find(name => name.toLowerCase().includes('tabela de precos') || name.toLowerCase().includes('precos') || name.toLowerCase().includes('porto')) || workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      if (!worksheet) {
+        return res.status(400).json({ success: false, error: 'Aba "Tabela de Preços" não foi encontrada no arquivo.' });
+      }
+
+      const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+      if (rows.length < 5) {
+        return res.status(400).json({ success: false, error: 'A planilha de preços está vazia ou mal estruturada (menos de 5 linhas).' });
+      }
+
+      let effectiveDateStr = '2026-07-29'; 
+      for (let i = 0; i < Math.min(rows.length, 15); i++) {
+        const rowText = rows[i].map((cell: any) => String(cell || '')).join(' ');
+        const match = rowText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (match) {
+          effectiveDateStr = `${match[3]}-${match[2]}-${match[1]}`; // Store as YYYY-MM-DD
+          break;
+        }
+      }
+
+      const db = getDbPool();
+      let importedCount = 0;
+      let updatedCount = 0;
+
+      for (let i = 4; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length < 2) continue;
+
+        const category = String(row[0] || '').trim();
+        const serviceName = String(row[1] || '').trim();
+        if (!category || !serviceName || serviceName.toLowerCase().includes('serviço') || category.toLowerCase().includes('categoria')) {
+          continue; 
+        }
+
+        const completedPrice = Number(row[2]) || 0;
+        const additionalPrice = Number(row[3]) || 0;
+        
+        // Coluna E (índice 4): additional_item_price. Converter vazios ou hífens para 0.00.
+        const rawAdditionalItem = row[4];
+        let additionalItemPrice = 0;
+        if (rawAdditionalItem !== undefined && rawAdditionalItem !== null) {
+          const cleanStr = String(rawAdditionalItem).replace(/[\s\-R$]/g, '').replace(',', '.').trim();
+          additionalItemPrice = cleanStr === '' || cleanStr === '-' ? 0 : (Number(cleanStr) || 0);
+        }
+
+        const cleanKeywords = serviceName.toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9\s]/g, '')
+          .trim();
+
+        const [existing]: any = await db.query(
+          "SELECT id FROM porto_service_prices WHERE LOWER(category) = LOWER(?) AND LOWER(service_name) = LOWER(?) LIMIT 1",
+          [category, serviceName]
+        );
+
+        if (existing && existing.length > 0) {
+          await db.execute(
+            `UPDATE porto_service_prices 
+             SET completed_price = ?, additional_price = ?, additional_item_price = ?, effective_date = ?, active = TRUE, search_keywords = ?, updated_at = NOW() 
+             WHERE id = ?`,
+            [completedPrice, additionalPrice, additionalItemPrice, effectiveDateStr, cleanKeywords, existing[0].id]
+          );
+          updatedCount++;
+        } else {
+          await db.execute(
+            `INSERT INTO porto_service_prices 
+              (category, service_name, search_keywords, completed_price, additional_price, additional_item_price, effective_date, active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
+            [category, serviceName, cleanKeywords, completedPrice, additionalPrice, additionalItemPrice, effectiveDateStr]
+          );
+          importedCount++;
+        }
+      }
+
+      const [allActive]: any = await db.query("SELECT * FROM porto_service_prices WHERE active = TRUE");
+      memPortoPrices = allActive || [];
+
+      await recordAudit({
+        userId: requester?.id || 'system',
+        userName: requester?.name || 'Administrador',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: 'DATA_IMPORT',
+        affectedRecordType: 'porto_service_prices',
+        result: 'SUCCESS',
+        details: `Importação de preços Porto concluída com sucesso. Novas: ${importedCount}, Atualizadas: ${updatedCount}. Vigência: ${effectiveDateStr}.`,
+      });
+
+      res.json({
+        success: true,
+        message: 'Preços Porto importados com sucesso.',
+        data: {
+          importedCount,
+          updatedCount,
+          total: memPortoPrices.length,
+          effectiveDate: effectiveDateStr
+        }
+      });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        try {
+          const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+          const sheetName = workbook.SheetNames.find(name => 
+            name.toLowerCase().includes('tabela de precos') || 
+            name.toLowerCase().includes('precos') || 
+            name.toLowerCase().includes('porto')
+          ) || workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          if (!worksheet) {
+            return res.status(400).json({ success: false, error: 'Aba "Tabela de Preços" não foi encontrada no arquivo.' });
+          }
+
+          const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+          if (rows.length < 5) {
+            return res.status(400).json({ success: false, error: 'A planilha de preços está vazia ou mal estruturada (menos de 5 linhas).' });
+          }
+
+          let effectiveDateStr = '2026-07-29'; 
+          for (let i = 0; i < Math.min(rows.length, 15); i++) {
+            const rowText = rows[i].map((cell: any) => String(cell || '')).join(' ');
+            const match = rowText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+            if (match) {
+              effectiveDateStr = `${match[3]}-${match[2]}-${match[1]}`; // Store as YYYY-MM-DD
+              break;
+            }
+          }
+
+          let importedCount = 0;
+          let updatedCount = 0;
+
+          for (let i = 4; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length < 2) continue;
+
+            const category = String(row[0] || '').trim();
+            const serviceName = String(row[1] || '').trim();
+            if (!category || !serviceName || serviceName.toLowerCase().includes('serviço') || category.toLowerCase().includes('categoria')) {
+              continue; 
+            }
+
+            const completedPrice = Number(row[2]) || 0;
+            const additionalPrice = Number(row[3]) || 0;
+
+            // Coluna E (índice 4): additional_item_price. Converter vazios ou hífens para 0.00.
+            const rawAdditionalItemPrice = row[4];
+            let additionalItemPrice = 0;
+            if (rawAdditionalItemPrice !== undefined && rawAdditionalItemPrice !== null) {
+              const cleanStr = String(rawAdditionalItemPrice).replace(/[\s\-R$]/g, '').replace(',', '.').trim();
+              additionalItemPrice = cleanStr === '' || cleanStr === '-' ? 0 : (Number(cleanStr) || 0);
+            }
+
+            const cleanKeywords = serviceName.toLowerCase()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-z0-9\s]/g, '')
+              .trim();
+
+            const existingIndex = memPortoPrices.findIndex(
+              (p: any) => p.category.toLowerCase() === category.toLowerCase() && p.service_name.toLowerCase() === serviceName.toLowerCase()
+            );
+
+            if (existingIndex !== -1) {
+              memPortoPrices[existingIndex] = {
+                ...memPortoPrices[existingIndex],
+                completed_price: completedPrice,
+                additional_price: additionalPrice,
+                additional_item_price: additionalItemPrice,
+                effective_date: effectiveDateStr,
+                active: true,
+                search_keywords: cleanKeywords,
+                updated_at: new Date().toISOString()
+              };
+              updatedCount++;
+            } else {
+              memPortoPrices.push({
+                id: Math.floor(Math.random() * 1000000),
+                category,
+                service_name: serviceName,
+                search_keywords: cleanKeywords,
+                completed_price: completedPrice,
+                additional_price: additionalPrice,
+                additional_item_price: additionalItemPrice,
+                effective_date: effectiveDateStr,
+                active: true,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+              importedCount++;
+            }
+          }
+
+          memAuditLogs.push({
+            id: `audit-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            userId: requester?.id || 'admin',
+            userName: requester?.name || 'Administrador',
+            userRole: requester?.role || 'ADMIN',
+            ipAddress: req.ip,
+            module: 'FINANCE',
+            action: 'DATA_IMPORT',
+            affectedRecordType: 'porto_service_prices',
+            result: 'SUCCESS',
+            details: `Importação de preços Porto concluída com sucesso em cache de memória (Banco Offline). Novas: ${importedCount}, Atualizadas: ${updatedCount}. Vigência: ${effectiveDateStr}.`,
+          });
+
+          return res.json({
+            success: true,
+            message: 'Preços Porto importados com sucesso em cache de memória.',
+            data: {
+              importedCount,
+              updatedCount,
+              total: memPortoPrices.length,
+              effectiveDate: effectiveDateStr
+            }
+          });
+        } catch (innerErr: any) {
+          console.error('[IMPORT PORTO PRICES OFFLINE ERROR]:', innerErr);
+          return res.status(500).json({ success: false, error: `Falha ao processar planilha de preços offline: ${innerErr.message}` });
+        }
+      }
+      console.error('[IMPORT PORTO PRICES ERROR]:', err);
+      res.status(500).json({ success: false, error: `Falha ao processar planilha de preços: ${err.message}` });
+    }
+  });
+
+  // =========================================================================
+  // 5.1.c CONFIRM AND RECORD PORT PRICE TABLE FROM JSON
+  // =========================================================================
+  app.post('/api/admin/import/porto-prices/confirm', express.json(), async (req, res) => {
+    const requester = await getRequester(req);
+
+    if (requester && requester.role !== 'ADMIN') {
+      await recordAudit({
+        userId: requester?.id || 'unknown',
+        userName: requester?.name || 'Desconhecido',
+        userRole: requester?.role || 'TECHNICIAN',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: 'ACCESS_DENIED',
+        result: 'BLOCKED',
+        details: 'Tentativa não autorizada de confirmar importação de preços contratuais da Porto.',
+      });
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas o Administrador Master pode realizar importação de preços Porto.' });
+    }
+
+    const { prices, effectiveDate } = req.body;
+    if (!Array.isArray(prices)) {
+      return res.status(400).json({ success: false, error: 'A lista de preços é inválida ou vazia.' });
+    }
+
+    let effectiveDateStr = '2026-07-29';
+    if (effectiveDate) {
+      if (effectiveDate.includes('/')) {
+        const parts = effectiveDate.split('/');
+        if (parts.length === 3) {
+          effectiveDateStr = `${parts[2]}-${parts[1]}-${parts[0]}`; // "29/07/2026" -> "2026-07-29"
+        } else {
+          effectiveDateStr = effectiveDate;
+        }
+      } else {
+        effectiveDateStr = effectiveDate.split('T')[0];
+      }
+    }
+
+    try {
+      const db = getDbPool();
+      let importedCount = 0;
+      let updatedCount = 0;
+
+      for (const row of prices) {
+        const category = String(row.category || '').trim();
+        const serviceName = String(row.service_name || '').trim();
+        if (!category || !serviceName) continue;
+
+        const completedPrice = Number(row.completed_price) || 0;
+        const additionalPrice = Number(row.additional_price) || 0;
+        const additionalItemPrice = Number(row.additional_item_price) || 0;
+
+        const cleanKeywords = serviceName.toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9\s]/g, '')
+          .trim();
+
+        const [existing]: any = await db.query(
+          "SELECT id FROM porto_service_prices WHERE LOWER(category) = LOWER(?) AND LOWER(service_name) = LOWER(?) LIMIT 1",
+          [category, serviceName]
+        );
+
+        if (existing && existing.length > 0) {
+          await db.execute(
+            `UPDATE porto_service_prices 
+             SET completed_price = ?, additional_price = ?, additional_item_price = ?, effective_date = ?, active = TRUE, search_keywords = ?, updated_at = NOW() 
+             WHERE id = ?`,
+            [completedPrice, additionalPrice, additionalItemPrice, effectiveDateStr, cleanKeywords, existing[0].id]
+          );
+          updatedCount++;
+        } else {
+          await db.execute(
+            `INSERT INTO porto_service_prices 
+              (category, service_name, search_keywords, completed_price, additional_price, additional_item_price, effective_date, active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
+            [category, serviceName, cleanKeywords, completedPrice, additionalPrice, additionalItemPrice, effectiveDateStr]
+          );
+          importedCount++;
+        }
+      }
+
+      const [allActive]: any = await db.query("SELECT * FROM porto_service_prices WHERE active = TRUE");
+      memPortoPrices = allActive || [];
+
+      await recordAudit({
+        userId: requester?.id || 'system',
+        userName: requester?.name || 'Administrador',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: 'DATA_IMPORT',
+        affectedRecordType: 'porto_service_prices',
+        result: 'SUCCESS',
+        details: `Importação de preços Porto confirmada com sucesso. Novas: ${importedCount}, Atualizadas: ${updatedCount}. Vigência: ${effectiveDateStr}.`,
+      });
+
+      res.json({
+        success: true,
+        message: 'Preços Porto gravados com sucesso no banco de dados.',
+        data: {
+          importedCount,
+          updatedCount,
+          total: memPortoPrices.length,
+          effectiveDate: effectiveDateStr
+        }
+      });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        let importedCount = 0;
+        let updatedCount = 0;
+
+        for (const row of prices) {
+          const category = String(row.category || '').trim();
+          const serviceName = String(row.service_name || '').trim();
+          if (!category || !serviceName) continue;
+
+          const completedPrice = Number(row.completed_price) || 0;
+          const additionalPrice = Number(row.additional_price) || 0;
+          const additionalItemPrice = Number(row.additional_item_price) || 0;
+
+          const cleanKeywords = serviceName.toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9\s]/g, '')
+            .trim();
+
+          const existingIndex = memPortoPrices.findIndex(
+            (p: any) => p.category.toLowerCase() === category.toLowerCase() && p.service_name.toLowerCase() === serviceName.toLowerCase()
+          );
+
+          if (existingIndex !== -1) {
+            memPortoPrices[existingIndex] = {
+              ...memPortoPrices[existingIndex],
+              completed_price: completedPrice,
+              additional_price: additionalPrice,
+              additional_item_price: additionalItemPrice,
+              effective_date: effectiveDateStr,
+              active: true,
+              search_keywords: cleanKeywords,
+              updated_at: new Date().toISOString()
+            };
+            updatedCount++;
+          } else {
+            memPortoPrices.push({
+              id: Math.floor(Math.random() * 1000000),
+              category,
+              service_name: serviceName,
+              search_keywords: cleanKeywords,
+              completed_price: completedPrice,
+              additional_price: additionalPrice,
+              additional_item_price: additionalItemPrice,
+              effective_date: effectiveDateStr,
+              active: true,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            });
+            importedCount++;
+          }
+        }
+
+        memAuditLogs.push({
+          id: `audit-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          userId: requester?.id || 'admin',
+          userName: requester?.name || 'Administrador',
+          userRole: requester?.role || 'ADMIN',
+          ipAddress: req.ip,
+          module: 'FINANCE',
+          action: 'DATA_IMPORT',
+          affectedRecordType: 'porto_service_prices',
+          result: 'SUCCESS',
+          details: `Importação de preços Porto confirmada com sucesso em cache de memória (Banco Offline). Novas: ${importedCount}, Atualizadas: ${updatedCount}. Vigência: ${effectiveDateStr}.`,
+        });
+
+        return res.json({
+          success: true,
+          message: 'Preços Porto gravados com sucesso em cache de memória.',
+          data: {
+            importedCount,
+            updatedCount,
+            total: memPortoPrices.length,
+            effectiveDate: effectiveDateStr
+          }
+        });
+      }
+
+      console.error('[CONFIRM PORTO PRICES ERROR]:', err);
+      res.status(500).json({ success: false, error: `Falha ao gravar planilha de preços: ${err.message}` });
+    }
+  });
+
+  app.get('/api/admin/porto-prices', async (req, res) => {
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query("SELECT * FROM porto_service_prices ORDER BY category, service_name");
+      
+      const lastEffectiveDate = rows.length > 0 
+        ? rows.reduce((max: string, r: any) => {
+            const dateStr = r.effective_date ? new Date(r.effective_date).toISOString().split('T')[0] : '';
+            return dateStr > max ? dateStr : max;
+          }, '2026-07-29')
+        : '2026-07-29';
+
+      res.json({
+        success: true,
+        total: rows.length,
+        lastEffectiveDate,
+        data: rows
+      });
+    } catch (err: any) {
+      res.json({
+        success: true,
+        total: memPortoPrices.length,
+        lastEffectiveDate: '2026-07-29',
+        data: memPortoPrices
+      });
+    }
+  });
+
+  app.put('/api/admin/porto-prices/:id', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado: apenas Administradores podem atualizar preços.' });
+    }
+
+    const { id } = req.params;
+    const { completed_price, additional_price, additional_item_price } = req.body;
+
+    if (completed_price === undefined) {
+      return res.status(400).json({ success: false, error: 'O preço de serviço concluído é obrigatório.' });
+    }
+
+    try {
+      const db = getDbPool();
+      // Obter o valor antigo para log de auditoria
+      const [oldRows]: any = await db.query('SELECT * FROM porto_service_prices WHERE id = ?', [id]);
+      if (oldRows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Serviço Porto Seguro não encontrado.' });
+      }
+
+      const oldVal = oldRows[0];
+
+      await db.query(
+        'UPDATE porto_service_prices SET completed_price = ?, additional_price = ?, additional_item_price = ?, updated_at = NOW() WHERE id = ?',
+        [Number(completed_price), Number(additional_price || 0), Number(additional_item_price || 0), id]
+      );
+
+      // Atualizar no cache de memória também
+      const memIndex = memPortoPrices.findIndex((p: any) => String(p.id) === String(id));
+      if (memIndex !== -1) {
+        memPortoPrices[memIndex].completed_price = Number(completed_price);
+        memPortoPrices[memIndex].additional_price = Number(additional_price || 0);
+        memPortoPrices[memIndex].additional_item_price = Number(additional_item_price || 0);
+      }
+
+      // Registrar no log de auditoria operacional
+      await recordAudit({
+        userId: requester?.id || 'admin',
+        userName: requester?.name || 'Administrador',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'FINANCE',
+        action: 'SETTINGS_UPDATE',
+        affectedRecordId: String(id),
+        affectedRecordType: 'porto_service_price',
+        oldValue: JSON.stringify({ completed_price: oldVal.completed_price, additional_price: oldVal.additional_price, additional_item_price: oldVal.additional_item_price }),
+        newValue: JSON.stringify({ completed_price, additional_price, additional_item_price }),
+        result: 'SUCCESS',
+        details: `Preço do serviço "${oldVal.service_name}" atualizado: Concluído R$ ${completed_price}, Adicional R$ ${additional_price || 0}, Item Adicional R$ ${additional_item_price || 0}.`,
+      });
+
+      res.json({ success: true, message: 'Preço atualizado com sucesso.' });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        const memIndex = memPortoPrices.findIndex((p: any) => String(p.id) === String(id));
+        if (memIndex === -1) {
+          return res.status(404).json({ success: false, error: 'Serviço Porto Seguro não encontrado no cache.' });
+        }
+        const oldVal = memPortoPrices[memIndex];
+        const oldValCopy = { completed_price: oldVal.completed_price, additional_price: oldVal.additional_price, additional_item_price: oldVal.additional_item_price };
+
+        memPortoPrices[memIndex].completed_price = Number(completed_price);
+        memPortoPrices[memIndex].additional_price = Number(additional_price || 0);
+        memPortoPrices[memIndex].additional_item_price = Number(additional_item_price || 0);
+
+        memAuditLogs.push({
+          id: `audit-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          userId: requester?.id || 'admin',
+          userName: requester?.name || 'Administrador',
+          userRole: requester?.role || 'ADMIN',
+          ipAddress: req.ip,
+          module: 'FINANCE',
+          action: 'SETTINGS_UPDATE',
+          affectedRecordId: String(id),
+          affectedRecordType: 'porto_service_price',
+          oldValue: JSON.stringify(oldValCopy),
+          newValue: JSON.stringify({ completed_price, additional_price, additional_item_price }),
+          result: 'SUCCESS',
+          details: `Preço do serviço "${oldVal.service_name}" atualizado em memória: Concluído R$ ${completed_price}, Adicional R$ ${additional_price || 0}, Item Adicional R$ ${additional_item_price || 0}.`,
+        });
+
+        return res.json({ success: true, message: 'Preço atualizado com sucesso em cache de memória.' });
+      }
+      console.error('[UPDATE PORTO PRICE ERROR]:', err);
+      res.status(500).json({ success: false, error: `Falha ao atualizar preço: ${err.message}` });
+    }
+  });
+
+  app.get('/api/admin/technicians/:id/rates', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado.' });
+    }
+
+    const { id } = req.params;
+
+    try {
+      const db = getDbPool();
+      // Consultar o técnico para pegar as taxas de km
+      const [userRows]: any = await db.query('SELECT id, name, km_rate, kmRate FROM users WHERE id = ?', [id]);
+      if (userRows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Técnico não encontrado.' });
+      }
+
+      const tech = userRows[0];
+      const kmRateValue = Number(tech.km_rate ?? tech.kmRate ?? 0.75);
+
+      // Consultar taxas customizadas
+      const [customRows]: any = await db.query('SELECT * FROM technician_custom_rates WHERE technician_id = ?', [id]);
+
+      res.json({
+        success: true,
+        data: {
+          technicianId: id,
+          name: tech.name,
+          kmRate: kmRateValue,
+          customRates: customRows.map((r: any) => ({
+            id: r.id,
+            technicianId: r.technician_id,
+            serviceCategory: r.service_category,
+            customFee: Number(r.custom_fee)
+          }))
+        }
+      });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        const tech = memUsers.find((u: any) => String(u.id) === String(id));
+        if (!tech) {
+          return res.status(404).json({ success: false, error: 'Técnico não encontrado em memória.' });
+        }
+        const kmRateValue = Number(tech.km_rate ?? tech.kmRate ?? 0.75);
+        const filteredCustom = memTechnicianCustomRates.filter((r: any) => String(r.technician_id) === String(id));
+        
+        return res.json({
+          success: true,
+          data: {
+            technicianId: id,
+            name: tech.name,
+            kmRate: kmRateValue,
+            customRates: filteredCustom.map((r: any) => ({
+              id: r.id,
+              technicianId: r.technician_id,
+              serviceCategory: r.service_category,
+              customFee: Number(r.custom_fee)
+            }))
+          }
+        });
+      }
+      console.error('[GET TECHNICIAN RATES ERROR]:', err);
+      res.status(500).json({ success: false, error: `Falha ao obter taxas do técnico: ${err.message}` });
+    }
+  });
+
+  app.put('/api/admin/technicians/:id/rates', async (req, res) => {
+    const requester = await getRequester(req);
+    if (requester && requester.role === 'TECHNICIAN') {
+      return res.status(403).json({ success: false, error: 'Acesso negado.' });
+    }
+
+    const { id } = req.params;
+    const { kmRate, customRates } = req.body;
+
+    if (kmRate === undefined) {
+      return res.status(400).json({ success: false, error: 'A taxa de KM é obrigatória.' });
+    }
+
+    try {
+      const db = getDbPool();
+      // Verificar se o técnico existe
+      const [techRows]: any = await db.query('SELECT name FROM users WHERE id = ?', [id]);
+      if (techRows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Técnico não encontrado.' });
+      }
+      const techName = techRows[0].name;
+
+      // 1. Atualizar taxa de KM do técnico na tabela users
+      await db.query('UPDATE users SET km_rate = ?, kmRate = ?, updatedAt = NOW() WHERE id = ?', [Number(kmRate), Number(kmRate), id]);
+
+      // 2. Atualizar tarifas customizadas
+      if (Array.isArray(customRates)) {
+        for (const rate of customRates) {
+          const { serviceCategory, customFee } = rate;
+          if (customFee === null || customFee === undefined || String(customFee).trim() === '') {
+            await db.query(
+              'DELETE FROM technician_custom_rates WHERE technician_id = ? AND service_category = ?',
+              [id, serviceCategory]
+            );
+          } else {
+            await db.query(
+              `INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee, updated_at)
+               VALUES (?, ?, ?, NOW())
+               ON DUPLICATE KEY UPDATE custom_fee = ?, updated_at = NOW()`,
+              [id, serviceCategory, Number(customFee), Number(customFee)]
+            );
+          }
+        }
+      }
+
+      // Sincronizar cache de memória
+      const memIndex = memUsers.findIndex((u: any) => String(u.id) === String(id));
+      if (memIndex !== -1) {
+        memUsers[memIndex].km_rate = Number(kmRate);
+        memUsers[memIndex].kmRate = Number(kmRate);
+      }
+
+      if (Array.isArray(customRates)) {
+        for (const rate of customRates) {
+          const { serviceCategory, customFee } = rate;
+          memTechnicianCustomRates = memTechnicianCustomRates.filter(
+            (r: any) => !(String(r.technician_id) === String(id) && r.service_category === serviceCategory)
+          );
+          if (customFee !== null && customFee !== undefined && String(customFee).trim() !== '') {
+            memTechnicianCustomRates.push({
+              id: Math.floor(Math.random() * 1000000),
+              technician_id: id,
+              service_category: serviceCategory,
+              custom_fee: Number(customFee)
+            });
+          }
+        }
+      }
+
+      // Registrar no log de auditoria
+      await recordAudit({
+        userId: requester?.id || 'admin',
+        userName: requester?.name || 'Administrador',
+        userRole: requester?.role || 'ADMIN',
+        ipAddress: req.ip,
+        module: 'USERS',
+        action: 'USER_UPDATE',
+        affectedRecordId: String(id),
+        affectedRecordType: 'user_rates',
+        result: 'SUCCESS',
+        details: `Regras de repasse do técnico "${techName}" atualizadas: KM R$ ${kmRate}/km. Customizações salvas: ${customRates?.length || 0} itens.`,
+      });
+
+      res.json({ success: true, message: 'Regras de repasse salvas com sucesso.' });
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        const memIndex = memUsers.findIndex((u: any) => String(u.id) === String(id));
+        if (memIndex === -1) {
+          return res.status(404).json({ success: false, error: 'Técnico não encontrado no cache.' });
+        }
+        const techName = memUsers[memIndex].name;
+        memUsers[memIndex].km_rate = Number(kmRate);
+        memUsers[memIndex].kmRate = Number(kmRate);
+
+        if (Array.isArray(customRates)) {
+          for (const rate of customRates) {
+            const { serviceCategory, customFee } = rate;
+            memTechnicianCustomRates = memTechnicianCustomRates.filter(
+              (r: any) => !(String(r.technician_id) === String(id) && r.service_category === serviceCategory)
+            );
+            if (customFee !== null && customFee !== undefined && String(customFee).trim() !== '') {
+              memTechnicianCustomRates.push({
+                id: Math.floor(Math.random() * 1000000),
+                technician_id: id,
+                service_category: serviceCategory,
+                custom_fee: Number(customFee)
+              });
+            }
+          }
+        }
+
+        memAuditLogs.push({
+          id: `audit-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          userId: requester?.id || 'admin',
+          userName: requester?.name || 'Administrador',
+          userRole: requester?.role || 'ADMIN',
+          ipAddress: req.ip,
+          module: 'USERS',
+          action: 'USER_UPDATE',
+          affectedRecordId: String(id),
+          affectedRecordType: 'user_rates',
+          result: 'SUCCESS',
+          details: `Regras de repasse do técnico "${techName}" atualizadas em memória: KM R$ ${kmRate}/km. Customizações salvas: ${customRates?.length || 0} itens.`,
+        });
+
+        return res.json({ success: true, message: 'Regras de repasse salvas com sucesso em cache de memória.' });
+      }
+
+      console.error('[UPDATE TECHNICIAN RATES ERROR]:', err);
+      res.status(500).json({ success: false, error: `Falha ao salvar regras de repasse: ${err.message}` });
+    }
+  });
+
+  // =========================================================================
   // 5.2 IMPORT OF FINE-TUNED JSON SERVICE ORDERS (/api/import/orders-json)
   // =========================================================================
   app.post('/api/import/orders-json', async (req, res) => {
@@ -3817,78 +4716,135 @@ async function startServer() {
   });
 
   // 9.3.b Endpoint Inbound para o N8N Criar uma OS (POST /api/n8n/webhook/order-create)
-  function determineBaseServiceFee(serviceCategory: string): number {
-    if (!serviceCategory) return 50.00;
-    const cat = serviceCategory.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  function resolvePortoBillingValue(
+    motive: string, 
+    isCrossSelling: boolean, 
+    additionalItemsQty: number
+  ): { porto_billing_value: number; additional_item_unit_price: number } {
+    const m = String(motive || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 
-    // Visita Perdida (VP)
-    if (cat.includes('visita perdida') || cat.includes('vp')) {
+    // 1. Caso service_motive indique Visita Perdida/Frustrada (ex: "cliente ausente", "vp", "frustrada", "perdida")
+    if (m.includes('visita perdida') || m.includes('vp') || m.includes('frustrada') || m.includes('perdida') || m.includes('ausente')) {
+      return { porto_billing_value: 35.00, additional_item_unit_price: 0.00 };
+    }
+
+    let completed_price = 0.00;
+    let additional_price = 0.00;
+    let additional_item_price = 0.00;
+    let found = false;
+
+    // 2. Verificar correspondência no cache memPortoPrices de forma inteligente
+    if (memPortoPrices && memPortoPrices.length > 0) {
+      const foundPriceObj = memPortoPrices.find(p => {
+        const sName = (p.service_name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        const sKeywords = (p.search_keywords || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        return m.includes(sName) || sName.includes(m) || (sKeywords && (m.includes(sKeywords) || sKeywords.includes(m)));
+      });
+
+      if (foundPriceObj) {
+        completed_price = Number(foundPriceObj.completed_price || 0);
+        additional_price = Number(foundPriceObj.additional_price || 0);
+        additional_item_price = Number(foundPriceObj.additional_item_price || 0);
+        found = true;
+      }
+    }
+
+    // Se não encontrou no BD, aplica fallbacks rígidos do catálogo
+    if (!found) {
+      if (m.includes('tv') || m.includes('televisao') || m.includes('sup. tv') || m.includes('suporte tv')) {
+        if (m.includes('99') || m.includes('100') || m.includes('101') || m.includes('102') || m.includes('103') ||
+            m.includes('104') || m.includes('105') || m.includes('106') || m.includes('107') || m.includes('108') ||
+            m.includes('109') || m.includes('110') || m.includes('111') || m.includes('112') || m.includes('113') ||
+            m.includes('114') || m.includes('115') || m.includes('acima de 98') || m.includes('acima 98') || m.includes('98 a 115') || m.includes('98-115')) {
+          completed_price = 400.00;
+          additional_price = 67.00;
+        } else if (m.includes('66') || m.includes('67') || m.includes('68') || m.includes('69') || m.includes('70') ||
+            m.includes('71') || m.includes('72') || m.includes('73') || m.includes('74') || m.includes('75') ||
+            m.includes('76') || m.includes('77') || m.includes('78') || m.includes('79') || m.includes('80') ||
+            m.includes('81') || m.includes('82') || m.includes('83') || m.includes('84') || m.includes('85') ||
+            m.includes('86') || m.includes('87') || m.includes('88') || m.includes('89') || m.includes('90') ||
+            m.includes('91') || m.includes('92') || m.includes('93') || m.includes('94') || m.includes('95') ||
+            m.includes('96') || m.includes('97') || m.includes('98') || m.includes('66 a 98') || m.includes('66-98')) {
+          completed_price = 146.00;
+          additional_price = 44.00;
+        } else if (m.includes('50') || m.includes('51') || m.includes('52') || m.includes('53') || m.includes('54') ||
+            m.includes('55') || m.includes('56') || m.includes('57') || m.includes('58') || m.includes('59') ||
+            m.includes('60') || m.includes('61') || m.includes('62') || m.includes('63') || m.includes('64') ||
+            m.includes('65') || m.includes('50 a 65') || m.includes('50-65')) {
+          completed_price = 89.00;
+          additional_price = 44.00;
+        } else if (m.includes('ate 49') || m.includes('49') || m.includes('48') || m.includes('47') || m.includes('46') || m.includes('45') || m.includes('44') || m.includes('43') || m.includes('42') || m.includes('40') || m.includes('39') || m.includes('32') || /ate\s*49/.test(m)) {
+          completed_price = 73.00;
+          additional_price = 44.00;
+        } else {
+          completed_price = 89.00;
+          additional_price = 44.00;
+        }
+      } else if (m.includes('lava e seca') || m.includes('lavadora') || m.includes('secadora') || m.includes('wash tower') || m.includes('tower')) {
+        completed_price = 150.00;
+        additional_price = 0.00;
+      } else if (m.includes('refrigerador') || m.includes('geladeira')) {
+        if (m.includes('side by side') || m.includes('syde by syde') || m.includes('side-by-side') || m.includes('sbs')) {
+          completed_price = 125.00;
+          additional_price = 0.00;
+        } else {
+          completed_price = 94.00;
+          additional_price = 0.00;
+        }
+      } else if (m.includes('purificador') || m.includes('depurador') || m.includes('coifa') || m.includes('lava loucas') || m.includes('fogao') || m.includes('cooktop')) {
+        completed_price = 73.00;
+        additional_price = 0.00;
+      } else {
+        completed_price = 73.00;
+        additional_price = 0.00;
+      }
+    }
+
+    const basePorto = isCrossSelling ? additional_price : completed_price;
+    const adicionalTotal = additionalItemsQty * additional_item_price;
+    const faturamento = Number((basePorto + adicionalTotal).toFixed(2));
+
+    return {
+      porto_billing_value: faturamento,
+      additional_item_unit_price: additional_item_price
+    };
+  }
+
+  function resolveTechnicianBaseFee(motive: string): number {
+    const m = String(motive || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+    if (m.includes('visita perdida') || m.includes('vp') || m.includes('cancelada') || m.includes('frustrada')) {
       return 40.00;
     }
 
-    // Instalações de TV
-    if (cat.includes('tv') || cat.includes('televisao') || cat.includes('sup. tv') || cat.includes('suporte tv')) {
-      // TV 99 a 115 / acima de 98
-      if (
-        cat.includes('99') || cat.includes('100') || cat.includes('101') || cat.includes('102') || cat.includes('103') ||
-        cat.includes('104') || cat.includes('105') || cat.includes('106') || cat.includes('107') || cat.includes('108') ||
-        cat.includes('109') || cat.includes('110') || cat.includes('111') || cat.includes('112') || cat.includes('113') ||
-        cat.includes('114') || cat.includes('115') || cat.includes('acima de 98') || cat.includes('acima 98') ||
-        cat.includes('acima de 99') || cat.includes('acima 99')
-      ) {
+    if (m.includes('tv') || m.includes('televisao') || m.includes('sup. tv') || m.includes('suporte tv')) {
+      if (m.includes('99') || m.includes('100') || m.includes('101') || m.includes('102') || m.includes('103') ||
+          m.includes('104') || m.includes('105') || m.includes('106') || m.includes('107') || m.includes('108') ||
+          m.includes('109') || m.includes('110') || m.includes('111') || m.includes('112') || m.includes('113') ||
+          m.includes('114') || m.includes('115') || m.includes('acima de 98') || m.includes('acima 98') || m.includes('acima de 99') || m.includes('acima 99') || m.includes('98 a 115')) {
         return 150.00;
       }
-      // TV 50 a 65 / 66 a 98 / acima de 55
-      if (
-        cat.includes('50') || cat.includes('51') || cat.includes('52') || cat.includes('53') || cat.includes('54') ||
-        cat.includes('55') || cat.includes('56') || cat.includes('57') || cat.includes('58') || cat.includes('59') ||
-        cat.includes('60') || cat.includes('61') || cat.includes('62') || cat.includes('63') || cat.includes('64') ||
-        cat.includes('65') || cat.includes('66') || cat.includes('67') || cat.includes('68') || cat.includes('69') ||
-        cat.includes('70') || cat.includes('71') || cat.includes('72') || cat.includes('73') || cat.includes('74') ||
-        cat.includes('75') || cat.includes('76') || cat.includes('77') || cat.includes('78') || cat.includes('79') ||
-        cat.includes('80') || cat.includes('81') || cat.includes('82') || cat.includes('83') || cat.includes('84') ||
-        cat.includes('85') || cat.includes('86') || cat.includes('87') || cat.includes('88') || cat.includes('89') ||
-        cat.includes('90') || cat.includes('91') || cat.includes('92') || cat.includes('93') || cat.includes('94') ||
-        cat.includes('95') || cat.includes('96') || cat.includes('97') || cat.includes('98') || cat.includes('66 a 98') ||
-        cat.includes('acima de 55') || cat.includes('acima 55')
-      ) {
-        return 80.00;
-      }
-      // TV até 49 / até 55
-      if (cat.includes('ate 49') || cat.includes('ate 55') || cat.includes('49') || /ate\s*\d+/.test(cat)) {
+      if (m.includes('66') || m.includes('67') || m.includes('68') || m.includes('69') || m.includes('70') ||
+          m.includes('71') || m.includes('72') || m.includes('73') || m.includes('74') || m.includes('75') ||
+          m.includes('76') || m.includes('77') || m.includes('78') || m.includes('79') || m.includes('80') ||
+          m.includes('81') || m.includes('82') || m.includes('83') || m.includes('84') || m.includes('85') ||
+          m.includes('86') || m.includes('87') || m.includes('88') || m.includes('89') || m.includes('90') ||
+          m.includes('91') || m.includes('92') || m.includes('93') || m.includes('94') || m.includes('95') ||
+          m.includes('96') || m.includes('97') || m.includes('98') || m.includes('66 a 98') || m.includes('66-98') || m.includes('acima de 55')) {
         return 70.00;
       }
-      return 80.00;
-    }
-
-    // Higienização e Impermeabilização
-    if (cat.includes('higieniz') || cat.includes('impermeab') || cat.includes('sofa') || cat.includes('colchao') || cat.includes('hig')) {
-      if (cat.includes('sofa 3') || cat.includes('3 lugares') || cat.includes('sofa cama') || cat.includes('cama')) {
-        return 140.00;
-      }
-      if (cat.includes('sofa 2') || cat.includes('2 lugares')) {
-        return 120.00;
-      }
-      if (cat.includes('colchao') || cat.includes('casal') || cat.includes('padrao')) {
-        return 130.00;
-      }
-    }
-
-    // Linha Branca & Instalações Diversas
-    if (
-      cat.includes('lava e seca') || cat.includes('lavadora') || cat.includes('secadora') || cat.includes('lava loucas') ||
-      cat.includes('purificador') || cat.includes('depurador') || cat.includes('coifa')
-    ) {
-      return 50.00;
-    }
-    if (cat.includes('refrigerador') || cat.includes('geladeira') || cat.includes('side by side') || cat.includes('syde by syde')) {
       return 60.00;
     }
-    if (cat.includes('home theater')) {
-      return 80.00;
+
+    if (m.includes('refrigerador') || m.includes('geladeira') || m.includes('side by side') || m.includes('syde by syde') || m.includes('side-by-side')) {
+      return 60.00;
     }
 
-    return 50.00;
+    if (m.includes('lava e seca') || m.includes('lavadora') || m.includes('secadora') || m.includes('purificador') || m.includes('depurador') || m.includes('coifa') || m.includes('lava loucas') || m.includes('wash tower')) {
+      return 50.00;
+    }
+
+    return 50.00; 
   }
 
   // 9.3.b Endpoint Inbound para o N8N Criar uma OS (POST /api/n8n/webhook/order-create)
@@ -3919,7 +4875,17 @@ async function startServer() {
       tollCost,
       scheduledAt,
       scheduledDate,
-      observation
+      observation,
+      serviceMotive,
+      service_motive,
+      Motivo,
+      Especialidade,
+      hasBracket,
+      has_bracket,
+      is_cross_selling,
+      isCrossSelling,
+      additional_items_qty,
+      additionalItemsQty
     } = req.body || {};
 
     if (!customerName) {
@@ -3944,7 +4910,48 @@ async function startServer() {
         });
       }
 
-      // 1. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
+      // 1. RESOLUÇÃO DO MOTIVO DO SERVIÇO (VÍNCULO AUTOMÁTICO)
+      const finalMotive = service_motive || serviceMotive || Motivo || Especialidade || serviceCategory || 'Higienização / Instalação';
+      const resolvedCategory = serviceCategory || '';
+
+      // 2. CONTROLE DE ESTOQUE (SUPORTE SKU SUP-TV-44-70)
+      const motiveLower = finalMotive.toLowerCase();
+      const categoryLower = String(resolvedCategory).toLowerCase();
+      let hasSupportBracket = false;
+      if (
+        has_bracket === true || has_bracket === 1 || has_bracket === 'true' || has_bracket === '1' ||
+        hasBracket === true || hasBracket === 1 || hasBracket === 'true' || hasBracket === '1' ||
+        motiveLower.includes('com suporte') || motiveLower.includes('com sup') ||
+        motiveLower.includes('suporte de parede') || motiveLower.includes('suporte articulado') ||
+        categoryLower.includes('com suporte') || categoryLower.includes('com sup') ||
+        categoryLower.includes('suporte de parede') || categoryLower.includes('suporte articulado')
+      ) {
+        hasSupportBracket = true;
+      }
+
+      let bracket_cost = 0.00;
+      let has_bracket_flag = 0;
+
+      if (hasSupportBracket) {
+        has_bracket_flag = 1;
+        bracket_cost = 28.00; // Custo de insumo tabelado para o suporte
+        
+        // Decremento de estoque físico de forma resiliente
+        try {
+          await db.execute(
+            "UPDATE stock_items SET quantityInStock = GREATEST(0, quantityInStock - 1), updatedAt = NOW() WHERE code = 'SUP-TV-44-70'"
+          );
+        } catch (stockErr) {
+          console.warn("[Stock Warning] Falha ao debitar do estoque stock_items:", stockErr);
+        }
+        try {
+          await db.execute(
+            "UPDATE products SET current_quantity = GREATEST(0, current_quantity - 1), updated_at = NOW() WHERE sku = 'SUP-TV-44-70'"
+          );
+        } catch (stockErr) {}
+      }
+
+      // 3. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
       let technicianId = null;
       let technicianName = bodyTechName || 'Técnico Não Definido';
       let km_rate_applied = 0.75;
@@ -4000,13 +5007,27 @@ async function startServer() {
         }
       }
 
-      // 2. DETERMINAÇÃO DO REPASSE BASE CONFORME SERVIÇO / ESCOPO
-      let baseServiceFee = Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
-      if (!baseServiceFee) {
-        baseServiceFee = determineBaseServiceFee(serviceCategory);
+      // Regra de KM individual especial para Bruna
+      if (technicianName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes('bruna')) {
+        km_rate_applied = 1.41;
       }
 
-      // 3. CÁLCULO FINANCEIRO COMPLETO (SNAPSHOT NO CADASTRO)
+      // 4. RESOLUÇÃO FINANCEIRA BILATERAL DINÂMICA
+      let baseServiceFee = Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
+      if (!baseServiceFee) {
+        baseServiceFee = resolveTechnicianBaseFee(finalMotive);
+      }
+
+      const isCrossSellingFlag = is_cross_selling === true || is_cross_selling === 1 || is_cross_selling === 'true' || is_cross_selling === '1' || isCrossSelling === true || isCrossSelling === 1 || isCrossSelling === 'true' || isCrossSelling === '1' ? 1 : 0;
+      const additionalItemsQtyVal = Number(additional_items_qty || additionalItemsQty || 0);
+
+      const { porto_billing_value, additional_item_unit_price } = resolvePortoBillingValue(
+        finalMotive, 
+        isCrossSellingFlag === 1, 
+        additionalItemsQtyVal
+      );
+
+      // 5. CÁLCULO FINANCEIRO COMPLETO DO TÉCNICO (SNAPSHOT NO CADASTRO)
       const parsedKm = Number(kmTraveled || 0);
       const parsedToll = Number(tollCost || 0);
       const kmPayout = Number((parsedKm * km_rate_applied).toFixed(2));
@@ -4021,7 +5042,7 @@ async function startServer() {
       const safeIdSuffix = String(callNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
       const newId = `os-${safeIdSuffix}-${Date.now()}`;
 
-      // 4. GRAVAÇÃO NO MARIADB (INSERT COM TRAVA DE DUPLICIDADE)
+      // 6. GRAVAÇÃO NO MARIADB (INSERT COM TODAS AS NOVAS COLUNAS DO MOTOR FINANCEIRO)
       await db.execute(
         `INSERT INTO service_orders (
           id, call_number, porto_seguro_protocol, service_category, base_service_fee,
@@ -4029,8 +5050,10 @@ async function startServer() {
           address_street, address_number, address_complement, postal_code,
           technician_id, status, scheduled_date, started_at, completed_at,
           km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
-          total_technician_gross, faturamento_porto, km_payout, kmPayout
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          total_technician_gross, faturamento_porto, km_payout, kmPayout,
+          service_motive, porto_billing_value, has_bracket, bracket_cost,
+          is_cross_selling, additional_items_qty, additional_item_unit_price
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ,?)`,
         [
           newId,
           String(callNumber).trim(),
@@ -4058,9 +5081,16 @@ async function startServer() {
           parsedToll,
           0,
           totalTechnicianGross,
-          totalTechnicianGross,
+          porto_billing_value, // faturamento_porto
           kmPayout,
-          kmPayout
+          kmPayout,
+          finalMotive,
+          porto_billing_value, // porto_billing_value
+          has_bracket_flag,
+          bracket_cost,
+          isCrossSellingFlag,
+          additionalItemsQtyVal,
+          additional_item_unit_price
         ]
       );
 
@@ -4089,8 +5119,15 @@ async function startServer() {
         totalCost: totalTechnicianGross,
         totalTechnicianGross,
         baseServiceFee,
-        faturamentoPorto: totalTechnicianGross,
+        faturamentoPorto: porto_billing_value,
         startedAt: osDate.toISOString(),
+        service_motive: finalMotive,
+        porto_billing_value,
+        has_bracket: has_bracket_flag,
+        bracket_cost,
+        is_cross_selling: isCrossSellingFlag,
+        additional_items_qty: additionalItemsQtyVal,
+        additional_item_unit_price: additional_item_unit_price
       };
       memOrders.unshift(newOrderMem);
 
@@ -4104,32 +5141,66 @@ async function startServer() {
         affectedRecordId: newId,
         affectedRecordType: 'service_order',
         result: 'SUCCESS',
-        details: `OS ${callNumber} criada via N8N/Fast-Track. Cliente: ${customerName}, Técnico: ${technicianName}`,
+        details: `OS ${callNumber} criada via N8N/Fast-Track. Cliente: ${customerName}, Técnico: ${technicianName}, Faturamento Porto: R$ ${porto_billing_value}, Repasse Base Técnico: R$ ${baseServiceFee}`,
       });
 
       console.log(`[N8N Webhook] OS ${callNumber} (ID: ${newId}) criada com sucesso no MariaDB.`);
+
+      // 4.5. VERIFICAÇÃO DO BUFFER DE ESPERA DE QUILOMETRAGEM
+      const cleanCallNumber = String(callNumber).trim();
+      const attachedFromBuffer = await checkAndAttachPendingKm(cleanCallNumber, newId, km_rate_applied, req.ip);
+
+      let finalStatus = 'IN_PROGRESS';
+      let finalKm = parsedKm;
+      let finalToll = parsedToll;
+      let finalGross = totalTechnicianGross;
+      let finalBaseFee = baseServiceFee;
+      let finalPortoBilling = porto_billing_value;
+      let finalMotiveText = finalMotive;
+
+      if (attachedFromBuffer) {
+        // Se foi anexado do buffer, recuperamos os dados atualizados do cache em memória para responder
+        const memOrder = memOrders.find((o: any) => String(o.id) === String(newId));
+        if (memOrder) {
+          finalStatus = memOrder.status;
+          finalKm = memOrder.kmTraveled;
+          finalToll = memOrder.tollCost;
+          finalGross = memOrder.totalTechnicianGross;
+          finalBaseFee = memOrder.baseServiceFee;
+          finalPortoBilling = memOrder.porto_billing_value;
+          finalMotiveText = memOrder.service_motive;
+        }
+      }
 
       // 5. ASSINATURA DE RETORNO JSON PADRONIZADA
       res.json({
         success: true,
         data: {
           id: newId,
-          callNumber: String(callNumber).trim(),
+          callNumber: cleanCallNumber,
           customerName: customerName,
           serviceCategory: serviceCategory || 'Higienização / Instalação',
+          serviceMotive: finalMotiveText,
+          portoBillingValue: finalPortoBilling,
+          hasBracket: has_bracket_flag === 1,
+          bracketCost: bracket_cost,
           technicianId: technicianId,
           technicianName: technicianName,
-          baseServiceFee: Number(baseServiceFee.toFixed(2)),
+          baseServiceFee: Number(finalBaseFee.toFixed(2)),
           kmRateApplied: km_rate_applied,
-          kmTraveled: parsedKm,
-          tollCost: parsedToll,
-          totalTechnicianGross: Number(totalTechnicianGross.toFixed(2)),
+          kmTraveled: finalKm,
+          tollCost: finalToll,
+          totalTechnicianGross: Number(finalGross.toFixed(2)),
           addressStreet: addressStreet || 'A definir',
           addressNumber: addressNumber || 'S/N',
           neighborhood: neighborhood || 'A definir',
           city: city || 'São Paulo',
-          status: 'IN_PROGRESS',
-          scheduledDate: formatDbDate(osDate)
+          status: finalStatus,
+          scheduledDate: formatDbDate(osDate),
+          isCrossSelling: isCrossSellingFlag === 1,
+          additionalItemsQty: additionalItemsQtyVal,
+          additionalItemUnitPrice: additional_item_unit_price,
+          attachedFromBuffer: attachedFromBuffer
         }
       });
 
@@ -4168,9 +5239,64 @@ async function startServer() {
       );
 
       if (!rows || rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: "Ordem de serviço não localizada com o número informado."
+        // Detecção de Visita Perdida / Improdutiva (VP)
+        let isLostVisit = false;
+        if (req.body) {
+          if (req.body.isLostVisit === true || req.body.isLostVisit === 'true' || req.body.is_lost_visit === true || req.body.is_lost_visit === 'true') {
+            isLostVisit = true;
+          } else {
+            // Varre todos os valores do body buscando termos indicativos
+            for (const key of Object.keys(req.body)) {
+              const val = String(req.body[key]).toLowerCase();
+              if (val.includes('visita perdida') || val === 'vp' || val.includes('cliente ausente')) {
+                isLostVisit = true;
+                break;
+              }
+            }
+          }
+        }
+
+        const parsedKm = Number(kmTraveled);
+        const parsedToll = tollCost !== undefined ? Number(tollCost) : 0;
+        const senderPhone = req.body.senderPhone || req.body.sender_phone || req.body.phone || null;
+        const technicianId = req.body.technicianId || req.body.technician_id || null;
+        const technicianName = req.body.technicianName || req.body.technician_name || null;
+
+        // Persistência no buffer de espera
+        await db.execute(
+          `INSERT INTO pending_km_buffer (
+            call_number_partial, km_traveled, toll_cost, technician_name, technician_id, sender_phone, is_lost_visit, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW())`,
+          [
+            cleanPartial,
+            parsedKm,
+            parsedToll,
+            technicianName,
+            technicianId,
+            senderPhone,
+            isLostVisit ? 1 : 0
+          ]
+        );
+
+        // Registro de auditoria
+        await recordAudit({
+          userId: 'n8n-bot',
+          userName: 'N8N WhatsApp Bot',
+          userRole: 'OPERATIONAL',
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'KM_BUFFERED',
+          affectedRecordId: cleanPartial,
+          affectedRecordType: 'pending_km_buffer',
+          result: 'SUCCESS',
+          details: `OS não localizada para o número ${cleanPartial}. KM (${parsedKm}) e Pedágio (${parsedToll}) guardados com sucesso no buffer de espera para vinculação futura.`,
+        });
+
+        return res.json({
+          success: true,
+          buffered: true,
+          status: 'PENDING',
+          message: `Quilometragem armazenada no buffer de espera para o chamado ${cleanPartial}. Será vinculada automaticamente assim que o gestor criar a OS.`
         });
       }
 
@@ -4200,19 +5326,54 @@ async function startServer() {
         kmRate = 1.41;
       }
 
+      // Detecção de Visita Perdida / Improdutiva (VP)
+      let isLostVisit = false;
+      if (req.body) {
+        if (req.body.isLostVisit === true || req.body.isLostVisit === 'true' || req.body.is_lost_visit === true || req.body.is_lost_visit === 'true') {
+          isLostVisit = true;
+        } else {
+          // Varre todos os valores do body buscando termos indicativos
+          for (const key of Object.keys(req.body)) {
+            const val = String(req.body[key]).toLowerCase();
+            if (val.includes('visita perdida') || val === 'vp' || val.includes('cliente ausente')) {
+              isLostVisit = true;
+              break;
+            }
+          }
+        }
+      }
+
+      let baseFee = Number(order.base_service_fee || 0);
+      let portoBilling = Number(order.porto_billing_value || 0);
+      let serviceMotive = order.service_motive || '';
+
+      if (isLostVisit) {
+        serviceMotive = 'Visita Perdida / Improdutiva';
+        baseFee = 40.00;
+        portoBilling = 35.00;
+      }
+
       // Recálculo financeiro completo
       const parsedKm = Number(kmTraveled);
       const kmPayout = Number((parsedKm * kmRate).toFixed(2));
       const tollAmount = tollCost !== undefined ? Number(tollCost) : Number(order.toll_cost || 0);
-      const baseFee = Number(order.base_service_fee || 0);
       const totalTechnicianGross = Number((baseFee + kmPayout + tollAmount).toFixed(2));
 
-      // Persistência atualizada no MariaDB
+      // Persistência atualizada no MariaDB com encerramento automático da OS (status = 'COMPLETED')
       await db.execute(
         `UPDATE service_orders 
-         SET km_traveled = ?, km_rate_applied = ?, toll_cost = ?, total_technician_gross = ?, updated_at = NOW() 
+         SET km_traveled = ?, 
+             km_rate_applied = ?, 
+             toll_cost = ?, 
+             total_technician_gross = ?, 
+             status = 'COMPLETED', 
+             base_service_fee = ?, 
+             porto_billing_value = ?, 
+             service_motive = ?, 
+             completed_at = NOW(), 
+             updated_at = NOW() 
          WHERE id = ?`,
-        [parsedKm, kmRate, tollAmount, totalTechnicianGross, order.id]
+        [parsedKm, kmRate, tollAmount, totalTechnicianGross, baseFee, portoBilling, serviceMotive, order.id]
       );
 
       // Sincronização do cache em memória volátil
@@ -4223,9 +5384,14 @@ async function startServer() {
         memOrders[memIndex].kmTotalCost = kmPayout;
         memOrders[memIndex].kmPayout = kmPayout;
         memOrders[memIndex].tollCost = tollAmount;
+        memOrders[memIndex].baseServiceFee = baseFee;
+        memOrders[memIndex].portoBillingValue = portoBilling;
+        memOrders[memIndex].porto_billing_value = portoBilling;
+        memOrders[memIndex].service_motive = serviceMotive;
         memOrders[memIndex].totalTechnicianGross = totalTechnicianGross;
         memOrders[memIndex].totalCost = totalTechnicianGross;
-        memOrders[memIndex].faturamentoPorto = totalTechnicianGross;
+        memOrders[memIndex].status = 'COMPLETED';
+        memOrders[memIndex].completedAt = new Date().toISOString();
       }
 
       // Registro no log de auditoria operacional
@@ -4239,10 +5405,10 @@ async function startServer() {
         affectedRecordId: order.id,
         affectedRecordType: 'service_order',
         result: 'SUCCESS',
-        details: `Quilometragem atualizada de forma resiliente via WhatsApp: ${parsedKm}km (Técnico: ${techName}, Repasse KM: R$ ${kmPayout}).`,
+        details: `Quilometragem atualizada de forma resiliente via WhatsApp: ${parsedKm}km (Técnico: ${techName}, Repasse KM: R$ ${kmPayout}). Status transicionado para COMPLETED.${isLostVisit ? ' Registrado como Visita Perdida / Improdutiva.' : ''}`,
       });
 
-      console.log(`[N8N Webhook] OS ${order.call_number} atualizada via update-km (KM: ${parsedKm}, Gross: ${totalTechnicianGross}).`);
+      console.log(`[N8N Webhook] OS ${order.call_number} encerrada e atualizada via update-km (KM: ${parsedKm}, Gross: ${totalTechnicianGross}).`);
 
       // Assinatura JSON de retorno estruturado
       res.json({
@@ -4259,7 +5425,7 @@ async function startServer() {
           kmPayout: kmPayout,
           tollCost: Number(tollAmount.toFixed(2)),
           totalTechnicianGross: Number(totalTechnicianGross.toFixed(2)),
-          status: order.status
+          status: 'COMPLETED'
         }
       });
 

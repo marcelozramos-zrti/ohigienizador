@@ -7,6 +7,7 @@ import {
   PackageCheck,
   Users,
   DollarSign,
+  Tag,
   Sliders,
   ShieldCheck,
   X,
@@ -114,6 +115,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           roles: ['OPERATIONAL', 'ADMIN'],
         },
         {
+          id: 'prices',
+          label: 'Tabela de Preços',
+          icon: Tag,
+          badge: null,
+          roles: ['OPERATIONAL', 'ADMIN'],
+        },
+        {
           id: 'cashflow',
           label: 'Caixa',
           icon: DollarSign,
@@ -137,9 +145,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         {
           id: 'import_orders',
-          label: 'Importar Planilhas',
+          label: 'Central de Importações',
           icon: UploadCloud,
-          badge: 'Porto .xlsx',
+          badge: 'Sincronizado',
           badgeColor: 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30',
           roles: ['ADMIN'],
         },
