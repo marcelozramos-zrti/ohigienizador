@@ -4898,12 +4898,31 @@ async function startServer() {
     try {
       const db = getDbPool();
 
-      // Trava de Duplicidade em Andamento
-      const [existing]: any = await db.query(
-        "SELECT id, status FROM service_orders WHERE call_number = ? AND status = 'IN_PROGRESS' LIMIT 1",
-        [String(callNumber).trim()]
+      // Extrator de dígitos canônicos (ignora prefixos como '09' para fins de verificação exata)
+      const getCanonicalDigits = (val: string | number): string => {
+        const digits = String(val).replace(/\D/g, '');
+        if (digits.startsWith('09') && digits.length > 4) {
+          return digits.substring(2);
+        }
+        return digits;
+      };
+
+      const cleanCallNumber = String(callNumber).trim();
+      const cleanCallNumberDigits = cleanCallNumber.replace(/\D/g, '');
+      const canonicalInput = getCanonicalDigits(cleanCallNumber);
+
+      // Trava de Duplicidade em Andamento: busca todas as OS 'IN_PROGRESS' e compara apenas números puros
+      const [allInProgress]: any = await db.query(
+        "SELECT id, call_number FROM service_orders WHERE status = 'IN_PROGRESS'"
       );
-      if (existing && existing.length > 0) {
+
+      const isDuplicate = allInProgress.some((os: any) => {
+        const dbDigits = String(os.call_number || '').replace(/\D/g, '');
+        const canonicalDb = getCanonicalDigits(os.call_number || '');
+        return (dbDigits && dbDigits === cleanCallNumberDigits) || (canonicalDb && canonicalDb === canonicalInput);
+      });
+
+      if (isDuplicate) {
         return res.status(409).json({
           success: false,
           error: "Ordem de serviço já cadastrada e em andamento."
@@ -4936,13 +4955,19 @@ async function startServer() {
         has_bracket_flag = 1;
         bracket_cost = 28.00; // Custo de insumo tabelado para o suporte
         
-        // Decremento de estoque físico de forma resiliente
+        // Decremento de estoque físico de forma resiliente com try/catch silencioso contra variações de colunas
         try {
           await db.execute(
-            "UPDATE stock_items SET quantityInStock = GREATEST(0, quantityInStock - 1), updatedAt = NOW() WHERE code = 'SUP-TV-44-70'"
+            "UPDATE stock_items SET quantity_in_stock = GREATEST(0, quantity_in_stock - 1), updated_at = NOW() WHERE code = 'SUP-TV-44-70'"
           );
         } catch (stockErr) {
-          console.warn("[Stock Warning] Falha ao debitar do estoque stock_items:", stockErr);
+          try {
+            await db.execute(
+              "UPDATE stock_items SET quantityInStock = GREATEST(0, quantityInStock - 1), updatedAt = NOW() WHERE code = 'SUP-TV-44-70'"
+            );
+          } catch (stockErr2) {
+            console.warn("[Stock Warning] Falha ao debitar do estoque stock_items:", stockErr2);
+          }
         }
         try {
           await db.execute(
@@ -4956,11 +4981,14 @@ async function startServer() {
       let technicianName = bodyTechName || 'Técnico Não Definido';
       let km_rate_applied = 0.75;
 
-      let parsedQra = qraCode || '';
-      let parsedName = bodyTechName || '';
+      const inputTech = req.body.technician || req.body.technicianName || req.body.techName || bodyTechName || req.body.Técnico || req.body.tecnico || '';
+      const inputQra = req.body.qra || req.body.qraCode || qraCode || '';
 
-      if (bodyTechName && String(bodyTechName).includes('-')) {
-        const parts = String(bodyTechName).split('-');
+      let parsedQra = String(inputQra).trim();
+      let parsedName = String(inputTech).trim();
+
+      if (parsedName && parsedName.includes('-')) {
+        const parts = parsedName.split('-');
         const potentialQra = parts[0].trim();
         const potentialName = parts[1].trim();
         if (/^\d+$/.test(potentialQra)) {
@@ -5062,24 +5090,48 @@ async function startServer() {
       const kmPayout = Number((parsedKm * km_rate_applied).toFixed(2));
       const totalTechnicianGross = Number((baseServiceFee + kmPayout + parsedToll).toFixed(2));
 
-      const osDate = new Date(scheduledAt || scheduledDate || new Date());
+      // 5.1. TRATAMENTO RESILIENTE DE DATA COM SUPORTE EXPLICITO A DD/MM/YYYY E FORMATO BRASILEIRO
+      let scheduled_date: string = new Date().toISOString().split('T')[0]; // Fallback: Hoje (YYYY-MM-DD)
+      const rawDate = scheduledAt || scheduledDate || req.body.scheduled_date || req.body.scheduled_at || req.body.scheduledAt || req.body.scheduledDate;
+      let osDate = new Date();
+      if (rawDate) {
+        const brMatch = String(rawDate).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (brMatch) {
+          scheduled_date = `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+          osDate = new Date(`${scheduled_date}T12:00:00`);
+        } else {
+          const parsed = new Date(rawDate);
+          if (!isNaN(parsed.getTime())) {
+            scheduled_date = parsed.toISOString().split('T')[0];
+            osDate = parsed;
+          }
+        }
+      }
+      if (isNaN(osDate.getTime())) {
+        osDate = new Date();
+      }
+
       const formatDbDate = (d: Date | null) => {
-        if (!d) return null;
-        return !isNaN(d.getTime()) ? d.toISOString().slice(0, 19).replace('T', ' ') : null;
+        if (!d || isNaN(d.getTime())) {
+          return new Date().toISOString().slice(0, 19).replace('T', ' ');
+        }
+        return d.toISOString().slice(0, 19).replace('T', ' ');
       };
 
       const safeIdSuffix = String(callNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
       const newId = `os-${safeIdSuffix}-${Date.now()}`;
 
-      // 5.5. CHECA SE EXISTE UM RASCUNHO PREVIAMENTE CRIADO (STATUS = 'PENDING') COM O MESMO NÚMERO (EVITANDO CONFLITOS DE SUBSTRING PARCIAL)
-      const cleanCallNumber = String(callNumber).trim();
-      const [existingDraftRows]: any = await db.query(
-        `SELECT id, km_traveled, toll_cost, service_motive, technician_id FROM service_orders 
-         WHERE (call_number = ? OR call_number = CONCAT('09/', ?) OR call_number LIKE CONCAT('%/', ?))
-           AND (status = 'PENDING' OR customer_name = 'Aguardando dados da Porto...') 
-         LIMIT 1`,
-        [cleanCallNumber, cleanCallNumber, cleanCallNumber]
+      // 5.5. CHECA SE EXISTE UM RASCUNHO PREVIAMENTE CRIADO (STATUS = 'PENDING') COM O MESMO NÚMERO (COM BASE EM NÚMEROS PUROS)
+      const [allPendingDrafts]: any = await db.query(
+        `SELECT id, call_number, km_traveled, toll_cost, service_motive, technician_id FROM service_orders 
+         WHERE status = 'PENDING' OR customer_name = 'Aguardando dados da Porto...'`
       );
+
+      const existingDraft = allPendingDrafts.find((os: any) => {
+        const dbDigits = String(os.call_number || '').replace(/\D/g, '');
+        const canonicalDb = getCanonicalDigits(os.call_number || '');
+        return (dbDigits && dbDigits === cleanCallNumberDigits) || (canonicalDb && canonicalDb === canonicalInput);
+      });
 
       let targetId = newId;
       let isMerged = false;
@@ -5091,17 +5143,16 @@ async function startServer() {
       let finalStatus = 'IN_PROGRESS';
       let finalGross = totalTechnicianGross;
 
-      if (existingDraftRows && existingDraftRows.length > 0) {
-        const draft = existingDraftRows[0];
-        targetId = draft.id;
+      if (existingDraft) {
+        targetId = existingDraft.id;
         isMerged = true;
         
         // Mantém KM e Pedágio já informados pelo técnico
-        finalKm = Number(draft.km_traveled || 0);
-        finalToll = Number(draft.toll_cost || 0);
+        finalKm = Number(existingDraft.km_traveled || 0);
+        finalToll = Number(existingDraft.toll_cost || 0);
 
         // Se o motivo do rascunho for Visita Perdida / Improdutiva, preserva essa regra
-        const draftIsLostVisit = draft.service_motive === 'Visita Perdida / Improdutiva' || 
+        const draftIsLostVisit = existingDraft.service_motive === 'Visita Perdida / Improdutiva' || 
                                  finalMotive.toLowerCase().includes('visita perdida') || 
                                  finalMotive.toLowerCase().includes('vp');
         if (draftIsLostVisit) {
@@ -5160,8 +5211,8 @@ async function startServer() {
             addressNumber || 'S/N',
             addressComplement || '',
             postalCode || '',
-            formatDbDate(osDate),
-            formatDbDate(osDate),
+            scheduled_date,
+            scheduled_date,
             finalBaseFee,
             finalPortoBilling,
             finalPortoBilling,
@@ -5264,7 +5315,7 @@ async function startServer() {
             postalCode || '',
             technicianId,
             'IN_PROGRESS',
-            formatDbDate(osDate),
+            scheduled_date,
             parsedKm,
             km_rate_applied,
             kmPayout,
@@ -5278,7 +5329,7 @@ async function startServer() {
           ]
         );
 
-        // Sincronizar memória volátil
+        // Sincronizar memória volátil APÓS confirmação bem-sucedida do MariaDB (Garantia de consistência e sincronização atômica)
         const newOrderMem: any = {
           id: newId,
           callNumber: cleanCallNumber,
@@ -5384,7 +5435,7 @@ async function startServer() {
           neighborhood: neighborhood || 'A definir',
           city: city || 'São Paulo',
           status: finalStatus,
-          scheduledDate: formatDbDate(osDate),
+          scheduledDate: scheduled_date,
           isCrossSelling: isCrossSellingFlag === 1,
           additionalItemsQty: additionalItemsQtyVal,
           additionalItemUnitPrice: additional_item_unit_price,
