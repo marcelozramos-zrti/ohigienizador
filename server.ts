@@ -4956,6 +4956,19 @@ async function startServer() {
       let technicianName = bodyTechName || 'Técnico Não Definido';
       let km_rate_applied = 0.75;
 
+      let parsedQra = qraCode || '';
+      let parsedName = bodyTechName || '';
+
+      if (bodyTechName && String(bodyTechName).includes('-')) {
+        const parts = String(bodyTechName).split('-');
+        const potentialQra = parts[0].trim();
+        const potentialName = parts[1].trim();
+        if (/^\d+$/.test(potentialQra)) {
+          parsedQra = potentialQra;
+          parsedName = potentialName;
+        }
+      }
+
       if (bodyTechId) {
         const [techRows]: any = await db.query(
           "SELECT id, name, km_rate FROM users WHERE id = ? LIMIT 1",
@@ -4966,26 +4979,49 @@ async function startServer() {
           technicianName = techRows[0].name;
           km_rate_applied = techRows[0].km_rate ? Number(techRows[0].km_rate) : 0.75;
         }
-      } else if (qraCode || bodyTechName) {
+      } else {
         let techFound = null;
 
-        if (qraCode) {
+        // Tenta buscar por QRA primeiro
+        if (parsedQra) {
           const [qraRows]: any = await db.query(
-            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND (qra_code = ? OR qra = ? OR LOWER(name) = LOWER(?)) LIMIT 1",
-            [qraCode, qraCode, qraCode]
+            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND (qra_code = ? OR qra = ? OR qra_code = ? OR qra = ? OR LOWER(name) = LOWER(?)) LIMIT 1",
+            [parsedQra, parsedQra, String(parsedQra).trim(), String(parsedQra).trim(), String(parsedQra).toLowerCase()]
           );
           if (qraRows && qraRows.length > 0) {
             techFound = qraRows[0];
           }
         }
 
-        if (!techFound && bodyTechName) {
-          const [nameRows]: any = await db.query(
-            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND LOWER(name) LIKE LOWER(?) LIMIT 1",
-            [`%${bodyTechName}%`]
+        // Se não achou, busca por nome exato ou parcial limpo
+        if (!techFound && parsedName) {
+          // Busca por igualdade exata
+          const [exactRows]: any = await db.query(
+            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND LOWER(name) = LOWER(?) LIMIT 1",
+            [parsedName.trim()]
           );
-          if (nameRows && nameRows.length > 0) {
-            techFound = nameRows[0];
+          if (exactRows && exactRows.length > 0) {
+            techFound = exactRows[0];
+          } else {
+            // Busca por aproximação
+            const [nameRows]: any = await db.query(
+              "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND LOWER(name) LIKE LOWER(?) LIMIT 1",
+              [`%${parsedName.trim()}%`]
+            );
+            if (nameRows && nameRows.length > 0) {
+              techFound = nameRows[0];
+            }
+          }
+        }
+
+        // Busca de fallback caso o nome inteiro sem tratar ainda precise ser verificado
+        if (!techFound && bodyTechName) {
+          const [fallbackRows]: any = await db.query(
+            "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND LOWER(name) LIKE LOWER(?) LIMIT 1",
+            [`%${bodyTechName.trim()}%`]
+          );
+          if (fallbackRows && fallbackRows.length > 0) {
+            techFound = fallbackRows[0];
           }
         }
 
@@ -4995,15 +5031,8 @@ async function startServer() {
           km_rate_applied = techFound.km_rate ? Number(techFound.km_rate) : 0.75;
         } else {
           technicianId = null;
-          technicianName = bodyTechName || 'Técnico Não Definido';
+          technicianName = parsedName || bodyTechName || 'Técnico Não Definido';
           km_rate_applied = 0.75;
-        }
-      } else {
-        const defaultTech = memUsers.find(u => u.status === 'ACTIVE' && u.role === 'TECHNICIAN');
-        if (defaultTech) {
-          technicianId = defaultTech.id;
-          technicianName = defaultTech.name;
-          km_rate_applied = defaultTech.km_rate ? Number(defaultTech.km_rate) : 0.75;
         }
       }
 
@@ -5042,125 +5071,284 @@ async function startServer() {
       const safeIdSuffix = String(callNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
       const newId = `os-${safeIdSuffix}-${Date.now()}`;
 
-      // 6. GRAVAÇÃO NO MARIADB (INSERT COM TODAS AS NOVAS COLUNAS DO MOTOR FINANCEIRO)
-      await db.execute(
-        `INSERT INTO service_orders (
-          id, call_number, porto_seguro_protocol, service_category, base_service_fee,
-          customer_name, customer_cpf, customer_phone, city, uf, neighborhood,
-          address_street, address_number, address_complement, postal_code,
-          technician_id, status, scheduled_date, started_at, completed_at,
-          km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
-          total_technician_gross, faturamento_porto, km_payout, kmPayout,
-          service_motive, porto_billing_value, has_bracket, bracket_cost,
-          is_cross_selling, additional_items_qty, additional_item_unit_price
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ,?)`,
-        [
-          newId,
-          String(callNumber).trim(),
-          '',
-          serviceCategory || 'Higienização / Instalação',
-          baseServiceFee,
-          customerName,
-          customerCpf || '',
-          customerPhone || '',
-          city || 'São Paulo',
-          req.body.uf || 'SP',
-          neighborhood || 'A definir',
-          addressStreet || 'A definir',
-          addressNumber || 'S/N',
-          addressComplement || '',
-          postalCode || '',
-          technicianId,
-          'IN_PROGRESS',
-          formatDbDate(osDate),
-          formatDbDate(osDate),
-          null,
-          parsedKm,
-          km_rate_applied,
-          kmPayout,
-          parsedToll,
-          0,
-          totalTechnicianGross,
-          porto_billing_value, // faturamento_porto
-          kmPayout,
-          kmPayout,
-          finalMotive,
-          porto_billing_value, // porto_billing_value
-          has_bracket_flag,
-          bracket_cost,
-          isCrossSellingFlag,
-          additionalItemsQtyVal,
-          additional_item_unit_price
-        ]
+      // 5.5. CHECA SE EXISTE UM RASCUNHO PREVIAMENTE CRIADO (STATUS = 'PENDING') COM O MESMO NÚMERO (EVITANDO CONFLITOS DE SUBSTRING PARCIAL)
+      const cleanCallNumber = String(callNumber).trim();
+      const [existingDraftRows]: any = await db.query(
+        `SELECT id, km_traveled, toll_cost, service_motive, technician_id FROM service_orders 
+         WHERE (call_number = ? OR call_number = CONCAT('09/', ?) OR call_number LIKE CONCAT('%/', ?))
+           AND (status = 'PENDING' OR customer_name = 'Aguardando dados da Porto...') 
+         LIMIT 1`,
+        [cleanCallNumber, cleanCallNumber, cleanCallNumber]
       );
 
-      // Sincronizar memória volátil
-      const newOrderMem: any = {
-        id: newId,
-        callNumber: String(callNumber).trim(),
-        customerName: customerName,
-        customerPhone: customerPhone || '',
-        customerCpf: customerCpf || '',
-        serviceCategory: serviceCategory || 'Higienização / Instalação',
-        technicianId: technicianId,
-        technicianName: technicianName,
-        city: city || 'São Paulo',
-        neighborhood: neighborhood || 'A definir',
-        addressStreet: addressStreet || 'A definir',
-        addressNumber: addressNumber || 'S/N',
-        status: 'IN_PROGRESS',
-        observation: observation || 'Inserida automaticamente via n8n',
-        scheduledDate: osDate.toISOString(),
-        createdAt: new Date().toISOString(),
-        kmTraveled: parsedKm,
-        kmCost: kmPayout,
-        tollCost: parsedToll,
-        supportCost: 0,
-        totalCost: totalTechnicianGross,
-        totalTechnicianGross,
-        baseServiceFee,
-        faturamentoPorto: porto_billing_value,
-        startedAt: osDate.toISOString(),
-        service_motive: finalMotive,
-        porto_billing_value,
-        has_bracket: has_bracket_flag,
-        bracket_cost,
-        is_cross_selling: isCrossSellingFlag,
-        additional_items_qty: additionalItemsQtyVal,
-        additional_item_unit_price: additional_item_unit_price
-      };
-      memOrders.unshift(newOrderMem);
-
-      await recordAudit({
-        userId: 'n8n-bot',
-        userName: 'N8N WhatsApp Bot',
-        userRole: 'OPERATIONAL',
-        ipAddress: req.ip,
-        module: 'SERVICE_ORDERS',
-        action: 'OS_CREATE',
-        affectedRecordId: newId,
-        affectedRecordType: 'service_order',
-        result: 'SUCCESS',
-        details: `OS ${callNumber} criada via N8N/Fast-Track. Cliente: ${customerName}, Técnico: ${technicianName}, Faturamento Porto: R$ ${porto_billing_value}, Repasse Base Técnico: R$ ${baseServiceFee}`,
-      });
-
-      console.log(`[N8N Webhook] OS ${callNumber} (ID: ${newId}) criada com sucesso no MariaDB.`);
-
-      // 4.5. VERIFICAÇÃO DO BUFFER DE ESPERA DE QUILOMETRAGEM
-      const cleanCallNumber = String(callNumber).trim();
-      const attachedFromBuffer = await checkAndAttachPendingKm(cleanCallNumber, newId, km_rate_applied, req.ip);
-
-      let finalStatus = 'IN_PROGRESS';
+      let targetId = newId;
+      let isMerged = false;
       let finalKm = parsedKm;
       let finalToll = parsedToll;
-      let finalGross = totalTechnicianGross;
       let finalBaseFee = baseServiceFee;
       let finalPortoBilling = porto_billing_value;
       let finalMotiveText = finalMotive;
+      let finalStatus = 'IN_PROGRESS';
+      let finalGross = totalTechnicianGross;
 
-      if (attachedFromBuffer) {
-        // Se foi anexado do buffer, recuperamos os dados atualizados do cache em memória para responder
-        const memOrder = memOrders.find((o: any) => String(o.id) === String(newId));
+      if (existingDraftRows && existingDraftRows.length > 0) {
+        const draft = existingDraftRows[0];
+        targetId = draft.id;
+        isMerged = true;
+        
+        // Mantém KM e Pedágio já informados pelo técnico
+        finalKm = Number(draft.km_traveled || 0);
+        finalToll = Number(draft.toll_cost || 0);
+
+        // Se o motivo do rascunho for Visita Perdida / Improdutiva, preserva essa regra
+        const draftIsLostVisit = draft.service_motive === 'Visita Perdida / Improdutiva' || 
+                                 finalMotive.toLowerCase().includes('visita perdida') || 
+                                 finalMotive.toLowerCase().includes('vp');
+        if (draftIsLostVisit) {
+          finalMotiveText = 'Visita Perdida / Improdutiva';
+          finalBaseFee = 40.00;
+          finalPortoBilling = 35.00;
+        }
+
+        // Recalcula o repasse do técnico com base no KM e taxa correta
+        const kmPayoutMerged = Number((finalKm * km_rate_applied).toFixed(2));
+        const totalTechnicianGrossMerged = Number((finalBaseFee + kmPayoutMerged + finalToll).toFixed(2));
+
+        // Atualiza a OS existente unificando os dados (MERGE) e finaliza como COMPLETED
+        await db.execute(
+          `UPDATE service_orders 
+           SET customer_name = ?,
+               customer_cpf = ?,
+               customer_phone = ?,
+               service_category = ?,
+               city = ?,
+               uf = ?,
+               neighborhood = ?,
+               address_street = ?,
+               address_number = ?,
+               address_complement = ?,
+               postal_code = ?,
+               scheduled_date = ?,
+               started_at = ?,
+               base_service_fee = ?,
+               porto_billing_value = ?,
+               faturamento_porto = ?,
+               service_motive = ?,
+               has_bracket = ?,
+               bracket_cost = ?,
+               is_cross_selling = ?,
+               additional_items_qty = ?,
+               additional_item_unit_price = ?,
+               km_rate_applied = ?,
+               km_total_cost = ?,
+               km_payout = ?,
+               kmPayout = ?,
+               total_technician_gross = ?,
+               status = 'COMPLETED',
+               completed_at = NOW(),
+               updated_at = NOW()
+           WHERE id = ?`,
+          [
+            customerName,
+            customerCpf || '',
+            customerPhone || '',
+            serviceCategory || 'Higienização / Instalação',
+            city || 'São Paulo',
+            req.body.uf || 'SP',
+            neighborhood || 'A definir',
+            addressStreet || 'A definir',
+            addressNumber || 'S/N',
+            addressComplement || '',
+            postalCode || '',
+            formatDbDate(osDate),
+            formatDbDate(osDate),
+            finalBaseFee,
+            finalPortoBilling,
+            finalPortoBilling,
+            finalMotiveText,
+            has_bracket_flag,
+            bracket_cost,
+            isCrossSellingFlag,
+            additionalItemsQtyVal,
+            additional_item_unit_price,
+            km_rate_applied,
+            kmPayoutMerged,
+            kmPayoutMerged,
+            kmPayoutMerged,
+            totalTechnicianGrossMerged,
+            targetId
+          ]
+        );
+
+        // Atualizar lista em memória (memOrders)
+        const memIndex = memOrders.findIndex((o: any) => String(o.id) === String(targetId));
+        if (memIndex !== -1) {
+          memOrders[memIndex].customerName = customerName;
+          memOrders[memIndex].customerCpf = customerCpf || '';
+          memOrders[memIndex].customerPhone = customerPhone || '';
+          memOrders[memIndex].serviceCategory = serviceCategory || 'Higienização / Instalação';
+          memOrders[memIndex].city = city || 'São Paulo';
+          memOrders[memIndex].neighborhood = neighborhood || 'A definir';
+          memOrders[memIndex].addressStreet = addressStreet || 'A definir';
+          memOrders[memIndex].addressNumber = addressNumber || 'S/N';
+          memOrders[memIndex].baseServiceFee = finalBaseFee;
+          memOrders[memIndex].portoBillingValue = finalPortoBilling;
+          memOrders[memIndex].porto_billing_value = finalPortoBilling;
+          memOrders[memIndex].service_motive = finalMotiveText;
+          memOrders[memIndex].has_bracket = has_bracket_flag;
+          memOrders[memIndex].bracket_cost = bracket_cost;
+          memOrders[memIndex].is_cross_selling = isCrossSellingFlag;
+          memOrders[memIndex].additional_items_qty = additionalItemsQtyVal;
+          memOrders[memIndex].additional_item_unit_price = additional_item_unit_price;
+          memOrders[memIndex].kmRateApplied = km_rate_applied;
+          memOrders[memIndex].kmCost = kmPayoutMerged;
+          memOrders[memIndex].kmPayout = kmPayoutMerged;
+          memOrders[memIndex].kmTraveled = finalKm;
+          memOrders[memIndex].tollCost = finalToll;
+          memOrders[memIndex].totalTechnicianGross = totalTechnicianGrossMerged;
+          memOrders[memIndex].totalCost = totalTechnicianGrossMerged;
+          memOrders[memIndex].status = 'COMPLETED';
+          memOrders[memIndex].completedAt = new Date().toISOString();
+          memOrders[memIndex].scheduledDate = osDate.toISOString();
+        }
+
+        // Marcar pendências de buffer como anexadas
+        await db.execute(
+          "UPDATE pending_km_buffer SET status = 'ATTACHED', attached_at = NOW() WHERE call_number_partial LIKE CONCAT('%', ?, '%')",
+          [cleanCallNumber]
+        ).catch(() => {});
+
+        await recordAudit({
+          userId: 'n8n-bot',
+          userName: 'N8N WhatsApp Bot',
+          userRole: 'OPERATIONAL',
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'OS_UPDATE',
+          affectedRecordId: targetId,
+          affectedRecordType: 'service_order',
+          result: 'SUCCESS',
+          details: `OS Rascunho ${cleanCallNumber} mesclada com sucesso com lote da Porto. Transicionado status para COMPLETED.`,
+        });
+
+        finalStatus = 'COMPLETED';
+        finalGross = totalTechnicianGrossMerged;
+
+      } else {
+        // 6. SE NÃO EXISTIR RASCUNHO, FAZ A GRAVAÇÃO NORMAL NO MARIADB (INSERT) (CORRIGIDO PARA SCHEMA REAL MARIADB)
+        await db.execute(
+          `INSERT INTO service_orders (
+            id, call_number, porto_seguro_protocol, service_category, service_motive,
+            base_service_fee, customer_name, customer_cpf, customer_phone,
+            city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
+            technician_id, status, scheduled_date, km_traveled, km_rate_applied,
+            km_total_cost, toll_cost, support_cost, total_technician_gross, porto_billing_value,
+            has_bracket, bracket_cost, is_cross_selling, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            newId,
+            cleanCallNumber,
+            '',
+            serviceCategory || 'Higienização / Instalação',
+            finalMotive,
+            baseServiceFee,
+            customerName,
+            customerCpf || '',
+            customerPhone || '',
+            city || 'São Paulo',
+            req.body.uf || 'SP',
+            neighborhood || 'A definir',
+            addressStreet || 'A definir',
+            addressNumber || 'S/N',
+            addressComplement || '',
+            postalCode || '',
+            technicianId,
+            'IN_PROGRESS',
+            formatDbDate(osDate),
+            parsedKm,
+            km_rate_applied,
+            kmPayout,
+            parsedToll,
+            0,
+            totalTechnicianGross,
+            porto_billing_value,
+            has_bracket_flag,
+            bracket_cost,
+            isCrossSellingFlag
+          ]
+        );
+
+        // Sincronizar memória volátil
+        const newOrderMem: any = {
+          id: newId,
+          callNumber: cleanCallNumber,
+          customerName: customerName,
+          customerPhone: customerPhone || '',
+          customerCpf: customerCpf || '',
+          serviceCategory: serviceCategory || 'Higienização / Instalação',
+          technicianId: technicianId,
+          technicianName: technicianName,
+          city: city || 'São Paulo',
+          neighborhood: neighborhood || 'A definir',
+          addressStreet: addressStreet || 'A definir',
+          addressNumber: addressNumber || 'S/N',
+          status: 'IN_PROGRESS',
+          observation: observation || 'Inserida automaticamente via n8n',
+          scheduledDate: osDate.toISOString(),
+          createdAt: new Date().toISOString(),
+          kmTraveled: parsedKm,
+          kmCost: kmPayout,
+          tollCost: parsedToll,
+          supportCost: 0,
+          totalCost: totalTechnicianGross,
+          totalTechnicianGross,
+          baseServiceFee,
+          faturamentoPorto: porto_billing_value,
+          startedAt: osDate.toISOString(),
+          service_motive: finalMotive,
+          porto_billing_value,
+          has_bracket: has_bracket_flag,
+          bracket_cost,
+          is_cross_selling: isCrossSellingFlag,
+          additional_items_qty: additionalItemsQtyVal,
+          additional_item_unit_price: additional_item_unit_price
+        };
+        memOrders.unshift(newOrderMem);
+
+        await recordAudit({
+          userId: 'n8n-bot',
+          userName: 'N8N WhatsApp Bot',
+          userRole: 'OPERATIONAL',
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'OS_CREATE',
+          affectedRecordId: newId,
+          affectedRecordType: 'service_order',
+          result: 'SUCCESS',
+          details: `OS ${callNumber} criada via N8N/Fast-Track. Cliente: ${customerName}, Técnico: ${technicianName}, Faturamento Porto: R$ ${porto_billing_value}, Repasse Base Técnico: R$ ${baseServiceFee}`,
+        });
+
+        console.log(`[N8N Webhook] OS ${callNumber} (ID: ${newId}) criada com sucesso no MariaDB.`);
+      }
+
+      // 4.5. VERIFICAÇÃO DO BUFFER DE ESPERA DE QUILOMETRAGEM (SOMENTE SE NÃO FOR MESCLADO DE RASCUNHO)
+      let attachedFromBuffer = false;
+      if (!isMerged) {
+        attachedFromBuffer = await checkAndAttachPendingKm(cleanCallNumber, targetId, km_rate_applied, req.ip);
+        if (attachedFromBuffer) {
+          const memOrder = memOrders.find((o: any) => String(o.id) === String(targetId));
+          if (memOrder) {
+            finalStatus = memOrder.status;
+            finalKm = memOrder.kmTraveled;
+            finalToll = memOrder.tollCost;
+            finalGross = memOrder.totalTechnicianGross;
+            finalBaseFee = memOrder.baseServiceFee;
+            finalPortoBilling = memOrder.porto_billing_value;
+            finalMotiveText = memOrder.service_motive;
+          }
+        }
+      } else {
+        const memOrder = memOrders.find((o: any) => String(o.id) === String(targetId));
         if (memOrder) {
           finalStatus = memOrder.status;
           finalKm = memOrder.kmTraveled;
@@ -5176,7 +5364,7 @@ async function startServer() {
       res.json({
         success: true,
         data: {
-          id: newId,
+          id: targetId,
           callNumber: cleanCallNumber,
           customerName: customerName,
           serviceCategory: serviceCategory || 'Higienização / Instalação',
@@ -5200,7 +5388,8 @@ async function startServer() {
           isCrossSelling: isCrossSellingFlag === 1,
           additionalItemsQty: additionalItemsQtyVal,
           additionalItemUnitPrice: additional_item_unit_price,
-          attachedFromBuffer: attachedFromBuffer
+          attachedFromBuffer: attachedFromBuffer,
+          isMerged: isMerged
         }
       });
 
@@ -5232,10 +5421,12 @@ async function startServer() {
       const db = getDbPool();
       const cleanPartial = String(callNumberPartial).trim();
 
-      // Busca resiliente por aproximação
+      // Busca resiliente por aproximação estrita (evitando sobreposição de chamados parciais)
       const [rows]: any = await db.query(
-        "SELECT * FROM service_orders WHERE call_number LIKE CONCAT('%', ?, '%') ORDER BY id DESC LIMIT 1",
-        [cleanPartial]
+        `SELECT * FROM service_orders 
+         WHERE (call_number = ? OR call_number = CONCAT('09/', ?) OR call_number LIKE CONCAT('%/', ?))
+         ORDER BY id DESC LIMIT 1`,
+        [cleanPartial, cleanPartial, cleanPartial]
       );
 
       if (!rows || rows.length === 0) {
@@ -5259,10 +5450,10 @@ async function startServer() {
         const parsedKm = Number(kmTraveled);
         const parsedToll = tollCost !== undefined ? Number(tollCost) : 0;
         const senderPhone = req.body.senderPhone || req.body.sender_phone || req.body.phone || null;
-        const technicianId = req.body.technicianId || req.body.technician_id || null;
-        const technicianName = req.body.technicianName || req.body.technician_name || null;
+        const inputTechId = req.body.technicianId || req.body.technician_id || null;
+        const inputTechName = req.body.technicianName || req.body.technician_name || null;
 
-        // Persistência no buffer de espera
+        // Persistência no buffer de espera (para auditoria histórica e integridade)
         await db.execute(
           `INSERT INTO pending_km_buffer (
             call_number_partial, km_traveled, toll_cost, technician_name, technician_id, sender_phone, is_lost_visit, status, created_at
@@ -5271,14 +5462,14 @@ async function startServer() {
             cleanPartial,
             parsedKm,
             parsedToll,
-            technicianName,
-            technicianId,
+            inputTechName,
+            inputTechId,
             senderPhone,
             isLostVisit ? 1 : 0
           ]
         );
 
-        // Registro de auditoria
+        // Registro de auditoria do Buffer
         await recordAudit({
           userId: 'n8n-bot',
           userName: 'N8N WhatsApp Bot',
@@ -5292,11 +5483,147 @@ async function startServer() {
           details: `OS não localizada para o número ${cleanPartial}. KM (${parsedKm}) e Pedágio (${parsedToll}) guardados com sucesso no buffer de espera para vinculação futura.`,
         });
 
+        // RESOLVER TÉCNICO PELO SENDER PHONE PARA RASCUNHO VISÍVEL
+        let resolvedTechId = inputTechId;
+        let resolvedTechName = inputTechName || "Técnico a Vincular";
+        let kmRate = 0.75;
+
+        const cleanPhone = senderPhone ? String(senderPhone).replace(/\D/g, '') : '';
+        if (cleanPhone) {
+          const foundTech = memUsers.find(u => {
+            if (u.role !== 'TECHNICIAN' || !u.phone) return false;
+            const techPhoneClean = String(u.phone).replace(/\D/g, '');
+            return techPhoneClean.includes(cleanPhone) || cleanPhone.includes(techPhoneClean);
+          });
+
+          if (foundTech) {
+            resolvedTechId = foundTech.id;
+            resolvedTechName = foundTech.name;
+            kmRate = foundTech.km_rate !== undefined && foundTech.km_rate !== null ? Number(foundTech.km_rate) : 0.75;
+          } else {
+            const [techDbRows]: any = await db.query(
+              "SELECT id, name, km_rate FROM users WHERE role = 'TECHNICIAN' AND (REPLACE(phone, ' ', '') LIKE ? OR ? LIKE CONCAT('%', REPLACE(phone, ' ', ''), '%')) LIMIT 1",
+              [`%${cleanPhone}%`, cleanPhone]
+            );
+            if (techDbRows && techDbRows.length > 0) {
+              resolvedTechId = techDbRows[0].id;
+              resolvedTechName = techDbRows[0].name;
+              kmRate = techDbRows[0].km_rate ? Number(techDbRows[0].km_rate) : 0.75;
+            }
+          }
+        }
+
+        // Regra de precificação individual especial para Bruna
+        const isBrunaDraft = resolvedTechName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes('bruna');
+        if (isBrunaDraft || kmRate === 1.41) {
+          kmRate = 1.41;
+        }
+
+        // Formatação do callNumber (ex: "09/" + callNumberPartial se for pura sequência de números de 5-8 dígitos)
+        let cleanCallNumber = cleanPartial;
+        if (!cleanCallNumber.includes('/') && /^\d{5,8}$/.test(cleanCallNumber)) {
+          cleanCallNumber = '09/' + cleanCallNumber;
+        }
+
+        const baseFee = isLostVisit ? 40.00 : 0.00;
+        const kmPayout = Number((parsedKm * kmRate).toFixed(2));
+        const totalTechnicianGross = Number((baseFee + kmPayout + parsedToll).toFixed(2));
+
+        const safeIdSuffix = String(cleanCallNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
+        const draftId = `os-${safeIdSuffix}-${Date.now()}`;
+
+        // CRIAR NOVA OS RASCUNHO (PENDING) NO MARIADB
+        await db.execute(
+          `INSERT INTO service_orders (
+            id, call_number, service_category, base_service_fee,
+            customer_name, customer_phone, city, uf, neighborhood,
+            address_street, address_number, address_complement, postal_code,
+            technician_id, status, scheduled_date, started_at, completed_at,
+            km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
+            total_technician_gross, faturamento_porto, km_payout, kmPayout,
+            service_motive, porto_billing_value, has_bracket, bracket_cost,
+            is_cross_selling, additional_items_qty, additional_item_unit_price
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), NOW(), NULL, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0)`,
+          [
+            draftId,
+            cleanCallNumber,
+            'Lançamento Antecipado de KM',
+            baseFee,
+            'Aguardando dados da Porto...',
+            cleanPhone ? `+${cleanPhone}` : '',
+            'A definir',
+            'SP',
+            'A definir',
+            'A definir',
+            'S/N',
+            '',
+            '',
+            resolvedTechId,
+            parsedKm,
+            kmRate,
+            kmPayout,
+            parsedToll,
+            totalTechnicianGross,
+            kmPayout,
+            kmPayout,
+            isLostVisit ? 'Visita Perdida / Improdutiva' : 'Quilometragem já informada via WhatsApp'
+          ]
+        );
+
+        // INSERIR OS RASCUNHO NO CACHE memOrders IMEDIATAMENTE
+        const draftMem: any = {
+          id: draftId,
+          callNumber: cleanCallNumber,
+          customerName: 'Aguardando dados da Porto...',
+          customerPhone: cleanPhone ? `+${cleanPhone}` : '',
+          customerCpf: '',
+          serviceCategory: 'Lançamento Antecipado de KM',
+          technicianId: resolvedTechId,
+          technicianName: resolvedTechName,
+          city: 'A definir',
+          neighborhood: 'A definir',
+          addressStreet: 'A definir',
+          addressNumber: 'S/N',
+          status: 'PENDING',
+          observation: 'Rascunho criado por envio antecipado de KM via WhatsApp',
+          scheduledDate: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          kmTraveled: parsedKm,
+          kmCost: kmPayout,
+          tollCost: parsedToll,
+          supportCost: 0,
+          totalCost: totalTechnicianGross,
+          totalTechnicianGross,
+          baseServiceFee: baseFee,
+          faturamentoPorto: 0.00,
+          startedAt: new Date().toISOString(),
+          service_motive: isLostVisit ? 'Visita Perdida / Improdutiva' : 'Quilometragem já informada via WhatsApp',
+          porto_billing_value: 0.00,
+          has_bracket: 0,
+          bracket_cost: 0
+        };
+        memOrders.unshift(draftMem);
+
+        // Registro de auditoria da criação do rascunho
+        await recordAudit({
+          userId: 'n8n-bot',
+          userName: 'N8N WhatsApp Bot',
+          userRole: 'OPERATIONAL',
+          ipAddress: req.ip,
+          module: 'SERVICE_ORDERS',
+          action: 'OS_CREATE',
+          affectedRecordId: draftId,
+          affectedRecordType: 'service_order',
+          result: 'SUCCESS',
+          details: `OS Rascunho ${cleanCallNumber} criada automaticamente via KM Inbound. Técnico: ${resolvedTechName}, KM: ${parsedKm}`,
+        });
+
         return res.json({
           success: true,
           buffered: true,
+          isDraftCreated: true,
           status: 'PENDING',
-          message: `Quilometragem armazenada no buffer de espera para o chamado ${cleanPartial}. Será vinculada automaticamente assim que o gestor criar a OS.`
+          message: 'OS Rascunho criada no painel aguardando dados da Porto.'
         });
       }
 
