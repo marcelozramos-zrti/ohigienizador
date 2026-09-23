@@ -167,16 +167,20 @@ async function startServer() {
   async function checkAndAttachPendingKm(callNumber: string, orderId: string, kmRateApplied: number, reqIp?: string): Promise<boolean> {
     try {
       const db = getDbPool();
-      const cleanCallNumber = String(callNumber).trim();
+      const cleanCallNumber = String(callNumber).replace(/^09\//i, '').trim();
+      const rawCallNumber = String(callNumber).trim();
       
-      // Busca resiliente em ambas direções
+      // Busca resiliente em ambas direções tanto pelo número direto quanto com/sem prefixo 09/
       const [pendingRows]: any = await db.query(
         `SELECT * FROM pending_km_buffer 
          WHERE status = 'PENDING' 
-           AND (LOWER(?) LIKE CONCAT('%', LOWER(call_number_partial), '%') 
+           AND (call_number_partial = ? 
+                OR call_number_partial = ?
+                OR call_number_partial = CONCAT('09/', ?) 
+                OR LOWER(?) LIKE CONCAT('%', LOWER(call_number_partial), '%') 
                 OR LOWER(call_number_partial) LIKE CONCAT('%', LOWER(?), '%'))
          ORDER BY id DESC LIMIT 1`,
-        [cleanCallNumber, cleanCallNumber]
+        [cleanCallNumber, rawCallNumber, cleanCallNumber, cleanCallNumber, cleanCallNumber]
       );
 
       if (pendingRows && pendingRows.length > 0) {
@@ -5069,8 +5073,79 @@ async function startServer() {
         km_rate_applied = 1.41;
       }
 
-      // 4. RESOLUÇÃO FINANCEIRA BILATERAL DINÂMICA
-      let baseServiceFee = Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
+      // 4. RESOLUÇÃO FINANCEIRA BILATERAL DINÂMICA (PRECIFICAÇÃO EXATA POR MOTIVO NA TABELA DO TÉCNICO)
+      let customFeeFound: number | null = null;
+      if (technicianId) {
+        try {
+          // Lógica de busca de preço negociado do técnico:
+          // 1. Buscar em technician_custom_rates onde technician_id = ? e service_name = ? (testando primeiro service_motive, depois service_category)
+          const candidates = [finalMotive, resolvedCategory, serviceCategory].filter(Boolean);
+          for (const candidate of candidates) {
+            const candStr = String(candidate).trim();
+            if (!candStr) continue;
+
+            // Tentativa 1: Coluna service_name
+            try {
+              const [rows]: any = await db.query(
+                "SELECT custom_fee FROM technician_custom_rates WHERE technician_id = ? AND (service_name = ? OR LOWER(service_name) = LOWER(?)) LIMIT 1",
+                [technicianId, candStr, candStr]
+              );
+              if (rows && rows.length > 0 && rows[0].custom_fee !== null && rows[0].custom_fee !== undefined) {
+                customFeeFound = Number(rows[0].custom_fee);
+                console.log(`[Pricing] Taxa customizada encontrada para técnico ${technicianName} (${technicianId}) por service_name='${candStr}': R$ ${customFeeFound}`);
+                break;
+              }
+            } catch (nameErr) {
+              // Prossegue caso a coluna service_name não exista no schema deste ambiente
+            }
+
+            // Tentativa 2: Coluna service_category
+            try {
+              const [rowsCat]: any = await db.query(
+                "SELECT custom_fee FROM technician_custom_rates WHERE technician_id = ? AND (service_category = ? OR LOWER(service_category) = LOWER(?)) LIMIT 1",
+                [technicianId, candStr, candStr]
+              );
+              if (rowsCat && rowsCat.length > 0 && rowsCat[0].custom_fee !== null && rowsCat[0].custom_fee !== undefined) {
+                customFeeFound = Number(rowsCat[0].custom_fee);
+                console.log(`[Pricing] Taxa customizada encontrada para técnico ${technicianName} (${technicianId}) por service_category='${candStr}': R$ ${customFeeFound}`);
+                break;
+              }
+            } catch (catErr) {}
+          }
+
+          // Fallback resiliente: varredura ampla das taxas configuradas para o técnico
+          if (customFeeFound === null) {
+            const [allRates]: any = await db.query(
+              "SELECT * FROM technician_custom_rates WHERE technician_id = ?",
+              [technicianId]
+            );
+            if (allRates && allRates.length > 0) {
+              const motiveLower = String(finalMotive).toLowerCase().trim();
+              const catLower = String(resolvedCategory || serviceCategory || '').toLowerCase().trim();
+              
+              const match = allRates.find((r: any) => {
+                const rateName = String(r.service_name || r.service_category || '').toLowerCase().trim();
+                if (!rateName) return false;
+                return (
+                  rateName === motiveLower ||
+                  motiveLower.includes(rateName) ||
+                  rateName.includes(motiveLower) ||
+                  (catLower && (rateName === catLower || catLower.includes(rateName) || rateName.includes(catLower)))
+                );
+              });
+              if (match && match.custom_fee !== null && match.custom_fee !== undefined) {
+                customFeeFound = Number(match.custom_fee);
+                console.log(`[Pricing Fallback] Taxa customizada encontrada por aproximação para técnico ${technicianName}: R$ ${customFeeFound}`);
+              }
+            }
+          }
+        } catch (ratesErr) {
+          console.warn("[Pricing Warning] Erro ao consultar technician_custom_rates:", ratesErr);
+        }
+      }
+
+      // Se encontrar na tabela do técnico, aplica exatamente o valor cadastrado. Senão, fallback para regra geral
+      let baseServiceFee = customFeeFound !== null ? customFeeFound : Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
       if (!baseServiceFee) {
         baseServiceFee = resolveTechnicianBaseFee(finalMotive);
       }
@@ -5121,16 +5196,26 @@ async function startServer() {
       const safeIdSuffix = String(callNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
       const newId = `os-${safeIdSuffix}-${Date.now()}`;
 
-      // 5.5. CHECA SE EXISTE UM RASCUNHO PREVIAMENTE CRIADO (STATUS = 'PENDING') COM O MESMO NÚMERO (COM BASE EM NÚMEROS PUROS)
+      // 5.5. CHECA SE EXISTE UM RASCUNHO PREVIAMENTE CRIADO (STATUS = 'PENDING') COM O MESMO NÚMERO (COM BASE EM NÚMEROS PUROS OU COM/SEM 09/)
       const [allPendingDrafts]: any = await db.query(
         `SELECT id, call_number, km_traveled, toll_cost, service_motive, technician_id FROM service_orders 
-         WHERE status = 'PENDING' OR customer_name = 'Aguardando dados da Porto...'`
+         WHERE status = 'PENDING' OR customer_name = 'Aguardando dados da Porto...' OR customer_name = 'Cliente Porto Seguro'`
       );
 
+      const cleanCallNumberWithoutPrefix = cleanCallNumber.replace(/^09\//i, '').trim();
+
       const existingDraft = allPendingDrafts.find((os: any) => {
-        const dbDigits = String(os.call_number || '').replace(/\D/g, '');
-        const canonicalDb = getCanonicalDigits(os.call_number || '');
-        return (dbDigits && dbDigits === cleanCallNumberDigits) || (canonicalDb && canonicalDb === canonicalInput);
+        const dbRaw = String(os.call_number || '').trim();
+        const dbClean = dbRaw.replace(/^09\//i, '').trim();
+        const dbDigits = dbRaw.replace(/\D/g, '');
+        const canonicalDb = getCanonicalDigits(dbRaw);
+
+        return (
+          dbClean === cleanCallNumberWithoutPrefix ||
+          dbRaw === cleanCallNumber ||
+          (dbDigits && dbDigits === cleanCallNumberDigits) ||
+          (canonicalDb && canonicalDb === canonicalInput)
+        );
       });
 
       let targetId = newId;
@@ -5195,6 +5280,7 @@ async function startServer() {
                km_payout = ?,
                kmPayout = ?,
                total_technician_gross = ?,
+               technician_id = COALESCE(?, technician_id),
                status = 'COMPLETED',
                completed_at = NOW(),
                updated_at = NOW()
@@ -5227,6 +5313,7 @@ async function startServer() {
             kmPayoutMerged,
             kmPayoutMerged,
             totalTechnicianGrossMerged,
+            technicianId,
             targetId
           ]
         );
@@ -5459,10 +5546,12 @@ async function startServer() {
       });
     }
 
-    const { callNumberPartial, kmTraveled, tollCost } = req.body || {};
+    const rawCallNumber = req.body?.callNumberPartial || req.body?.callNumber || req.body?.call_number || '';
+    const kmTraveled = req.body?.kmTraveled ?? req.body?.km_traveled ?? req.body?.km;
+    const tollCost = req.body?.tollCost ?? req.body?.toll_cost ?? req.body?.pedagio ?? req.body?.pedágio ?? 0;
 
-    if (!callNumberPartial) {
-      return res.status(400).json({ success: false, error: 'O parâmetro callNumberPartial é obrigatório.' });
+    if (!rawCallNumber) {
+      return res.status(400).json({ success: false, error: 'O parâmetro callNumberPartial ou callNumber é obrigatório.' });
     }
     if (kmTraveled === undefined || kmTraveled === null) {
       return res.status(400).json({ success: false, error: 'O parâmetro kmTraveled é obrigatório.' });
@@ -5470,14 +5559,16 @@ async function startServer() {
 
     try {
       const db = getDbPool();
-      const cleanPartial = String(callNumberPartial).trim();
+      // Normalizar número da OS removendo prefixos (ex: "09/5746" -> "5746")
+      const cleanPartial = String(rawCallNumber).replace(/^09\//i, '').trim();
+      const rawTrimmed = String(rawCallNumber).trim();
 
-      // Busca resiliente por aproximação estrita (evitando sobreposição de chamados parciais)
+      // Busca resiliente por aproximação estrita garantindo suporte com e sem prefixo 09/
       const [rows]: any = await db.query(
         `SELECT * FROM service_orders 
-         WHERE (call_number = ? OR call_number = CONCAT('09/', ?) OR call_number LIKE CONCAT('%/', ?))
+         WHERE (call_number = ? OR call_number = ? OR call_number = CONCAT('09/', ?) OR call_number LIKE CONCAT('%/', ?))
          ORDER BY id DESC LIMIT 1`,
-        [cleanPartial, cleanPartial, cleanPartial]
+        [cleanPartial, rawTrimmed, cleanPartial, cleanPartial]
       );
 
       if (!rows || rows.length === 0) {
@@ -5504,7 +5595,7 @@ async function startServer() {
         const inputTechId = req.body.technicianId || req.body.technician_id || null;
         const inputTechName = req.body.technicianName || req.body.technician_name || null;
 
-        // Persistência no buffer de espera (para auditoria histórica e integridade)
+        // Persistência no buffer de espera com call_number_partial normalizado sem o "09/"
         await db.execute(
           `INSERT INTO pending_km_buffer (
             call_number_partial, km_traveled, toll_cost, technician_name, technician_id, sender_phone, is_lost_visit, status, created_at
@@ -5570,11 +5661,8 @@ async function startServer() {
           kmRate = 1.41;
         }
 
-        // Formatação do callNumber (ex: "09/" + callNumberPartial se for pura sequência de números de 5-8 dígitos)
-        let cleanCallNumber = cleanPartial;
-        if (!cleanCallNumber.includes('/') && /^\d{5,8}$/.test(cleanCallNumber)) {
-          cleanCallNumber = '09/' + cleanCallNumber;
-        }
+        // Formatação do callNumber normalizado sem o "09/"
+        const cleanCallNumber = cleanPartial;
 
         const baseFee = isLostVisit ? 40.00 : 0.00;
         const kmPayout = Number((parsedKm * kmRate).toFixed(2));
@@ -5583,32 +5671,44 @@ async function startServer() {
         const safeIdSuffix = String(cleanCallNumber).toLowerCase().replace(/[^a-z0-9\-]/g, '');
         const draftId = `os-${safeIdSuffix}-${Date.now()}`;
 
-        // CRIAR NOVA OS RASCUNHO (PENDING) NO MARIADB
+        // CRIAR NOVA OS RASCUNHO (PENDING) NO MARIADB COM TODAS AS COLUNAS NOT NULL ASSEGURADAS
         await db.execute(
           `INSERT INTO service_orders (
-            id, call_number, service_category, base_service_fee,
-            customer_name, customer_phone, city, uf, neighborhood,
-            address_street, address_number, address_complement, postal_code,
+            id, call_number, porto_seguro_protocol, service_category, service_motive,
+            base_service_fee, customer_name, customer_cpf, customer_phone,
+            city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
             technician_id, status, scheduled_date, started_at, completed_at,
             km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
             total_technician_gross, faturamento_porto, km_payout, kmPayout,
-            service_motive, porto_billing_value, has_bracket, bracket_cost,
-            is_cross_selling, additional_items_qty, additional_item_unit_price
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), NOW(), NULL, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0)`,
+            porto_billing_value, has_bracket, bracket_cost,
+            is_cross_selling, additional_items_qty, additional_item_unit_price, created_at
+          ) VALUES (
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?,
+            ?, 'PENDING', NOW(), NOW(), NULL,
+            ?, ?, ?, ?, 0,
+            ?, 0, ?, ?,
+            0, 0, 0,
+            0, 0, 0, NOW()
+          )`,
           [
             draftId,
             cleanCallNumber,
+            '',
             'Lançamento Antecipado de KM',
+            isLostVisit ? 'Visita Perdida / Improdutiva' : 'Quilometragem já informada via WhatsApp',
             baseFee,
-            'Aguardando dados da Porto...',
+            'Cliente Porto Seguro',
+            '000.000.000-00',
             cleanPhone ? `+${cleanPhone}` : '',
-            'A definir',
+            'São Paulo',
             'SP',
             'A definir',
             'A definir',
             'S/N',
             '',
-            '',
+            '00000000',
             resolvedTechId,
             parsedKm,
             kmRate,
@@ -5616,8 +5716,7 @@ async function startServer() {
             parsedToll,
             totalTechnicianGross,
             kmPayout,
-            kmPayout,
-            isLostVisit ? 'Visita Perdida / Improdutiva' : 'Quilometragem já informada via WhatsApp'
+            kmPayout
           ]
         );
 
@@ -5625,16 +5724,17 @@ async function startServer() {
         const draftMem: any = {
           id: draftId,
           callNumber: cleanCallNumber,
-          customerName: 'Aguardando dados da Porto...',
+          customerName: 'Cliente Porto Seguro',
           customerPhone: cleanPhone ? `+${cleanPhone}` : '',
-          customerCpf: '',
+          customerCpf: '000.000.000-00',
           serviceCategory: 'Lançamento Antecipado de KM',
           technicianId: resolvedTechId,
           technicianName: resolvedTechName,
-          city: 'A definir',
+          city: 'São Paulo',
           neighborhood: 'A definir',
           addressStreet: 'A definir',
           addressNumber: 'S/N',
+          postalCode: '00000000',
           status: 'PENDING',
           observation: 'Rascunho criado por envio antecipado de KM via WhatsApp',
           scheduledDate: new Date().toISOString(),
@@ -6048,7 +6148,7 @@ async function startServer() {
              km_rate_applied = ?,
              km_payout = ?,
              kmPayout = ?
-         WHERE id = ? OR call_number = ?`,
+         WHERE id = ? OR call_number = ? OR call_number = CONCAT('09/', ?) OR call_number = ?`,
         [
           updatedOrder.status,
           Number(updatedOrder.kmTraveled || 0),
@@ -6071,6 +6171,8 @@ async function startServer() {
           updatedOrder.kmPayout || 0,
           updatedOrder.id,
           updatedOrder.callNumber,
+          String(updatedOrder.callNumber || '').replace(/^09\//i, ''),
+          String(updatedOrder.callNumber || '').replace(/^09\//i, '')
         ]
       );
       console.log(`[N8N Webhook] OS ${updatedOrder.callNumber} (ID: ${updatedOrder.id}) persistida com sucesso no MariaDB. Status: ${updatedOrder.status}`);
