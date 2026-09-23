@@ -4815,40 +4815,23 @@ async function startServer() {
   }
 
   function resolveTechnicianBaseFee(motive: string): number {
-    const m = String(motive || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    let base_service_fee = 50.00;
+    const s = String(motive || '').toLowerCase();
 
-    if (m.includes('visita perdida') || m.includes('vp') || m.includes('cancelada') || m.includes('frustrada')) {
-      return 40.00;
-    }
+    if (/tv.*(99|115|acima de 98)/.test(s)) base_service_fee = 150.00;
+    else if (/tv.*(66|98|acima de 65)/.test(s)) base_service_fee = 80.00;
+    else if (/tv.*(50.*65|50 a 65|acima de 50)/.test(s)) base_service_fee = 70.00;
+    else if (/tv.*(49|at[eé]\s*49|12.*48|32)/.test(s)) base_service_fee = 60.00;
+    else if (/tv/.test(s)) base_service_fee = 60.00;
+    else if (/home theater/.test(s)) base_service_fee = 70.00;
+    else if (/geladeira|refrigerador|syde by syde/.test(s)) base_service_fee = 60.00;
+    else if (/lava e seca|lavadora|lava lou[çc]as|purificador|depurador|coifa|secadora/.test(s)) base_service_fee = 50.00;
+    else if (/sof[aá].*3|sof[aá].*cama/.test(s)) base_service_fee = 140.00;
+    else if (/sof[aá]/.test(s)) base_service_fee = 120.00;
+    else if (/colch[aã]o/.test(s)) base_service_fee = 130.00;
+    else if (/visita/.test(s)) base_service_fee = 40.00;
 
-    if (m.includes('tv') || m.includes('televisao') || m.includes('sup. tv') || m.includes('suporte tv')) {
-      if (m.includes('99') || m.includes('100') || m.includes('101') || m.includes('102') || m.includes('103') ||
-          m.includes('104') || m.includes('105') || m.includes('106') || m.includes('107') || m.includes('108') ||
-          m.includes('109') || m.includes('110') || m.includes('111') || m.includes('112') || m.includes('113') ||
-          m.includes('114') || m.includes('115') || m.includes('acima de 98') || m.includes('acima 98') || m.includes('acima de 99') || m.includes('acima 99') || m.includes('98 a 115')) {
-        return 150.00;
-      }
-      if (m.includes('66') || m.includes('67') || m.includes('68') || m.includes('69') || m.includes('70') ||
-          m.includes('71') || m.includes('72') || m.includes('73') || m.includes('74') || m.includes('75') ||
-          m.includes('76') || m.includes('77') || m.includes('78') || m.includes('79') || m.includes('80') ||
-          m.includes('81') || m.includes('82') || m.includes('83') || m.includes('84') || m.includes('85') ||
-          m.includes('86') || m.includes('87') || m.includes('88') || m.includes('89') || m.includes('90') ||
-          m.includes('91') || m.includes('92') || m.includes('93') || m.includes('94') || m.includes('95') ||
-          m.includes('96') || m.includes('97') || m.includes('98') || m.includes('66 a 98') || m.includes('66-98') || m.includes('acima de 55')) {
-        return 70.00;
-      }
-      return 60.00;
-    }
-
-    if (m.includes('refrigerador') || m.includes('geladeira') || m.includes('side by side') || m.includes('syde by syde') || m.includes('side-by-side')) {
-      return 60.00;
-    }
-
-    if (m.includes('lava e seca') || m.includes('lavadora') || m.includes('secadora') || m.includes('purificador') || m.includes('depurador') || m.includes('coifa') || m.includes('lava loucas') || m.includes('wash tower')) {
-      return 50.00;
-    }
-
-    return 50.00; 
+    return base_service_fee;
   }
 
   // 9.3.b Endpoint Inbound para o N8N Criar uma OS (POST /api/n8n/webhook/order-create)
@@ -4860,6 +4843,7 @@ async function startServer() {
       });
     }
 
+    const body = req.body || {};
     const {
       callNumber,
       customerName,
@@ -4890,7 +4874,7 @@ async function startServer() {
       isCrossSelling,
       additional_items_qty,
       additionalItemsQty
-    } = req.body || {};
+    } = body;
 
     if (!customerName) {
       return res.status(400).json({ success: false, error: 'O nome do cliente (customerName) é obrigatório.' });
@@ -4898,6 +4882,42 @@ async function startServer() {
     if (!callNumber) {
       return res.status(400).json({ success: false, error: 'O número do chamado (callNumber) é obrigatório.' });
     }
+
+    // 1. MOTOR DETERMINÍSTICO DE PREÇOS (Obrigatório)
+    let base_service_fee = 50.00;
+    const s = String(body.serviceMotive || body.serviceCategory || body.service_motive || body.Motivo || body.Especialidade || '').toLowerCase();
+
+    if (/tv.*(99|115|acima de 98)/.test(s)) base_service_fee = 150.00;
+    else if (/tv.*(66|98|acima de 65)/.test(s)) base_service_fee = 80.00;
+    else if (/tv.*(50.*65|50 a 65|acima de 50)/.test(s)) base_service_fee = 70.00;
+    else if (/tv.*(49|at[eé]\s*49|12.*48|32)/.test(s)) base_service_fee = 60.00;
+    else if (/tv/.test(s)) base_service_fee = 60.00;
+    else if (/home theater/.test(s)) base_service_fee = 70.00;
+    else if (/geladeira|refrigerador|syde by syde/.test(s)) base_service_fee = 60.00;
+    else if (/lava e seca|lavadora|lava lou[çc]as|purificador|depurador|coifa|secadora/.test(s)) base_service_fee = 50.00;
+    else if (/sof[aá].*3|sof[aá].*cama/.test(s)) base_service_fee = 140.00;
+    else if (/sof[aá]/.test(s)) base_service_fee = 120.00;
+    else if (/colch[aã]o/.test(s)) base_service_fee = 130.00;
+    else if (/visita/.test(s)) base_service_fee = 40.00;
+
+    // 1.1 INTERPRETAÇÃO INTELIGENTE DA CATEGORIA E MOTIVO (Evita salvar TV como Sofá)
+    let finalCategory = body.serviceCategory || '';
+    const rawMotive = body.serviceMotive || body.service_motive || body.Motivo || body.Especialidade || '';
+    
+    if (!finalCategory || finalCategory.trim() === '' || finalCategory === 'Higienização / Instalação' || (finalCategory.includes('Sofá') && /tv/.test(s))) {
+      if (/tv/.test(s)) finalCategory = 'Instalação de TV';
+      else if (/home theater/.test(s)) finalCategory = 'Home Theater';
+      else if (/geladeira|refrigerador|syde by syde/.test(s)) finalCategory = 'Linha Branca / Refrigeração';
+      else if (/lava e seca|lavadora|lava lou[çc]as|purificador|depurador|coifa|secadora/.test(s)) finalCategory = 'Linha Branca';
+      else if (/sof[aá]/.test(s)) finalCategory = 'Higienização de Sofá';
+      else if (/colch[aã]o/.test(s)) finalCategory = 'Higienização de Colchão';
+      else if (/visita/.test(s)) finalCategory = 'Visita Técnica';
+      else if (rawMotive) finalCategory = rawMotive;
+      else finalCategory = 'Instalação / Higienização';
+    }
+
+    const finalMotive = rawMotive || body.serviceCategory || finalCategory;
+    const resolvedCategory = finalCategory;
 
     try {
       const db = getDbPool();
@@ -4933,13 +4953,9 @@ async function startServer() {
         });
       }
 
-      // 1. RESOLUÇÃO DO MOTIVO DO SERVIÇO (VÍNCULO AUTOMÁTICO)
-      const finalMotive = service_motive || serviceMotive || Motivo || Especialidade || serviceCategory || 'Higienização / Instalação';
-      const resolvedCategory = serviceCategory || '';
-
       // 2. CONTROLE DE ESTOQUE (SUPORTE SKU SUP-TV-44-70)
       const motiveLower = finalMotive.toLowerCase();
-      const categoryLower = String(resolvedCategory).toLowerCase();
+      const categoryLower = String(finalCategory).toLowerCase();
       let hasSupportBracket = false;
       if (
         has_bracket === true || has_bracket === 1 || has_bracket === 'true' || has_bracket === '1' ||
@@ -5078,8 +5094,8 @@ async function startServer() {
       if (technicianId) {
         try {
           // Lógica de busca de preço negociado do técnico:
-          // 1. Buscar em technician_custom_rates onde technician_id = ? e service_name = ? (testando primeiro service_motive, depois service_category)
-          const candidates = [finalMotive, resolvedCategory, serviceCategory].filter(Boolean);
+          // 1. Buscar em technician_custom_rates onde technician_id = ? e service_name = ? (testando primeiro finalMotive, depois finalCategory)
+          const candidates = [finalMotive, finalCategory].filter(Boolean);
           for (const candidate of candidates) {
             const candStr = String(candidate).trim();
             if (!candStr) continue;
@@ -5112,43 +5128,13 @@ async function startServer() {
               }
             } catch (catErr) {}
           }
-
-          // Fallback resiliente: varredura ampla das taxas configuradas para o técnico
-          if (customFeeFound === null) {
-            const [allRates]: any = await db.query(
-              "SELECT * FROM technician_custom_rates WHERE technician_id = ?",
-              [technicianId]
-            );
-            if (allRates && allRates.length > 0) {
-              const motiveLower = String(finalMotive).toLowerCase().trim();
-              const catLower = String(resolvedCategory || serviceCategory || '').toLowerCase().trim();
-              
-              const match = allRates.find((r: any) => {
-                const rateName = String(r.service_name || r.service_category || '').toLowerCase().trim();
-                if (!rateName) return false;
-                return (
-                  rateName === motiveLower ||
-                  motiveLower.includes(rateName) ||
-                  rateName.includes(motiveLower) ||
-                  (catLower && (rateName === catLower || catLower.includes(rateName) || rateName.includes(catLower)))
-                );
-              });
-              if (match && match.custom_fee !== null && match.custom_fee !== undefined) {
-                customFeeFound = Number(match.custom_fee);
-                console.log(`[Pricing Fallback] Taxa customizada encontrada por aproximação para técnico ${technicianName}: R$ ${customFeeFound}`);
-              }
-            }
-          }
         } catch (ratesErr) {
           console.warn("[Pricing Warning] Erro ao consultar technician_custom_rates:", ratesErr);
         }
       }
 
-      // Se encontrar na tabela do técnico, aplica exatamente o valor cadastrado. Senão, fallback para regra geral
-      let baseServiceFee = customFeeFound !== null ? customFeeFound : Number(req.body.baseServiceFee || req.body.repasseTecnico || 0);
-      if (!baseServiceFee) {
-        baseServiceFee = resolveTechnicianBaseFee(finalMotive);
-      }
+      // Se encontrar na tabela do técnico especificamente, aplica o valor cadastrado. Senão, aplica o valor do motor determinístico
+      let baseServiceFee = (customFeeFound !== null && customFeeFound > 0) ? customFeeFound : base_service_fee;
 
       const isCrossSellingFlag = is_cross_selling === true || is_cross_selling === 1 || is_cross_selling === 'true' || is_cross_selling === '1' || isCrossSelling === true || isCrossSelling === 1 || isCrossSelling === 'true' || isCrossSelling === '1' ? 1 : 0;
       const additionalItemsQtyVal = Number(additional_items_qty || additionalItemsQty || 0);
@@ -5289,7 +5275,7 @@ async function startServer() {
             customerName,
             customerCpf || '',
             customerPhone || '',
-            serviceCategory || 'Higienização / Instalação',
+            finalCategory,
             city || 'São Paulo',
             req.body.uf || 'SP',
             neighborhood || 'A definir',
@@ -5324,7 +5310,7 @@ async function startServer() {
           memOrders[memIndex].customerName = customerName;
           memOrders[memIndex].customerCpf = customerCpf || '';
           memOrders[memIndex].customerPhone = customerPhone || '';
-          memOrders[memIndex].serviceCategory = serviceCategory || 'Higienização / Instalação';
+          memOrders[memIndex].serviceCategory = finalCategory;
           memOrders[memIndex].city = city || 'São Paulo';
           memOrders[memIndex].neighborhood = neighborhood || 'A definir';
           memOrders[memIndex].addressStreet = addressStreet || 'A definir';
@@ -5387,7 +5373,7 @@ async function startServer() {
             newId,
             cleanCallNumber,
             '',
-            serviceCategory || 'Higienização / Instalação',
+            finalCategory,
             finalMotive,
             baseServiceFee,
             customerName,
@@ -5423,7 +5409,7 @@ async function startServer() {
           customerName: customerName,
           customerPhone: customerPhone || '',
           customerCpf: customerCpf || '',
-          serviceCategory: serviceCategory || 'Higienização / Instalação',
+          serviceCategory: finalCategory,
           technicianId: technicianId,
           technicianName: technicianName,
           city: city || 'São Paulo',
@@ -5505,7 +5491,7 @@ async function startServer() {
           id: targetId,
           callNumber: cleanCallNumber,
           customerName: customerName,
-          serviceCategory: serviceCategory || 'Higienização / Instalação',
+          serviceCategory: finalCategory,
           serviceMotive: finalMotiveText,
           portoBillingValue: finalPortoBilling,
           hasBracket: has_bracket_flag === 1,
