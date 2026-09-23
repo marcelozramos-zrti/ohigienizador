@@ -946,10 +946,12 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                                 <option value="Visita Perdida">Visita Perdida</option>
                               </select>
 
-                              <select
+                                <select
                                 value={(() => {
                                   const prod = os.additionalProduct || os.supportProduct || os.productName || '';
                                   if (prod === "Refil de Purificador" || prod === "Refil Purificador") return "Refil Purificador";
+                                  if (prod === "Suporte Fixo para TV" || prod === "Suporte Fixo TV" || prod.toLowerCase().includes("suporte fixo")) return "Suporte Fixo TV";
+                                  if (prod.toLowerCase().includes("suporte articulado")) return "Suporte Articulado TV";
                                   if (prod) return prod;
                                   if (os.supportCost === 60) return "Suporte Fixo TV";
                                   if (os.supportCost === 120) return "Suporte Articulado TV";
@@ -976,6 +978,13 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                                 className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
                                 title="Alterar produto adicional"
                               >
+                                {(() => {
+                                  const prod = os.additionalProduct || os.supportProduct || os.productName || '';
+                                  if (prod && !["Nenhum", "Suporte Fixo TV", "Suporte Articulado TV", "Refil Purificador", "Kit Limpeza Extra", "Suporte Fixo para TV"].includes(prod)) {
+                                    return <option value={prod}>{prod}</option>;
+                                  }
+                                  return null;
+                                })()}
                                 <option value="Nenhum">Nenhum</option>
                                 <option value="Suporte Fixo TV">Suporte Fixo TV (R$ 60,00)</option>
                                 <option value="Suporte Articulado TV">Suporte Articulado TV (R$ 120,00)</option>

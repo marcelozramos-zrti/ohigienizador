@@ -221,6 +221,20 @@ export async function initializeDatabaseSchema(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+    // 2.0 products table (Catálogo de Produtos)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS products (
+        id VARCHAR(80) NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        category VARCHAR(100) NOT NULL DEFAULT 'Suportes',
+        unit_price DECIMAL(10, 2) NOT NULL DEFAULT 60.00,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_products_name (name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
     // 2.a. service_orders table
     await db.query(`
       CREATE TABLE IF NOT EXISTS service_orders (
