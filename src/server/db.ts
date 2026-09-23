@@ -205,7 +205,23 @@ export async function initializeDatabaseSchema(): Promise<void> {
       });
     }
 
-    // 2. service_orders table
+    // 2. services table (Catálogo de Serviços)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS services (
+        id VARCHAR(80) NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        category VARCHAR(100) NOT NULL DEFAULT 'Porto Seguro',
+        description TEXT NULL,
+        default_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_services_name (name),
+        INDEX idx_services_category (category)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 2.a. service_orders table
     await db.query(`
       CREATE TABLE IF NOT EXISTS service_orders (
         id VARCHAR(80) NOT NULL PRIMARY KEY,

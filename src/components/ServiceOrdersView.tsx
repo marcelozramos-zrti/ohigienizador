@@ -922,6 +922,19 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                                 className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
                                 title="Alterar categoria do serviço"
                               >
+                                {os.serviceCategory && ![
+                                  "Higienização de Sofá 3 Lugares",
+                                  "Impermeabilização de Estofado",
+                                  "Higienização Automotiva Completa",
+                                  "Higienização de Colchão Queen",
+                                  "Higienização de Tapetes e Carpetes",
+                                  "Instalação Lava e Seca",
+                                  "Instalação TV de 44 a 70 + Suporte Fixo",
+                                  "Instalação Purificador de Água",
+                                  "Visita Perdida"
+                                ].includes(os.serviceCategory) && (
+                                  <option value={os.serviceCategory}>{os.serviceCategory}</option>
+                                )}
                                 <option value="Higienização de Sofá 3 Lugares">Higienização de Sofá 3 Lugares</option>
                                 <option value="Impermeabilização de Estofado">Impermeabilização de Estofado</option>
                                 <option value="Higienização Automotiva Completa">Higienização Automotiva Completa</option>

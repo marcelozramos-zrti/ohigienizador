@@ -335,6 +335,19 @@ export const EditServiceOrderModal: React.FC<EditServiceOrderModalProps> = ({ or
               disabled={isTechnician}
               className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
             >
+              {serviceCategory && ![
+                "Higienização de Sofá 3 Lugares",
+                "Impermeabilização de Estofado",
+                "Higienização Automotiva Completa",
+                "Higienização de Colchão Queen",
+                "Higienização de Tapetes e Carpetes",
+                "Instalação Lava e Seca",
+                "Instalação TV de 44 a 70 + Suporte Fixo",
+                "Instalação Purificador de Água",
+                "Visita Perdida"
+              ].includes(serviceCategory) && (
+                <option value={serviceCategory}>{serviceCategory}</option>
+              )}
               <option value="Higienização de Sofá 3 Lugares">Higienização de Sofá 3 Lugares (R$ 140,00)</option>
               <option value="Impermeabilização de Estofado">Impermeabilização de Estofado (R$ 190,00)</option>
               <option value="Higienização Automotiva Completa">Higienização Automotiva Completa (R$ 160,00)</option>

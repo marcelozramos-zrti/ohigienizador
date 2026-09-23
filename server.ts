@@ -5010,47 +5010,114 @@ async function startServer() {
         } catch (stockErr) {}
       }
 
-      // 1. BUSCA DO ID REAL DO SERVIÇO (service_id)
-      let realServiceId = null;
+      // 1. AUTO-CADASTRO E BUSCA DO ID REAL DO SERVIÇO (service_id)
+      let realServiceId: string | null = null;
       const searchMotive = String(body.serviceMotive || body.serviceCategory || '').trim();
 
       if (searchMotive) {
         try {
-          // Tenta encontrar o serviço pelo nome exato ou parecido (ex: "INST. TV ATE 50 A 65")
-          const [srvRows]: any = await db.query(
-            'SELECT id FROM services WHERE name LIKE ? LIMIT 1', 
-            [`%${searchMotive}%`]
+          // Garante a existência da tabela services caso não tenha sido inicializada
+          await db.execute(`
+            CREATE TABLE IF NOT EXISTS services (
+              id VARCHAR(80) NOT NULL PRIMARY KEY,
+              name VARCHAR(255) NOT NULL,
+              category VARCHAR(100) NOT NULL DEFAULT 'Porto Seguro',
+              description TEXT NULL,
+              default_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+              active TINYINT(1) NOT NULL DEFAULT 1,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_services_name (name),
+              INDEX idx_services_category (category)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          `).catch(() => {});
+
+          // SELECT por nome exato
+          const [exactRows]: any = await db.query(
+            'SELECT id, name FROM services WHERE name = ? LIMIT 1',
+            [searchMotive]
           );
-          if (srvRows && srvRows.length > 0) {
-            realServiceId = srvRows[0].id;
-          } else if (searchMotive.toLowerCase().includes('tv')) {
-            // Fallback genérico para TV caso a string da Porto tenha erro de digitação
-            const [fallbackTv]: any = await db.query(
-              'SELECT id FROM services WHERE name LIKE "%TV%" LIMIT 1'
+
+          if (exactRows && exactRows.length > 0) {
+            realServiceId = String(exactRows[0].id);
+          } else {
+            // Tenta por LIKE antes de criar
+            const [likeRows]: any = await db.query(
+              'SELECT id, name FROM services WHERE name LIKE ? LIMIT 1',
+              [`%${searchMotive}%`]
             );
-            if (fallbackTv && fallbackTv.length > 0) realServiceId = fallbackTv[0].id;
+
+            if (likeRows && likeRows.length > 0) {
+              realServiceId = String(likeRows[0].id);
+            } else {
+              // Se a consulta retornar vazia: AUTO-CADASTRO DE SERVIÇO (INSERT INTO services)
+              const newServiceId = 'srv-' + crypto.randomUUID();
+              await db.execute(
+                `INSERT INTO services (id, name, category, default_price, active, created_at)
+                 VALUES (?, ?, 'Porto Seguro', ?, 1, NOW())`,
+                [newServiceId, searchMotive, base_service_fee]
+              );
+              realServiceId = newServiceId;
+              console.log(`[Services Auto-Provision] Novo serviço cadastrado automaticamente: ${searchMotive} (ID: ${newServiceId})`);
+            }
           }
         } catch (err) {
-          console.warn('[DB] Erro ao buscar service_id', err);
+          console.warn('[DB] Erro no auto-cadastro/busca de service_id:', err);
         }
       }
 
-      // 2. BUSCA DO ID REAL DO PRODUTO/SUPORTE (product_id)
-      let realProductId = null;
+      // 2. AUTO-CADASTRO E BUSCA DO ID REAL DO PRODUTO/SUPORTE (product_id)
+      let realProductId: string | null = null;
+      let realProductName: string | null = null;
+
       if (searchMotive.toLowerCase().includes('suporte')) {
         try {
+          // Garante a existência da tabela stock_items caso não tenha sido inicializada
+          await db.execute(`
+            CREATE TABLE IF NOT EXISTS stock_items (
+              id VARCHAR(36) NOT NULL PRIMARY KEY,
+              code VARCHAR(30) NOT NULL UNIQUE,
+              name VARCHAR(120) NOT NULL,
+              description VARCHAR(255) NULL,
+              category VARCHAR(60) NOT NULL,
+              unit VARCHAR(20) NOT NULL,
+              quantityInStock DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+              minimumThreshold DECIMAL(10, 2) NOT NULL DEFAULT 5.00,
+              unitCost DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+              isSupportSupply TINYINT(1) NOT NULL DEFAULT 1,
+              createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          `).catch(() => {});
+
           const [prodRows]: any = await db.query(
-            'SELECT id FROM stock_items WHERE name LIKE "%Suporte%" OR code LIKE "%SUP-TV%" LIMIT 1'
+            'SELECT id, name FROM stock_items WHERE name LIKE "%Suporte%" OR code LIKE "%SUP-TV%" LIMIT 1'
           );
-          if (prodRows && prodRows.length > 0) realProductId = prodRows[0].id;
+
+          if (prodRows && prodRows.length > 0) {
+            realProductId = String(prodRows[0].id);
+            realProductName = prodRows[0].name || 'Suporte Fixo para TV';
+          } else {
+            // Se a consulta retornar vazia: AUTO-CADASTRO DE PRODUTO/SUPORTE (INSERT INTO stock_items)
+            const newStockId = 'stk-' + crypto.randomUUID();
+            const autoSupportName = 'Suporte Fixo para TV';
+            await db.execute(
+              `INSERT INTO stock_items (id, code, name, description, category, unit, quantityInStock, minimumThreshold, unitCost, isSupportSupply, createdAt)
+               VALUES (?, 'SUP-TV-AUTO', ?, 'Suporte para fixação de TV em alvenaria/painel', 'Suportes', 'UN', 10.00, 2.00, 28.00, 1, NOW())`,
+              [newStockId, autoSupportName]
+            );
+            realProductId = newStockId;
+            realProductName = autoSupportName;
+            console.log(`[Stock Auto-Provision] Novo produto cadastrado automaticamente: ${autoSupportName} (ID: ${newStockId})`);
+          }
         } catch (err) {
-          console.warn('[DB] Erro ao buscar product_id', err);
+          console.warn('[DB] Erro no auto-cadastro/busca de product_id:', err);
         }
       }
 
       const resolvedServiceId = realServiceId;
       const resolvedProductId = realProductId;
-      const resolvedProductName = realProductId ? (hasSupportBracket ? 'Suporte Fixo para TV 44 a 70' : null) : null;
+      const resolvedProductName = realProductName || (hasSupportBracket ? 'Suporte Fixo para TV' : null);
 
       // 3. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
       let technicianId = null;
