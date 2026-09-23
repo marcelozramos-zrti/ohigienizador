@@ -1323,6 +1323,14 @@ async function startServer() {
           payment_status: o.paymentStatus || o.payment_status || 'PENDING',
           paymentDate: o.paymentDate || o.payment_date || null,
           payment_date: o.paymentDate || o.payment_date || null,
+          serviceId: o.serviceId || o.service_id || null,
+          service_id: o.serviceId || o.service_id || null,
+          productId: o.productId || o.product_id || null,
+          product_id: o.productId || o.product_id || null,
+          productName: o.productName || o.product_name || o.additionalProduct || o.supportProduct || null,
+          product_name: o.productName || o.product_name || o.additionalProduct || o.supportProduct || null,
+          additionalProduct: o.additionalProduct || o.productName || o.product_name || null,
+          supportProduct: o.supportProduct || o.productName || o.product_name || null,
           itemsUsed: [],
         };
       });
@@ -1643,6 +1651,12 @@ async function startServer() {
         payment_status: o.paymentStatus || 'PENDING',
         paymentdate: o.paymentDate ? new Date(o.paymentDate) : null,
         payment_date: o.paymentDate ? new Date(o.paymentDate) : null,
+        serviceid: o.serviceId || o.service_id || null,
+        service_id: o.serviceId || o.service_id || null,
+        productid: o.productId || o.product_id || null,
+        product_id: o.productId || o.product_id || null,
+        productname: o.productName || o.product_name || o.additionalProduct || o.supportProduct || null,
+        product_name: o.productName || o.product_name || o.additionalProduct || o.supportProduct || null,
       };
 
       const insertCols: string[] = [];
@@ -4996,6 +5010,93 @@ async function startServer() {
         } catch (stockErr) {}
       }
 
+      // 1.2 MAPEAMENTO HEURÍSTICO DE SERVIÇO (service_id) E PRODUTO (product_id)
+      let resolvedServiceId: string | null = null;
+      let resolvedProductId: string | null = null;
+      let resolvedProductName: string | null = null;
+
+      try {
+        // Busca heurística em services ou porto_service_prices
+        const sMotiveRaw = String(rawMotive || '').trim();
+        const sCatRaw = String(finalCategory || '').trim();
+        
+        let serviceCandidates: any[] = [];
+        try {
+          const [sRows]: any = await db.query(
+            `SELECT id, name, category FROM services 
+             WHERE LOWER(name) = LOWER(?) OR LOWER(name) LIKE LOWER(?) OR LOWER(category) = LOWER(?)
+             LIMIT 1`,
+            [sMotiveRaw, `%${sCatRaw}%`, sCatRaw]
+          );
+          if (sRows && sRows.length > 0) {
+            serviceCandidates = sRows;
+          }
+        } catch (servicesTableErr) {
+          // Se a tabela services não existir, buscar em porto_service_prices
+          try {
+            const [portoRows]: any = await db.query(
+              `SELECT id, service_name as name, category FROM porto_service_prices 
+               WHERE LOWER(service_name) = LOWER(?) OR LOWER(service_name) LIKE LOWER(?) OR LOWER(category) = LOWER(?)
+               LIMIT 1`,
+              [sMotiveRaw, `%${sCatRaw}%`, sCatRaw]
+            );
+            if (portoRows && portoRows.length > 0) {
+              serviceCandidates = portoRows;
+            }
+          } catch (portoTableErr) {}
+        }
+
+        if (serviceCandidates.length > 0) {
+          resolvedServiceId = String(serviceCandidates[0].id);
+          if (serviceCandidates[0].name && (!finalCategory || finalCategory === 'Instalação / Higienização' || finalCategory === 'Higienização Padrão')) {
+            finalCategory = serviceCandidates[0].name;
+          }
+        } else {
+          // Fallback determinístico de service_id baseado no regex
+          if (/tv.*(50.*65|50 a 65|acima de 50)/.test(s)) resolvedServiceId = 'srv-inst-tv-50-65';
+          else if (/tv/.test(s)) resolvedServiceId = 'srv-inst-tv-padrao';
+          else if (/lava e seca/.test(s)) resolvedServiceId = 'srv-inst-lava-seca';
+          else if (/sof[aá]/.test(s)) resolvedServiceId = 'srv-hig-sofa';
+          else if (/colch[aã]o/.test(s)) resolvedServiceId = 'srv-hig-colchao';
+          else if (/purificador/.test(s)) resolvedServiceId = 'srv-inst-purificador';
+          else if (/visita/.test(s)) resolvedServiceId = 'srv-visita-perdida';
+        }
+
+        // Busca heurística em stock_items ou products
+        if (hasSupportBracket) {
+          try {
+            const [stockRows]: any = await db.query(
+              `SELECT id, code, name FROM stock_items 
+               WHERE code = 'SUP-TV-44-70' OR sku = 'SUP-TV-44-70' OR LOWER(name) LIKE '%suporte%'
+               LIMIT 1`
+            );
+            if (stockRows && stockRows.length > 0) {
+              resolvedProductId = String(stockRows[0].id || stockRows[0].code);
+              resolvedProductName = stockRows[0].name || 'Suporte Fixo para TV 44 a 70';
+            }
+          } catch (stkErr) {
+            try {
+              const [prodRows]: any = await db.query(
+                `SELECT id, sku, name FROM products 
+                 WHERE sku = 'SUP-TV-44-70' OR LOWER(name) LIKE '%suporte%'
+                 LIMIT 1`
+              );
+              if (prodRows && prodRows.length > 0) {
+                resolvedProductId = String(prodRows[0].id || prodRows[0].sku);
+                resolvedProductName = prodRows[0].name || 'Suporte Fixo para TV 44 a 70';
+              }
+            } catch (pErr) {}
+          }
+
+          if (!resolvedProductId) {
+            resolvedProductId = 'SUP-TV-44-70';
+            resolvedProductName = 'Suporte Fixo TV 44-70';
+          }
+        }
+      } catch (heuristicErr) {
+        console.warn('[Heuristic Lookup Notice] Falha ao resolver service_id/product_id:', heuristicErr);
+      }
+
       // 3. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
       let technicianId = null;
       let technicianName = bodyTechName || 'Técnico Não Definido';
@@ -5261,6 +5362,9 @@ async function startServer() {
                is_cross_selling = ?,
                additional_items_qty = ?,
                additional_item_unit_price = ?,
+               service_id = COALESCE(?, service_id),
+               product_id = COALESCE(?, product_id),
+               product_name = COALESCE(?, product_name),
                km_rate_applied = ?,
                km_total_cost = ?,
                km_payout = ?,
@@ -5294,6 +5398,9 @@ async function startServer() {
             isCrossSellingFlag,
             additionalItemsQtyVal,
             additional_item_unit_price,
+            resolvedServiceId,
+            resolvedProductId,
+            resolvedProductName,
             km_rate_applied,
             kmPayoutMerged,
             kmPayoutMerged,
@@ -5324,6 +5431,14 @@ async function startServer() {
           memOrders[memIndex].is_cross_selling = isCrossSellingFlag;
           memOrders[memIndex].additional_items_qty = additionalItemsQtyVal;
           memOrders[memIndex].additional_item_unit_price = additional_item_unit_price;
+          memOrders[memIndex].serviceId = resolvedServiceId;
+          memOrders[memIndex].service_id = resolvedServiceId;
+          memOrders[memIndex].productId = resolvedProductId;
+          memOrders[memIndex].product_id = resolvedProductId;
+          memOrders[memIndex].productName = resolvedProductName;
+          memOrders[memIndex].product_name = resolvedProductName;
+          memOrders[memIndex].additionalProduct = resolvedProductName;
+          memOrders[memIndex].supportProduct = resolvedProductName;
           memOrders[memIndex].kmRateApplied = km_rate_applied;
           memOrders[memIndex].kmCost = kmPayoutMerged;
           memOrders[memIndex].kmPayout = kmPayoutMerged;
@@ -5367,8 +5482,8 @@ async function startServer() {
             city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
             technician_id, status, scheduled_date, km_traveled, km_rate_applied,
             km_total_cost, toll_cost, support_cost, total_technician_gross, porto_billing_value,
-            has_bracket, bracket_cost, is_cross_selling, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            has_bracket, bracket_cost, is_cross_selling, service_id, product_id, product_name, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             newId,
             cleanCallNumber,
@@ -5398,7 +5513,10 @@ async function startServer() {
             porto_billing_value,
             has_bracket_flag,
             bracket_cost,
-            isCrossSellingFlag
+            isCrossSellingFlag,
+            resolvedServiceId,
+            resolvedProductId,
+            resolvedProductName
           ]
         );
 
@@ -5435,7 +5553,15 @@ async function startServer() {
           bracket_cost,
           is_cross_selling: isCrossSellingFlag,
           additional_items_qty: additionalItemsQtyVal,
-          additional_item_unit_price: additional_item_unit_price
+          additional_item_unit_price: additional_item_unit_price,
+          serviceId: resolvedServiceId,
+          service_id: resolvedServiceId,
+          productId: resolvedProductId,
+          product_id: resolvedProductId,
+          productName: resolvedProductName,
+          product_name: resolvedProductName,
+          additionalProduct: resolvedProductName,
+          supportProduct: resolvedProductName
         };
         memOrders.unshift(newOrderMem);
 
@@ -5509,6 +5635,9 @@ async function startServer() {
           city: city || 'São Paulo',
           status: finalStatus,
           scheduledDate: scheduled_date,
+          serviceId: resolvedServiceId,
+          productId: resolvedProductId,
+          productName: resolvedProductName,
           isCrossSelling: isCrossSellingFlag === 1,
           additionalItemsQty: additionalItemsQtyVal,
           additionalItemUnitPrice: additional_item_unit_price,

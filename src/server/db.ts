@@ -278,7 +278,10 @@ export async function initializeDatabaseSchema(): Promise<void> {
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS bracket_cost DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS is_cross_selling TINYINT(1) NOT NULL DEFAULT 0",
       "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS additional_items_qty INT NOT NULL DEFAULT 0",
-      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS additional_item_unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00"
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS additional_item_unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS service_id VARCHAR(100) NULL",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS product_id VARCHAR(100) NULL",
+      "ALTER TABLE service_orders ADD COLUMN IF NOT EXISTS product_name VARCHAR(255) NULL"
     ];
 
     for (const stmt of orderAlterStatements) {

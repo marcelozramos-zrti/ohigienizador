@@ -150,6 +150,7 @@ export interface ServiceOrder {
   id: string;
   callNumber: string; // Número do Chamado Porto Seguro (ex: "PS-2026-8941")
   portoSeguroProtocol?: string;
+  serviceId?: string | null;
   serviceCategory: string; // e.g., "Higienização de Sofá 3L", "Impermeabilização Premium", "Higienização Automotiva"
   baseServiceFee: number; // Valor base repassado ao técnico (ex: R$ 130,00)
   
