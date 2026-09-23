@@ -5010,92 +5010,47 @@ async function startServer() {
         } catch (stockErr) {}
       }
 
-      // 1.2 MAPEAMENTO HEURÍSTICO DE SERVIÇO (service_id) E PRODUTO (product_id)
-      let resolvedServiceId: string | null = null;
-      let resolvedProductId: string | null = null;
-      let resolvedProductName: string | null = null;
+      // 1. BUSCA DO ID REAL DO SERVIÇO (service_id)
+      let realServiceId = null;
+      const searchMotive = String(body.serviceMotive || body.serviceCategory || '').trim();
 
-      try {
-        // Busca heurística em services ou porto_service_prices
-        const sMotiveRaw = String(rawMotive || '').trim();
-        const sCatRaw = String(finalCategory || '').trim();
-        
-        let serviceCandidates: any[] = [];
+      if (searchMotive) {
         try {
-          const [sRows]: any = await db.query(
-            `SELECT id, name, category FROM services 
-             WHERE LOWER(name) = LOWER(?) OR LOWER(name) LIKE LOWER(?) OR LOWER(category) = LOWER(?)
-             LIMIT 1`,
-            [sMotiveRaw, `%${sCatRaw}%`, sCatRaw]
+          // Tenta encontrar o serviço pelo nome exato ou parecido (ex: "INST. TV ATE 50 A 65")
+          const [srvRows]: any = await db.query(
+            'SELECT id FROM services WHERE name LIKE ? LIMIT 1', 
+            [`%${searchMotive}%`]
           );
-          if (sRows && sRows.length > 0) {
-            serviceCandidates = sRows;
-          }
-        } catch (servicesTableErr) {
-          // Se a tabela services não existir, buscar em porto_service_prices
-          try {
-            const [portoRows]: any = await db.query(
-              `SELECT id, service_name as name, category FROM porto_service_prices 
-               WHERE LOWER(service_name) = LOWER(?) OR LOWER(service_name) LIKE LOWER(?) OR LOWER(category) = LOWER(?)
-               LIMIT 1`,
-              [sMotiveRaw, `%${sCatRaw}%`, sCatRaw]
+          if (srvRows && srvRows.length > 0) {
+            realServiceId = srvRows[0].id;
+          } else if (searchMotive.toLowerCase().includes('tv')) {
+            // Fallback genérico para TV caso a string da Porto tenha erro de digitação
+            const [fallbackTv]: any = await db.query(
+              'SELECT id FROM services WHERE name LIKE "%TV%" LIMIT 1'
             );
-            if (portoRows && portoRows.length > 0) {
-              serviceCandidates = portoRows;
-            }
-          } catch (portoTableErr) {}
-        }
-
-        if (serviceCandidates.length > 0) {
-          resolvedServiceId = String(serviceCandidates[0].id);
-          if (serviceCandidates[0].name && (!finalCategory || finalCategory === 'Instalação / Higienização' || finalCategory === 'Higienização Padrão')) {
-            finalCategory = serviceCandidates[0].name;
+            if (fallbackTv && fallbackTv.length > 0) realServiceId = fallbackTv[0].id;
           }
-        } else {
-          // Fallback determinístico de service_id baseado no regex
-          if (/tv.*(50.*65|50 a 65|acima de 50)/.test(s)) resolvedServiceId = 'srv-inst-tv-50-65';
-          else if (/tv/.test(s)) resolvedServiceId = 'srv-inst-tv-padrao';
-          else if (/lava e seca/.test(s)) resolvedServiceId = 'srv-inst-lava-seca';
-          else if (/sof[aá]/.test(s)) resolvedServiceId = 'srv-hig-sofa';
-          else if (/colch[aã]o/.test(s)) resolvedServiceId = 'srv-hig-colchao';
-          else if (/purificador/.test(s)) resolvedServiceId = 'srv-inst-purificador';
-          else if (/visita/.test(s)) resolvedServiceId = 'srv-visita-perdida';
+        } catch (err) {
+          console.warn('[DB] Erro ao buscar service_id', err);
         }
-
-        // Busca heurística em stock_items ou products
-        if (hasSupportBracket) {
-          try {
-            const [stockRows]: any = await db.query(
-              `SELECT id, code, name FROM stock_items 
-               WHERE code = 'SUP-TV-44-70' OR sku = 'SUP-TV-44-70' OR LOWER(name) LIKE '%suporte%'
-               LIMIT 1`
-            );
-            if (stockRows && stockRows.length > 0) {
-              resolvedProductId = String(stockRows[0].id || stockRows[0].code);
-              resolvedProductName = stockRows[0].name || 'Suporte Fixo para TV 44 a 70';
-            }
-          } catch (stkErr) {
-            try {
-              const [prodRows]: any = await db.query(
-                `SELECT id, sku, name FROM products 
-                 WHERE sku = 'SUP-TV-44-70' OR LOWER(name) LIKE '%suporte%'
-                 LIMIT 1`
-              );
-              if (prodRows && prodRows.length > 0) {
-                resolvedProductId = String(prodRows[0].id || prodRows[0].sku);
-                resolvedProductName = prodRows[0].name || 'Suporte Fixo para TV 44 a 70';
-              }
-            } catch (pErr) {}
-          }
-
-          if (!resolvedProductId) {
-            resolvedProductId = 'SUP-TV-44-70';
-            resolvedProductName = 'Suporte Fixo TV 44-70';
-          }
-        }
-      } catch (heuristicErr) {
-        console.warn('[Heuristic Lookup Notice] Falha ao resolver service_id/product_id:', heuristicErr);
       }
+
+      // 2. BUSCA DO ID REAL DO PRODUTO/SUPORTE (product_id)
+      let realProductId = null;
+      if (searchMotive.toLowerCase().includes('suporte')) {
+        try {
+          const [prodRows]: any = await db.query(
+            'SELECT id FROM stock_items WHERE name LIKE "%Suporte%" OR code LIKE "%SUP-TV%" LIMIT 1'
+          );
+          if (prodRows && prodRows.length > 0) realProductId = prodRows[0].id;
+        } catch (err) {
+          console.warn('[DB] Erro ao buscar product_id', err);
+        }
+      }
+
+      const resolvedServiceId = realServiceId;
+      const resolvedProductId = realProductId;
+      const resolvedProductName = realProductId ? (hasSupportBracket ? 'Suporte Fixo para TV 44 a 70' : null) : null;
 
       // 3. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
       let technicianId = null;
