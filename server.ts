@@ -5355,12 +5355,10 @@ async function startServer() {
                km_rate_applied = ?,
                km_total_cost = ?,
                km_payout = ?,
-               kmPayout = ?,
                total_technician_gross = ?,
                technician_id = COALESCE(?, technician_id),
                status = 'COMPLETED',
-               completed_at = NOW(),
-               updatedAt = NOW()
+               completed_at = NOW()
            WHERE id = ?`,
           [
             customerName,
@@ -5389,7 +5387,6 @@ async function startServer() {
             resolvedProductId,
             resolvedProductName,
             km_rate_applied,
-            kmPayoutMerged,
             kmPayoutMerged,
             kmPayoutMerged,
             totalTechnicianGrossMerged,
@@ -5469,7 +5466,7 @@ async function startServer() {
             city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
             technician_id, status, scheduled_date, km_traveled, km_rate_applied,
             km_total_cost, toll_cost, support_cost, total_technician_gross, porto_billing_value,
-            has_bracket, bracket_cost, is_cross_selling, service_id, product_id, product_name, createdAt
+            has_bracket, bracket_cost, is_cross_selling, service_id, product_id, product_name, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             newId,
@@ -5781,16 +5778,16 @@ async function startServer() {
             city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
             technician_id, status, scheduled_date, started_at, completed_at,
             km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
-            total_technician_gross, faturamento_porto, km_payout, kmPayout,
+            total_technician_gross, faturamento_porto, km_payout,
             porto_billing_value, has_bracket, bracket_cost,
-            is_cross_selling, additional_items_qty, additional_item_unit_price, createdAt
+            is_cross_selling, additional_items_qty, additional_item_unit_price, created_at
           ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
             ?, 'PENDING', NOW(), NOW(), NULL,
             ?, ?, ?, ?, 0,
-            ?, 0, ?, ?,
+            ?, 0, ?,
             0, 0, 0,
             0, 0, 0, NOW()
           )`,
@@ -5817,7 +5814,6 @@ async function startServer() {
             kmPayout,
             parsedToll,
             totalTechnicianGross,
-            kmPayout,
             kmPayout
           ]
         );
@@ -5953,8 +5949,7 @@ async function startServer() {
              base_service_fee = ?, 
              porto_billing_value = ?, 
              service_motive = ?, 
-             completed_at = NOW(), 
-             updatedAt = NOW() 
+             completed_at = NOW() 
          WHERE id = ?`,
         [kmTraveledNum, kmRateNum, tollCostNum, kmPayoutNum, kmPayoutNum, totalGrossNum, currentBaseFee, portoBilling, serviceMotive, order.id]
       );
