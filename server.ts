@@ -5360,7 +5360,7 @@ async function startServer() {
                technician_id = COALESCE(?, technician_id),
                status = 'COMPLETED',
                completed_at = NOW(),
-               updated_at = NOW()
+               updatedAt = NOW()
            WHERE id = ?`,
           [
             customerName,
@@ -5469,7 +5469,7 @@ async function startServer() {
             city, uf, neighborhood, address_street, address_number, address_complement, postal_code,
             technician_id, status, scheduled_date, km_traveled, km_rate_applied,
             km_total_cost, toll_cost, support_cost, total_technician_gross, porto_billing_value,
-            has_bracket, bracket_cost, is_cross_selling, service_id, product_id, product_name, created_at
+            has_bracket, bracket_cost, is_cross_selling, service_id, product_id, product_name, createdAt
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             newId,
@@ -5783,7 +5783,7 @@ async function startServer() {
             km_traveled, km_rate_applied, km_total_cost, toll_cost, support_cost,
             total_technician_gross, faturamento_porto, km_payout, kmPayout,
             porto_billing_value, has_bracket, bracket_cost,
-            is_cross_selling, additional_items_qty, additional_item_unit_price, created_at
+            is_cross_selling, additional_items_qty, additional_item_unit_price, createdAt
           ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
@@ -5933,11 +5933,12 @@ async function startServer() {
         portoBilling = 35.00;
       }
 
-      // Recálculo financeiro completo
-      const parsedKm = Number(kmTraveled);
-      const kmPayout = Number((parsedKm * kmRate).toFixed(2));
-      const tollAmount = tollCost !== undefined ? Number(tollCost) : Number(order.toll_cost || 0);
-      const totalTechnicianGross = Number((baseFee + kmPayout + tollAmount).toFixed(2));
+      const currentBaseFee = parseFloat(order.base_service_fee || order.baseServiceFee || baseFee || 0);
+      const kmTraveledNum = parseFloat(req.body.kmTraveled ?? req.body.km_traveled ?? req.body.km ?? kmTraveled ?? 0);
+      const tollCostNum = parseFloat(req.body.tollCost ?? req.body.toll_cost ?? req.body.pedagio ?? req.body.pedágio ?? tollCost ?? order.toll_cost ?? 0);
+      const kmRateNum = parseFloat(order.km_rate_applied || order.kmRateApplied || order.km_rate || order.kmRate || kmRate || 0.75);
+      const kmPayoutNum = kmTraveledNum * kmRateNum;
+      const totalGrossNum = currentBaseFee + kmPayoutNum + tollCostNum;
 
       // Persistência atualizada no MariaDB com encerramento automático da OS (status = 'COMPLETED')
       await db.execute(
@@ -5945,31 +5946,33 @@ async function startServer() {
          SET km_traveled = ?, 
              km_rate_applied = ?, 
              toll_cost = ?, 
+             km_payout = ?, 
+             km_total_cost = ?, 
              total_technician_gross = ?, 
              status = 'COMPLETED', 
              base_service_fee = ?, 
              porto_billing_value = ?, 
              service_motive = ?, 
              completed_at = NOW(), 
-             updated_at = NOW() 
+             updatedAt = NOW() 
          WHERE id = ?`,
-        [parsedKm, kmRate, tollAmount, totalTechnicianGross, baseFee, portoBilling, serviceMotive, order.id]
+        [kmTraveledNum, kmRateNum, tollCostNum, kmPayoutNum, kmPayoutNum, totalGrossNum, currentBaseFee, portoBilling, serviceMotive, order.id]
       );
 
       // Sincronização do cache em memória volátil
       const memIndex = memOrders.findIndex((o: any) => String(o.id) === String(order.id));
       if (memIndex !== -1) {
-        memOrders[memIndex].kmTraveled = parsedKm;
-        memOrders[memIndex].kmRateApplied = kmRate;
-        memOrders[memIndex].kmTotalCost = kmPayout;
-        memOrders[memIndex].kmPayout = kmPayout;
-        memOrders[memIndex].tollCost = tollAmount;
-        memOrders[memIndex].baseServiceFee = baseFee;
+        memOrders[memIndex].kmTraveled = kmTraveledNum;
+        memOrders[memIndex].kmRateApplied = kmRateNum;
+        memOrders[memIndex].kmTotalCost = kmPayoutNum;
+        memOrders[memIndex].kmPayout = kmPayoutNum;
+        memOrders[memIndex].tollCost = tollCostNum;
+        memOrders[memIndex].baseServiceFee = currentBaseFee;
         memOrders[memIndex].portoBillingValue = portoBilling;
         memOrders[memIndex].porto_billing_value = portoBilling;
         memOrders[memIndex].service_motive = serviceMotive;
-        memOrders[memIndex].totalTechnicianGross = totalTechnicianGross;
-        memOrders[memIndex].totalCost = totalTechnicianGross;
+        memOrders[memIndex].totalTechnicianGross = totalGrossNum;
+        memOrders[memIndex].totalCost = totalGrossNum;
         memOrders[memIndex].status = 'COMPLETED';
         memOrders[memIndex].completedAt = new Date().toISOString();
       }
@@ -5985,10 +5988,10 @@ async function startServer() {
         affectedRecordId: order.id,
         affectedRecordType: 'service_order',
         result: 'SUCCESS',
-        details: `Quilometragem atualizada de forma resiliente via WhatsApp: ${parsedKm}km (Técnico: ${techName}, Repasse KM: R$ ${kmPayout}). Status transicionado para COMPLETED.${isLostVisit ? ' Registrado como Visita Perdida / Improdutiva.' : ''}`,
+        details: `Quilometragem atualizada de forma resiliente via WhatsApp: ${kmTraveledNum}km (Técnico: ${techName}, Repasse KM: R$ ${kmPayoutNum.toFixed(2)}). Status transicionado para COMPLETED.${isLostVisit ? ' Registrado como Visita Perdida / Improdutiva.' : ''}`,
       });
 
-      console.log(`[N8N Webhook] OS ${order.call_number} encerrada e atualizada via update-km (KM: ${parsedKm}, Gross: ${totalTechnicianGross}).`);
+      console.log(`[N8N Webhook] OS ${order.call_number} encerrada e atualizada via update-km (KM: ${kmTraveledNum}, Gross: ${totalGrossNum}).`);
 
       // Assinatura JSON de retorno estruturado
       res.json({
@@ -5999,12 +6002,12 @@ async function startServer() {
           customerName: order.customer_name,
           technicianName: techName,
           serviceCategory: order.service_category,
-          baseServiceFee: Number(baseFee.toFixed(2)),
-          kmRateApplied: kmRate,
-          kmTraveled: parsedKm,
-          kmPayout: kmPayout,
-          tollCost: Number(tollAmount.toFixed(2)),
-          totalTechnicianGross: Number(totalTechnicianGross.toFixed(2)),
+          baseServiceFee: Number(currentBaseFee.toFixed(2)),
+          kmRateApplied: kmRateNum,
+          kmTraveled: kmTraveledNum,
+          kmPayout: Number(kmPayoutNum.toFixed(2)),
+          tollCost: Number(tollCostNum.toFixed(2)),
+          totalTechnicianGross: Number(totalGrossNum.toFixed(2)),
           status: 'COMPLETED'
         }
       });
