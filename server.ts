@@ -974,36 +974,44 @@ async function startServer() {
       }
 
       // Sincronização Relacional da Tabela de Preços do Técnico (technician_custom_rates)
-      let postPriceList: any[] | null = null;
-      if (Array.isArray(u.priceTable)) {
-        postPriceList = u.priceTable;
-      } else if (typeof u.priceTable === 'string') {
-        try {
-          const parsed = JSON.parse(u.priceTable);
-          if (Array.isArray(parsed)) postPriceList = parsed;
-        } catch {}
-      } else if (Array.isArray(u.customRates)) {
-        postPriceList = u.customRates;
-      }
+      const priceTablePayload = u.priceTable !== undefined ? u.priceTable : (u.price_table !== undefined ? u.price_table : u.services);
+      if (priceTablePayload !== undefined && u.id) {
+        let servicesArray: any[] = [];
+        if (Array.isArray(priceTablePayload)) {
+          servicesArray = priceTablePayload;
+        } else if (typeof priceTablePayload === 'string') {
+          try {
+            const parsed = JSON.parse(priceTablePayload);
+            if (Array.isArray(parsed)) servicesArray = parsed;
+          } catch (parseErr) {
+            console.error(`[DB ERRO] Falha ao fazer parse do payload priceTable para o usuário ${u.id}:`, parseErr);
+          }
+        }
 
-      if (postPriceList !== null && u.id) {
         try {
+          // 1. CLEAR (Delete) das taxas existentes para este técnico
           await db.execute('DELETE FROM technician_custom_rates WHERE technician_id = ?', [u.id]);
-          for (const item of postPriceList) {
-            const rawCategory = item.serviceCategory || item.serviceType || item.category || item.serviceName || item.name || '';
-            const categoryStr = String(rawCategory).trim();
-            const rawFee = item.customFee ?? item.prepostoPrice ?? item.price ?? item.custom_fee ?? 0;
-            const customFeeNum = parseFloat(String(rawFee).replace(',', '.')) || 0;
 
-            if (categoryStr) {
-              await db.execute(
-                'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
-                [u.id, categoryStr, customFeeNum]
-              );
+          // 2. INSERT múltiplo para cada serviço enviado no array
+          for (const item of servicesArray) {
+            const rawCategory = item.serviceType || item.serviceCategory || item.category || item.serviceName || item.name || '';
+            const serviceCategory = String(rawCategory).trim();
+            const rawFee = item.prepostoPrice !== undefined ? item.prepostoPrice : (item.customFee !== undefined ? item.customFee : (item.custom_fee !== undefined ? item.custom_fee : item.price));
+            const customFee = parseFloat(String(rawFee || 0).replace(',', '.')) || 0.0;
+
+            if (serviceCategory) {
+              try {
+                await db.execute(
+                  'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
+                  [u.id, serviceCategory, customFee]
+                );
+              } catch (insertErr: any) {
+                console.error(`[DB ERRO] Falha ao gravar "${serviceCategory}" para o técnico ${u.id}:`, insertErr?.message || insertErr);
+              }
             }
           }
-        } catch (ratesSyncErr) {
-          console.warn('[DB Warning] Falha ao sincronizar technician_custom_rates no create de usuário:', ratesSyncErr);
+        } catch (clearErr: any) {
+          console.error(`[DB ERRO] Falha ao executar DELETE em technician_custom_rates para o técnico ${u.id}:`, clearErr?.message || clearErr);
         }
       }
 
@@ -1177,39 +1185,44 @@ async function startServer() {
       }
 
       // Sincronização Relacional da Tabela de Preços do Técnico (technician_custom_rates)
-      let priceList: any[] | null = null;
-      if (Array.isArray(u.priceTable)) {
-        priceList = u.priceTable;
-      } else if (typeof u.priceTable === 'string') {
-        try {
-          const parsed = JSON.parse(u.priceTable);
-          if (Array.isArray(parsed)) priceList = parsed;
-        } catch {}
-      } else if (Array.isArray(u.customRates)) {
-        priceList = u.customRates;
-      }
+      const priceTablePayload = u.priceTable !== undefined ? u.priceTable : (u.price_table !== undefined ? u.price_table : u.services);
+      if (priceTablePayload !== undefined && id) {
+        let servicesArray: any[] = [];
+        if (Array.isArray(priceTablePayload)) {
+          servicesArray = priceTablePayload;
+        } else if (typeof priceTablePayload === 'string') {
+          try {
+            const parsed = JSON.parse(priceTablePayload);
+            if (Array.isArray(parsed)) servicesArray = parsed;
+          } catch (parseErr) {
+            console.error(`[DB ERRO] Falha ao fazer parse do payload priceTable para o usuário ${id}:`, parseErr);
+          }
+        }
 
-      if (priceList !== null) {
         try {
-          // 1. CLEAR: Remove taxas existentes para o técnico
+          // 1. CLEAR (Delete) das taxas existentes para este técnico
           await db.execute('DELETE FROM technician_custom_rates WHERE technician_id = ?', [id]);
 
-          // 2. INSERT: Adiciona cada serviço do array validado
-          for (const item of priceList) {
-            const rawCategory = item.serviceCategory || item.serviceType || item.category || item.serviceName || item.name || '';
-            const categoryStr = String(rawCategory).trim();
-            const rawFee = item.customFee ?? item.prepostoPrice ?? item.price ?? item.custom_fee ?? 0;
-            const customFeeNum = parseFloat(String(rawFee).replace(',', '.')) || 0;
+          // 2. INSERT múltiplo para cada serviço enviado no array
+          for (const item of servicesArray) {
+            const rawCategory = item.serviceType || item.serviceCategory || item.category || item.serviceName || item.name || '';
+            const serviceCategory = String(rawCategory).trim();
+            const rawFee = item.prepostoPrice !== undefined ? item.prepostoPrice : (item.customFee !== undefined ? item.customFee : (item.custom_fee !== undefined ? item.custom_fee : item.price));
+            const customFee = parseFloat(String(rawFee || 0).replace(',', '.')) || 0.0;
 
-            if (categoryStr) {
-              await db.execute(
-                'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
-                [id, categoryStr, customFeeNum]
-              );
+            if (serviceCategory) {
+              try {
+                await db.execute(
+                  'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
+                  [id, serviceCategory, customFee]
+                );
+              } catch (insertErr: any) {
+                console.error(`[DB ERRO] Falha ao gravar "${serviceCategory}" para o técnico ${id}:`, insertErr?.message || insertErr);
+              }
             }
           }
-        } catch (ratesSyncErr) {
-          console.warn('[DB Warning] Falha ao sincronizar technician_custom_rates:', ratesSyncErr);
+        } catch (clearErr: any) {
+          console.error(`[DB ERRO] Falha ao executar DELETE em technician_custom_rates para o técnico ${id}:`, clearErr?.message || clearErr);
         }
       }
 
