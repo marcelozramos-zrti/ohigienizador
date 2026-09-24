@@ -753,8 +753,42 @@ async function startServer() {
     try {
       const db = getDbPool();
       const [rows]: any = await db.query('SELECT * FROM users ORDER BY name ASC');
+
+      // Leitura relacional da fonte única da verdade: technician_custom_rates
+      const ratesMap: Record<string, any[]> = {};
+      try {
+        const [rateRows]: any = await db.query(
+          'SELECT id, technician_id, service_category, custom_fee FROM `technician_custom_rates`'
+        );
+
+        if (Array.isArray(rateRows)) {
+          for (const r of rateRows) {
+            const techId = String(r.technician_id || '').trim();
+            if (!techId) continue;
+            if (!ratesMap[techId]) ratesMap[techId] = [];
+
+            const categoryStr = String(r.service_category || '').trim();
+            const feeNum = parseFloat(String(r.custom_fee ?? 0)) || 0;
+
+            ratesMap[techId].push({
+              id: String(r.id || `rate-${techId}-${ratesMap[techId].length + 1}`),
+              serviceType: categoryStr,
+              category: categoryStr,
+              serviceCategory: categoryStr,
+              serviceName: categoryStr,
+              name: categoryStr,
+              prepostoPrice: feeNum,
+              customFee: feeNum,
+              price: feeNum,
+            });
+          }
+        }
+      } catch (ratesErr: any) {
+        console.error('[DB ERRO] Falha ao consultar technician_custom_rates em GET /api/users:', ratesErr?.message || ratesErr);
+      }
+
       const formatted = rows.map((u: any) => {
-        let parsedPriceTable = [];
+        let parsedPriceTable: any[] = [];
         try {
           if (u.price_table && typeof u.price_table === 'string') {
             parsedPriceTable = JSON.parse(u.price_table);
@@ -769,6 +803,10 @@ async function startServer() {
           parsedPriceTable = [];
         }
 
+        // Sobrescreve com a tabela relacional caso exista registro para o técnico
+        const relationalRates = ratesMap[String(u.id)];
+        const effectivePriceTable = relationalRates && relationalRates.length > 0 ? relationalRates : parsedPriceTable;
+
         return {
           ...u,
           isActive: Boolean(u.isActive ?? u.is_active ?? true),
@@ -782,8 +820,8 @@ async function startServer() {
           bankName: u.bankName ?? u.bank_name ?? '',
           bankAgency: u.bankAgency ?? u.bank_agency ?? '',
           bankAccount: u.bankAccount ?? u.bank_account ?? '',
-          price_table: parsedPriceTable,
-          priceTable: parsedPriceTable,
+          price_table: effectivePriceTable,
+          priceTable: effectivePriceTable,
         };
       });
       memUsers = formatted;
@@ -803,6 +841,85 @@ async function startServer() {
         }
         return res.json({ success: true, data: memUsers });
       }
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const db = getDbPool();
+      const [rows]: any = await db.query('SELECT * FROM users WHERE id = ? LIMIT 1', [id]);
+      if (!rows || rows.length === 0) {
+        const memoryUser = memUsers.find((u) => u.id === id);
+        if (memoryUser) return res.json({ success: true, data: memoryUser });
+        return res.status(404).json({ success: false, error: 'Usuário não encontrado.' });
+      }
+
+      const u = rows[0];
+      let relationalRates: any[] = [];
+      try {
+        const [rateRows]: any = await db.query(
+          'SELECT id, technician_id, service_category, custom_fee FROM `technician_custom_rates` WHERE technician_id = ?',
+          [id]
+        );
+        if (Array.isArray(rateRows)) {
+          relationalRates = rateRows.map((r: any, idx: number) => {
+            const cat = String(r.service_category || '').trim();
+            const fee = parseFloat(String(r.custom_fee ?? 0)) || 0;
+            return {
+              id: String(r.id || `rate-${id}-${idx + 1}`),
+              serviceType: cat,
+              category: cat,
+              serviceCategory: cat,
+              serviceName: cat,
+              name: cat,
+              prepostoPrice: fee,
+              customFee: fee,
+              price: fee,
+            };
+          });
+        }
+      } catch (ratesErr: any) {
+        console.error(`[DB ERRO] Falha ao consultar technician_custom_rates para o usuário ${id}:`, ratesErr?.message || ratesErr);
+      }
+
+      let parsedPriceTable: any[] = [];
+      try {
+        if (u.price_table && typeof u.price_table === 'string') {
+          parsedPriceTable = JSON.parse(u.price_table);
+        } else if (Array.isArray(u.price_table)) {
+          parsedPriceTable = u.price_table;
+        } else if (u.priceTable && typeof u.priceTable === 'string') {
+          parsedPriceTable = JSON.parse(u.priceTable);
+        } else if (Array.isArray(u.priceTable)) {
+          parsedPriceTable = u.priceTable;
+        }
+      } catch (e) {
+        parsedPriceTable = [];
+      }
+
+      const effectivePriceTable = relationalRates.length > 0 ? relationalRates : parsedPriceTable;
+
+      const formatted = {
+        ...u,
+        isActive: Boolean(u.isActive ?? u.is_active ?? true),
+        hasSpecialTaxRule: Boolean(u.hasSpecialTaxRule ?? u.has_special_tax_rule ?? false),
+        baseCostAllowance: Number(u.baseCostAllowance ?? u.base_cost_allowance ?? 0),
+        costAllowanceFortnight: Number(u.costAllowanceFortnight ?? u.cost_allowance_fortnight ?? 1),
+        specialTaxRate: Number(u.specialTaxRate ?? u.special_tax_rate ?? 0),
+        documentCpf: u.documentCpf ?? u.document_cpf ?? u.cpf ?? '',
+        pixKey: u.pixKey ?? u.pix_key ?? '',
+        pixKeyType: u.pixKeyType ?? u.pix_key_type ?? 'CPF',
+        bankName: u.bankName ?? u.bank_name ?? '',
+        bankAgency: u.bankAgency ?? u.bank_agency ?? '',
+        bankAccount: u.bankAccount ?? u.bank_account ?? '',
+        price_table: effectivePriceTable,
+        priceTable: effectivePriceTable,
+      };
+
+      res.json({ success: true, data: formatted });
+    } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
