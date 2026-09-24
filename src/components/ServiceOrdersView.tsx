@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search,
   PlusCircle,
@@ -107,6 +107,64 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
 
   const safeOrders = roleFilteredOrders || [];
   const safeUsers = users || [];
+
+  // Cache dinâmico de taxas e serviços por técnico (technician_custom_rates / priceTable)
+  const [techRatesCache, setTechRatesCache] = useState<Record<string, Array<{ serviceCategory: string; prepostoPrice: number }>>>({});
+
+  // Efeito para carregar as taxas customizadas dos técnicos vinculados via API
+  useEffect(() => {
+    const techIds = Array.from(new Set(safeOrders.map((o) => o.technicianId).filter(Boolean))) as string[];
+    techIds.forEach((techId) => {
+      if (!techRatesCache[techId]) {
+        fetch(`/api/technicians/${techId}/rates`)
+          .then((res) => res.json())
+          .then((resData) => {
+            if (resData.success && Array.isArray(resData.data)) {
+              setTechRatesCache((prev) => ({
+                ...prev,
+                [techId]: resData.data.map((r: any) => ({
+                  serviceCategory: r.serviceName || r.category,
+                  prepostoPrice: Number(r.customFee || r.prepostoPrice || 0),
+                })),
+              }));
+            }
+          })
+          .catch(() => {});
+      }
+    });
+  }, [safeOrders]);
+
+  // Função auxiliar para obter a lista reativa de serviços do técnico individual
+  const getTechnicianServices = (techId?: string, techName?: string) => {
+    let resolvedId = techId;
+    if (!resolvedId && techName) {
+      const foundUser = safeUsers.find((u) => u.name === techName || u.id === techName);
+      if (foundUser) resolvedId = foundUser.id;
+    }
+
+    // 1. Tenta carregar do cache da API (technician_custom_rates)
+    if (resolvedId && techRatesCache[resolvedId] && techRatesCache[resolvedId].length > 0) {
+      return techRatesCache[resolvedId];
+    }
+
+    // 2. Tenta carregar da priceTable do usuário no AppContext
+    if (resolvedId) {
+      const user = safeUsers.find((u) => u.id === resolvedId);
+      if (user && Array.isArray(user.priceTable) && user.priceTable.length > 0) {
+        return user.priceTable.map((pt) => ({
+          serviceCategory: pt.serviceType || pt.category,
+          prepostoPrice: Number(pt.prepostoPrice || 0),
+        }));
+      }
+    }
+
+    // 3. Fallback: configurações globais de categorias
+    const globalRates = settings?.serviceCategoriesRates || {};
+    return Object.entries(globalRates).map(([category, fee]) => ({
+      serviceCategory: category,
+      prepostoPrice: Number(fee || 0),
+    }));
+  };
 
   const techniciansList = useMemo(() => {
     return safeUsers.filter((u) => u && u.role === 'TECHNICIAN' && u.isActive);
@@ -906,45 +964,48 @@ export const ServiceOrdersView: React.FC<ServiceOrdersViewProps> = ({ onOpenNewO
                             </div>
                           ) : (
                             <>
-                              <select
-                                value={os.serviceCategory || ''}
-                                onChange={(e) => {
-                                  const newCategory = e.target.value;
-                                  if (newCategory) {
-                                    const suggestedFee = settings?.serviceCategoriesRates?.[newCategory] || 140;
-                                    updateServiceOrder(os.id, {
-                                      serviceCategory: newCategory,
-                                      baseServiceFee: suggestedFee,
-                                      faturamentoPorto: suggestedFee * 1.6
-                                    });
-                                  }
-                                }}
-                                className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
-                                title="Alterar categoria do serviço"
-                              >
-                                {os.serviceCategory && ![
-                                  "Higienização de Sofá 3 Lugares",
-                                  "Impermeabilização de Estofado",
-                                  "Higienização Automotiva Completa",
-                                  "Higienização de Colchão Queen",
-                                  "Higienização de Tapetes e Carpetes",
-                                  "Instalação Lava e Seca",
-                                  "Instalação TV de 44 a 70 + Suporte Fixo",
-                                  "Instalação Purificador de Água",
-                                  "Visita Perdida"
-                                ].includes(os.serviceCategory) && (
-                                  <option value={os.serviceCategory}>{os.serviceCategory}</option>
-                                )}
-                                <option value="Higienização de Sofá 3 Lugares">Higienização de Sofá 3 Lugares</option>
-                                <option value="Impermeabilização de Estofado">Impermeabilização de Estofado</option>
-                                <option value="Higienização Automotiva Completa">Higienização Automotiva Completa</option>
-                                <option value="Higienização de Colchão Queen">Higienização de Colchão Queen</option>
-                                <option value="Higienização de Tapetes e Carpetes">Higienização de Tapetes e Carpetes</option>
-                                <option value="Instalação Lava e Seca">Instalação Lava e Seca</option>
-                                <option value="Instalação TV de 44 a 70 + Suporte Fixo">Instalação TV de 44 a 70 + Suporte Fixo</option>
-                                <option value="Instalação Purificador de Água">Instalação Purificador de Água</option>
-                                <option value="Visita Perdida">Visita Perdida</option>
-                              </select>
+                              {(() => {
+                                const techServices = getTechnicianServices(os.technicianId, os.technicianName);
+                                const hasCurrentInList = techServices.some((s) => s.serviceCategory === os.serviceCategory);
+
+                                return (
+                                  <select
+                                    value={os.serviceCategory || ''}
+                                    onChange={(e) => {
+                                      const newCategory = e.target.value;
+                                      if (newCategory) {
+                                        const matchedService = techServices.find((s) => s.serviceCategory === newCategory);
+                                        const suggestedFee = matchedService && matchedService.prepostoPrice > 0
+                                          ? matchedService.prepostoPrice
+                                          : (settings?.serviceCategoriesRates?.[newCategory] || 140);
+
+                                        updateServiceOrder(os.id, {
+                                          serviceCategory: newCategory,
+                                          baseServiceFee: suggestedFee,
+                                          faturamentoPorto: suggestedFee * 1.6
+                                        });
+                                      }
+                                    }}
+                                    className="text-xs font-semibold py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-cyan-50 hover:border-cyan-300 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500 max-w-[180px] truncate"
+                                    title={os.technicianName ? `Serviços tabelados para o técnico ${os.technicianName}` : 'Alterar categoria do serviço'}
+                                  >
+                                    {/* Preserva a categoria atual da OS caso não esteja explicitamente na lista customizada */}
+                                    {os.serviceCategory && !hasCurrentInList && (
+                                      <option value={os.serviceCategory}>{os.serviceCategory} (Atual)</option>
+                                    )}
+
+                                    {techServices.length > 0 ? (
+                                      techServices.map((item, idx) => (
+                                        <option key={`${item.serviceCategory}-${idx}`} value={item.serviceCategory}>
+                                          {item.serviceCategory}{item.prepostoPrice > 0 ? ` (R$ ${item.prepostoPrice.toFixed(2)})` : ''}
+                                        </option>
+                                      ))
+                                    ) : (
+                                      <option value="" disabled>Nenhum serviço configurado</option>
+                                    )}
+                                  </select>
+                                );
+                              })()}
 
                                 <select
                                 value={(() => {

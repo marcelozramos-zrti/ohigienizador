@@ -2044,6 +2044,55 @@ async function startServer() {
     }
   });
 
+  // Retorna taxas customizadas de um técnico (technician_custom_rates / priceTable)
+  app.get(['/api/technicians/:id/rates', '/api/technicians/:id/services', '/api/technicians/:id/custom-rates'], async (req, res) => {
+    const techId = req.params.id;
+    if (!techId) {
+      return res.status(400).json({ success: false, error: 'ID do técnico é obrigatório.' });
+    }
+
+    try {
+      const db = getDbPool();
+      let rates: any[] = [];
+      try {
+        const [rows]: any = await db.query(
+          `SELECT id, technician_id, service_name, service_category, custom_fee, preposto_price 
+           FROM technician_custom_rates 
+           WHERE technician_id = ?`,
+          [techId]
+        );
+        if (rows && rows.length > 0) {
+          rates = rows.map((r: any) => ({
+            id: r.id,
+            technicianId: r.technician_id,
+            serviceName: r.service_name || r.service_category,
+            category: r.service_category || r.service_name,
+            customFee: Number(r.custom_fee ?? r.preposto_price ?? 0),
+            prepostoPrice: Number(r.preposto_price ?? r.custom_fee ?? 0)
+          }));
+        }
+      } catch (e) {}
+
+      if (rates.length === 0) {
+        const user = memUsers.find((u) => u.id === techId);
+        if (user && Array.isArray(user.priceTable) && user.priceTable.length > 0) {
+          rates = user.priceTable.map((pt: any) => ({
+            id: pt.id || pt.serviceType,
+            technicianId: techId,
+            serviceName: pt.serviceType || pt.category,
+            category: pt.category || pt.serviceType,
+            customFee: Number(pt.prepostoPrice || 0),
+            prepostoPrice: Number(pt.prepostoPrice || 0)
+          }));
+        }
+      }
+
+      res.json({ success: true, data: rates });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Reatribuição em Massa de Técnico
   app.post('/api/orders/batch-reassign', async (req, res) => {
     const requester = await getRequester(req);
