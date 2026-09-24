@@ -972,6 +972,41 @@ async function startServer() {
         `;
         await db.execute(query, insertValues);
       }
+
+      // Sincronização Relacional da Tabela de Preços do Técnico (technician_custom_rates)
+      let postPriceList: any[] | null = null;
+      if (Array.isArray(u.priceTable)) {
+        postPriceList = u.priceTable;
+      } else if (typeof u.priceTable === 'string') {
+        try {
+          const parsed = JSON.parse(u.priceTable);
+          if (Array.isArray(parsed)) postPriceList = parsed;
+        } catch {}
+      } else if (Array.isArray(u.customRates)) {
+        postPriceList = u.customRates;
+      }
+
+      if (postPriceList !== null && u.id) {
+        try {
+          await db.execute('DELETE FROM technician_custom_rates WHERE technician_id = ?', [u.id]);
+          for (const item of postPriceList) {
+            const rawCategory = item.serviceCategory || item.serviceType || item.category || item.serviceName || item.name || '';
+            const categoryStr = String(rawCategory).trim();
+            const rawFee = item.customFee ?? item.prepostoPrice ?? item.price ?? item.custom_fee ?? 0;
+            const customFeeNum = parseFloat(String(rawFee).replace(',', '.')) || 0;
+
+            if (categoryStr) {
+              await db.execute(
+                'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
+                [u.id, categoryStr, customFeeNum]
+              );
+            }
+          }
+        } catch (ratesSyncErr) {
+          console.warn('[DB Warning] Falha ao sincronizar technician_custom_rates no create de usuário:', ratesSyncErr);
+        }
+      }
+
       res.json({ success: true, message: `Usuário ${u.name} salvo com sucesso.`, user: u });
     } catch (err: any) {
       if (isNetworkError(err)) {
@@ -1140,6 +1175,44 @@ async function startServer() {
         const query = `UPDATE \`users\` SET ${fields.join(', ')} WHERE \`id\` = ?`;
         await db.execute(query, values);
       }
+
+      // Sincronização Relacional da Tabela de Preços do Técnico (technician_custom_rates)
+      let priceList: any[] | null = null;
+      if (Array.isArray(u.priceTable)) {
+        priceList = u.priceTable;
+      } else if (typeof u.priceTable === 'string') {
+        try {
+          const parsed = JSON.parse(u.priceTable);
+          if (Array.isArray(parsed)) priceList = parsed;
+        } catch {}
+      } else if (Array.isArray(u.customRates)) {
+        priceList = u.customRates;
+      }
+
+      if (priceList !== null) {
+        try {
+          // 1. CLEAR: Remove taxas existentes para o técnico
+          await db.execute('DELETE FROM technician_custom_rates WHERE technician_id = ?', [id]);
+
+          // 2. INSERT: Adiciona cada serviço do array validado
+          for (const item of priceList) {
+            const rawCategory = item.serviceCategory || item.serviceType || item.category || item.serviceName || item.name || '';
+            const categoryStr = String(rawCategory).trim();
+            const rawFee = item.customFee ?? item.prepostoPrice ?? item.price ?? item.custom_fee ?? 0;
+            const customFeeNum = parseFloat(String(rawFee).replace(',', '.')) || 0;
+
+            if (categoryStr) {
+              await db.execute(
+                'INSERT INTO technician_custom_rates (technician_id, service_category, custom_fee) VALUES (?, ?, ?)',
+                [id, categoryStr, customFeeNum]
+              );
+            }
+          }
+        } catch (ratesSyncErr) {
+          console.warn('[DB Warning] Falha ao sincronizar technician_custom_rates:', ratesSyncErr);
+        }
+      }
+
       res.json({ success: true, message: `Usuário ${id} atualizado.` });
     } catch (err: any) {
       if (isNetworkError(err)) {
