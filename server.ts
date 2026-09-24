@@ -4897,22 +4897,9 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'O número do chamado (callNumber) é obrigatório.' });
     }
 
-    // 1. MOTOR DETERMINÍSTICO DE PREÇOS (Obrigatório)
-    let base_service_fee = 50.00;
+    // 1. INICIALIZAÇÃO SEGURA DA TAXA BASE (Sem adivinhação/hardcoding)
+    let base_service_fee = 0.00;
     const s = String(body.serviceMotive || body.serviceCategory || body.service_motive || body.Motivo || body.Especialidade || '').toLowerCase();
-
-    if (/tv.*(99|115|acima de 98)/.test(s)) base_service_fee = 150.00;
-    else if (/tv.*(66|98|acima de 65)/.test(s)) base_service_fee = 80.00;
-    else if (/tv.*(50.*65|50 a 65|acima de 50)/.test(s)) base_service_fee = 70.00;
-    else if (/tv.*(49|at[eé]\s*49|12.*48|32)/.test(s)) base_service_fee = 60.00;
-    else if (/tv/.test(s)) base_service_fee = 60.00;
-    else if (/home theater/.test(s)) base_service_fee = 70.00;
-    else if (/geladeira|refrigerador|syde by syde/.test(s)) base_service_fee = 60.00;
-    else if (/lava e seca|lavadora|lava lou[çc]as|purificador|depurador|coifa|secadora/.test(s)) base_service_fee = 50.00;
-    else if (/sof[aá].*3|sof[aá].*cama/.test(s)) base_service_fee = 140.00;
-    else if (/sof[aá]/.test(s)) base_service_fee = 120.00;
-    else if (/colch[aã]o/.test(s)) base_service_fee = 130.00;
-    else if (/visita/.test(s)) base_service_fee = 40.00;
 
     // 1.1 INTERPRETAÇÃO INTELIGENTE DA CATEGORIA E MOTIVO (Evita salvar TV como Sofá)
     let finalCategory = body.serviceCategory || '';
@@ -5010,47 +4997,48 @@ async function startServer() {
         } catch (stockErr) {}
       }
 
-      // 1. AUTO-CADASTRO E BUSCA DO ID REAL DO SERVIÇO (service_id)
+      // 1. BUSCA RESTRITA DO ID REAL DO SERVIÇO (service_id) - Catálogo Fechado / Sem Auto-Provisionamento
       let realServiceId: string | null = null;
-      const searchMotive = String(body.serviceMotive || body.serviceCategory || '').trim();
+      let serviceDefaultPrice: number | null = null;
+      const searchMotive = String(body.serviceMotive || body.serviceCategory || body.service_motive || '').trim();
 
       if (searchMotive) {
         try {
           // SELECT por nome exato
           const [exactRows]: any = await db.query(
-            'SELECT id, name FROM services WHERE name = ? LIMIT 1',
+            'SELECT id, name, default_price FROM services WHERE name = ? LIMIT 1',
             [searchMotive]
           );
 
           if (exactRows && exactRows.length > 0) {
             realServiceId = String(exactRows[0].id);
+            if (exactRows[0].default_price !== undefined && exactRows[0].default_price !== null) {
+              serviceDefaultPrice = Number(exactRows[0].default_price);
+            }
           } else {
-            // Tenta por LIKE antes de criar
+            // Tenta por correspondência parcial (LIKE)
             const [likeRows]: any = await db.query(
-              'SELECT id, name FROM services WHERE name LIKE ? LIMIT 1',
+              'SELECT id, name, default_price FROM services WHERE name LIKE ? LIMIT 1',
               [`%${searchMotive}%`]
             );
 
             if (likeRows && likeRows.length > 0) {
               realServiceId = String(likeRows[0].id);
-            } else {
-              // Se a consulta retornar vazia: AUTO-CADASTRO DE SERVIÇO (INSERT INTO services)
-              const newServiceId = 'srv-' + crypto.randomUUID();
-              await db.execute(
-                `INSERT INTO services (id, name, category, default_price, active, created_at)
-                 VALUES (?, ?, 'Porto Seguro', ?, 1, NOW())`,
-                [newServiceId, searchMotive, base_service_fee]
-              );
-              realServiceId = newServiceId;
-              console.log(`[Services Auto-Provision] Novo serviço cadastrado: ${searchMotive} (ID: ${newServiceId})`);
+              if (likeRows[0].default_price !== undefined && likeRows[0].default_price !== null) {
+                serviceDefaultPrice = Number(likeRows[0].default_price);
+              }
             }
           }
         } catch (err) {
-          console.warn('[DB] Erro no auto-cadastro/busca de service_id:', err);
+          console.warn('[DB] Erro na busca de service_id:', err);
         }
       }
 
-      // 2. BUSCA DO ID REAL DO PRODUTO/SUPORTE (product_id) NA TABELA products
+      if (serviceDefaultPrice !== null) {
+        base_service_fee = serviceDefaultPrice;
+      }
+
+      // 2. BUSCA RESTRITA DO ID REAL DO PRODUTO/SUPORTE (product_id) NA TABELA products - Catálogo Fechado
       let realProductId: string | null = null;
       let realProductName: string | null = null;
 
@@ -5062,27 +5050,16 @@ async function startServer() {
 
           if (prodRows && prodRows.length > 0) {
             realProductId = String(prodRows[0].id);
-            realProductName = prodRows[0].name || 'Suporte Fixo para TV';
-          } else {
-            // Se NÃO existir, auto-cadastro na tabela products
-            const newProdId = 'prod-' + crypto.randomUUID();
-            const autoSupportName = 'Suporte Fixo para TV';
-            await db.execute(
-              'INSERT INTO products (id, name, active) VALUES (?, ?, 1)',
-              [newProdId, autoSupportName]
-            );
-            realProductId = newProdId;
-            realProductName = autoSupportName;
-            console.log(`[Products Auto-Provision] Novo produto cadastrado: ${autoSupportName} (ID: ${newProdId})`);
+            realProductName = prodRows[0].name || null;
           }
         } catch (err) {
-          console.warn('[DB] Erro ao buscar/inserir product_id na tabela products:', err);
+          console.warn('[DB] Erro ao buscar product_id na tabela products:', err);
         }
       }
 
-      const resolvedServiceId = realServiceId;
-      const resolvedProductId = realProductId;
-      const resolvedProductName = realProductId ? (realProductName || 'Suporte Fixo para TV') : null;
+      const resolvedServiceId: string | null = realServiceId;
+      const resolvedProductId: string | null = realProductId;
+      const resolvedProductName: string | null = realProductId ? (realProductName || 'Suporte Fixo para TV') : null;
 
       // 3. RESOLUÇÃO INTELIGENTE DO TÉCNICO (VÍNCULO AUTOMÁTICO)
       let technicianId = null;
