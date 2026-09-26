@@ -1567,32 +1567,24 @@ async function startServer() {
     const result = { ...o };
     const executionDateStr = o.scheduledDate || o.scheduled_date || o.completedAt || o.completed_at || new Date().toISOString();
     
-    const execTime = new Date(executionDateStr).getTime();
-    const cutoffTime = new Date('2026-07-26T23:59:59').getTime();
-    const isBeforeCutoff = execTime <= cutoffTime;
-
     let kmRateApplied = 0.75;
-    if (isBeforeCutoff) {
-      kmRateApplied = 0.50;
-    } else {
-      const techId = o.technicianId || o.technician_id;
-      if (techId) {
-        try {
-          const poolDb = db || getDbPool();
-          const [techRows]: any = await poolDb.query('SELECT km_rate, kmRate FROM users WHERE id = ?', [techId]);
-          if (techRows && techRows.length > 0) {
-            kmRateApplied = Number(techRows[0].km_rate ?? techRows[0].kmRate ?? 0.75);
-          } else {
-            const memTech = memUsers.find(u => u.id === techId);
-            if (memTech) {
-              kmRateApplied = Number(memTech.km_rate ?? memTech.kmRate ?? 0.75);
-            }
-          }
-        } catch {
+    const techId = o.technicianId || o.technician_id;
+    if (techId) {
+      try {
+        const poolDb = db || getDbPool();
+        const [techRows]: any = await poolDb.query('SELECT km_rate, kmRate FROM users WHERE id = ?', [techId]);
+        if (techRows && techRows.length > 0) {
+          kmRateApplied = Number(techRows[0].km_rate ?? techRows[0].kmRate ?? 0.75);
+        } else {
           const memTech = memUsers.find(u => u.id === techId);
           if (memTech) {
             kmRateApplied = Number(memTech.km_rate ?? memTech.kmRate ?? 0.75);
           }
+        }
+      } catch {
+        const memTech = memUsers.find(u => u.id === techId);
+        if (memTech) {
+          kmRateApplied = Number(memTech.km_rate ?? memTech.kmRate ?? 0.75);
         }
       }
     }
@@ -2844,19 +2836,10 @@ async function startServer() {
           const tollCellValue = getSinonimoValue(normRow, 'toll_cost');
           const tollCost = extractTollValue(kmCellValue, tollCellValue);
 
-          // Regra de Corte Histórico (Snapshot Imutável)
-          const execTime = new Date(scheduledDateStr).getTime();
-          const cutoffTime = new Date('2026-07-26T23:59:59').getTime();
-          const isBeforeCutoff = execTime <= cutoffTime;
-
           let kmRateApplied = 0.75;
-          if (isBeforeCutoff) {
-            kmRateApplied = 0.50;
-          } else {
-            const matchedUser = currentUsersList.find(u => String(u.id) === String(technicianId));
-            if (matchedUser) {
-              kmRateApplied = Number(matchedUser.km_rate ?? matchedUser.kmRate ?? 0.75);
-            }
+          const matchedUser = currentUsersList.find(u => String(u.id) === String(technicianId));
+          if (matchedUser) {
+            kmRateApplied = Number(matchedUser.km_rate ?? matchedUser.kmRate ?? 0.75);
           }
 
           const kmPayout = Number((kmTraveled * kmRateApplied).toFixed(2));
@@ -4010,7 +3993,8 @@ async function startServer() {
         }
 
         const km = parseJsonCurrency(item.KM || item.km || 0);
-        const kmRate = 0.50;
+        const matchedTechUser = currentUsersList.find(u => String(u.id) === String(resolvedTechId));
+        const kmRate = Number(matchedTechUser?.km_rate ?? matchedTechUser?.kmRate ?? 0.75) || 0.75;
         const kmCost = km > 0 ? Number((km * kmRate).toFixed(2)) : 0;
         const toll = parseJsonCurrency(item['Pedágio'] || item.PEDAGIO || item.pedagio || item.tollCost || 0);
         let valorVisita = parseJsonCurrency(item['Valor da Visita'] || item['VALOR DA VISTA'] || item.valorVisita || item.baseServiceFee || 0);

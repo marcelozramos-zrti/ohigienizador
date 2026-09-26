@@ -66,7 +66,8 @@ export class CsvExportService {
         ? new Date(os.paymentDate).toLocaleString('pt-BR')
         : '-';
       const km = os.kmTraveled || 0;
-      const kmCost = os.kmTotalCost ?? Number((km * 0.50).toFixed(2));
+      const rate = Number(os.kmRateApplied || 0.75) || 0.75;
+      const kmCost = os.kmTotalCost ?? Number((km * rate).toFixed(2));
       const baseFee = os.baseServiceFee || 0;
       const toll = os.tollCost || 0;
       const support = os.supportCost || 0;

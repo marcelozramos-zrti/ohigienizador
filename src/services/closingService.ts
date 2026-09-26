@@ -163,7 +163,7 @@ export interface ClosingStatementJson {
  * - Regra de Imposto (Exceção): 16% de retenção sobre Total Bruto (ex: Robertinho R$ 3.940,00 - 16% = R$ 3.309,60)
  */
 export class ClosingService {
-  public static readonly DEFAULT_KM_RATE = 0.50; // R$ 0,50 / km
+  public static readonly DEFAULT_KM_RATE = 0.75; // R$ 0,75 / km
   public static readonly DEFAULT_COST_ALLOWANCE = 250.00; // R$ 250,00
   public static readonly DEFAULT_TAX_EXCEPTION_RATE = 16.0; // 16.0%
 
@@ -198,11 +198,23 @@ export class ClosingService {
     movements: FinancialMovement[],
     options: ClosingCalculationOptions
   ): ClosingStatementJson {
-    const kmRate = options.kmRateDefault ?? this.DEFAULT_KM_RATE;
+    // 1. Resolução Obrigatória da Taxa de KM individual configurada no perfil do usuário / técnico
+    const rawTechKmRate = (technician as any).kmRate ?? (technician as any).km_rate;
+    let techKmRate = 0.75; // Padrão base da operação
+
+    if (rawTechKmRate !== undefined && rawTechKmRate !== null && String(rawTechKmRate).trim() !== '') {
+      const parsedTechRate = parseFloat(String(rawTechKmRate));
+      if (!isNaN(parsedTechRate) && parsedTechRate > 0) {
+        techKmRate = parsedTechRate;
+      }
+    } else if (options.kmRateDefault !== undefined && options.kmRateDefault !== null && !isNaN(Number(options.kmRateDefault))) {
+      techKmRate = parseFloat(String(options.kmRateDefault));
+    }
+
     const safeOrders = orders || [];
     const safeMovements = movements || [];
 
-    // 1. Filtrar ordens concluídas
+    // 2. Filtrar ordens concluídas
     const completedOrders = safeOrders.filter(
       (os) =>
         os &&
@@ -216,14 +228,14 @@ export class ClosingService {
 
     // Variáveis de acumulação (utilizando centavos para evitar floating point drift / falha na precisão IEEE 754)
     let sumBaseServiceCents = 0;
-    let sumKmTraveledCents = 0; // KM traveled isn't currency, but multiplied by 100 for consistency
+    let sumKmTraveledCents = 0;
     let sumKmCostCents = 0;
     let sumTollCostCents = 0;
     let sumSupportCostCents = 0;
     let sumOrdersTotalCents = 0;
 
     const formattedOrdersList = completedOrders.map((os) => {
-      let baseFee = Number(os.baseServiceFee ?? 0);
+      let baseFee = Number(os.baseServiceFee ?? (os as any).base_service_fee ?? 0);
       if (baseFee <= 0 && os.serviceCategory) {
         const tablePrice = this.getTechnicianPriceForService(technician, os.serviceCategory);
         if (tablePrice !== null && tablePrice > 0) {
@@ -234,13 +246,17 @@ export class ClosingService {
         baseFee = 20.00; // Valor padrão fixo Visita Perdida
       }
 
-      const km = Number(os.kmTraveled || 0);
-      const kmCost = Number((km * kmRate).toFixed(2));
-      const toll = Number(os.tollCost || 0);
-      const support = Number(os.supportCost || 0);
+      // Taxa de KM individual do técnico (R$ 0,75 ou configurada no perfil)
+      const effectiveKmRate = techKmRate;
+      const km = parseFloat(String(os.kmTraveled ?? (os as any).km_traveled ?? 0)) || 0;
+      const kmCost = Number((km * effectiveKmRate).toFixed(2));
+      const toll = parseFloat(String(os.tollCost ?? (os as any).toll_cost ?? 0)) || 0;
+      const support = parseFloat(String(os.supportCost ?? (os as any).support_cost ?? 0)) || 0;
+      
+      // Total da OS = Valor da Visita + (KM * taxa_individual) + Pedágio + Suporte
       const orderTotal = Number((baseFee + kmCost + toll + support).toFixed(2));
 
-      // Soma segura em inteiros (Math.round resolve as rebarbas de ponto flutuante, multiplicando por 100)
+      // Soma segura em inteiros
       sumBaseServiceCents += Math.round(baseFee * 100);
       sumKmTraveledCents += Math.round(km * 100); 
       sumKmCostCents += Math.round(kmCost * 100);
@@ -260,7 +276,7 @@ export class ClosingService {
         postalCode: os.postalCode || '',
         neighborhood: os.neighborhood || '',
         kmTraveled: km,
-        kmRateApplied: kmRate,
+        kmRateApplied: effectiveKmRate,
         kmTotalCost: kmCost,
         tollCost: toll,
         supportCost: support,

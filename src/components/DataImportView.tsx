@@ -540,7 +540,9 @@ export const DataImportView: React.FC = () => {
           }
         }
 
-        const totalCalculado = Number((valorVisita + km * 0.50 + pedagio).toFixed(2));
+        const matchedTech = users.find((u) => u.id === rowTechId || (rowTechName && u.name.toLowerCase() === rowTechName.toLowerCase()));
+        const techKmRate = Number(matchedTech?.kmRate ?? (matchedTech as any)?.km_rate ?? 0.75) || 0.75;
+        const totalCalculado = Number((valorVisita + km * techKmRate + pedagio).toFixed(2));
         const rowKey = `${idChamado}-${dtVisita}-${statusOS}-${parsedRows.length + 1}`;
 
         parsedRows.push({
@@ -652,11 +654,13 @@ export const DataImportView: React.FC = () => {
           target.technicianName = found ? found.name : 'Não Alocado';
         }
 
-        if (field === 'km' || field === 'pedagio' || field === 'valorVisita') {
+        if (field === 'km' || field === 'pedagio' || field === 'valorVisita' || field === 'technicianId') {
           const km = Number(target.km) || 0;
           const ped = Number(target.pedagio) || 0;
           const vis = Number(target.valorVisita) || 0;
-          target.totalCalculado = Number((vis + km * 0.50 + ped).toFixed(2));
+          const matchedTech = users.find((u) => u.id === target.technicianId || (target.technicianName && u.name.toLowerCase() === target.technicianName.toLowerCase()));
+          const techKmRate = Number(matchedTech?.kmRate ?? (matchedTech as any)?.km_rate ?? 0.75) || 0.75;
+          target.totalCalculado = Number((vis + km * techKmRate + ped).toFixed(2));
         }
 
         return target;

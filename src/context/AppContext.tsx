@@ -19,6 +19,7 @@ import {
   INITIAL_SETTINGS,
 } from '../mock/initialData';
 import { FinancialEngine } from '../services/financialEngine';
+import { ClosingService } from '../services/closingService';
 import { PdfStatementGenerator } from '../services/pdfGenerator';
 import { WhatsAppService, WhatsAppDispatchResult } from '../services/whatsappService';
 import { CsvExportService } from '../services/csvExportService';
@@ -1123,10 +1124,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // PDF
   const generatePdfForTechnician = (summary: TechnicianClosingSummary) => {
+    const techUser = users.find((u) => u.id === summary.technicianId);
+    let statementOrders = orders;
+    if (techUser) {
+      const statement = ClosingService.calculateTechnicianStatement(
+        techUser,
+        orders,
+        movements,
+        {
+          referenceYear: currentClosing.referenceYear,
+          referenceMonth: currentClosing.referenceMonth,
+          periodNumber: currentClosing.periodNumber,
+        }
+      );
+      if (statement && statement.orders) {
+        statementOrders = statement.orders as any;
+      }
+    }
+
     const { doc, filename, blobUrl } = PdfStatementGenerator.generateTechnicianStatementPdf(
       summary,
       currentClosing,
-      orders
+      statementOrders
     );
     doc.save(filename);
     addToast('PDF Gerado', `Extrato quinzenal de ${summary.technicianName} baixado com sucesso.`, 'success');
@@ -1135,10 +1154,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // WhatsApp
   const dispatchWhatsAppStatement = async (summary: TechnicianClosingSummary): Promise<WhatsAppDispatchResult> => {
+    const techUser = users.find((u) => u.id === summary.technicianId);
+    let statementOrders = orders;
+    if (techUser) {
+      const statement = ClosingService.calculateTechnicianStatement(
+        techUser,
+        orders,
+        movements,
+        {
+          referenceYear: currentClosing.referenceYear,
+          referenceMonth: currentClosing.referenceMonth,
+          periodNumber: currentClosing.periodNumber,
+        }
+      );
+      if (statement && statement.orders) {
+        statementOrders = statement.orders as any;
+      }
+    }
+
     const { filename, blobUrl } = PdfStatementGenerator.generateTechnicianStatementPdf(
       summary,
       currentClosing,
-      orders
+      statementOrders
     );
 
     const result = await WhatsAppService.sendStatementViaWhatsApp(

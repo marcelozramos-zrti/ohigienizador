@@ -25,7 +25,7 @@ export class FinancialEngine {
       periodNumber: options?.periodNumber || 1,
       referenceMonth: options?.referenceMonth || 8,
       referenceYear: options?.referenceYear || 2026,
-      kmRateDefault: options?.kmRateDefault ?? 0.50,
+      kmRateDefault: options?.kmRateDefault ?? 0.75,
     };
 
     const statement = ClosingService.calculateTechnicianStatement(

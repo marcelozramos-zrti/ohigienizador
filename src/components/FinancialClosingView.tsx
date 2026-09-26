@@ -242,7 +242,9 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
     const totalFaturamentoPorto = kpiOrders.reduce((sum, os) => {
       const fat = os.faturamentoPorto;
       if (fat !== undefined && fat !== null && fat > 0) return sum + fat;
-      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+      const matchedUser = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+      const rate = Number(matchedUser?.kmRate ?? matchedUser?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
+      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * rate).toFixed(2));
       let base = Number(os.baseServiceFee ?? 0);
       if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
         base = 20;
@@ -252,7 +254,9 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
     // Soma das ordens de serviço (Base + KM + Pedágio + Suporte)
     const totalOrdersAmount = kpiOrders.reduce((acc, os) => {
-      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+      const matchedUser = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+      const rate = Number(matchedUser?.kmRate ?? matchedUser?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
+      const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * rate).toFixed(2));
       let base = Number(os.baseServiceFee ?? 0);
       if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
         base = 20;
@@ -314,9 +318,10 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
         // Impostos
         if (tech?.hasSpecialTaxRule) {
+          const techRate = Number(tech.kmRate ?? (tech as any).km_rate ?? 0.75) || 0.75;
           const techOrders = periodCompletedOrders.filter((os) => os.technicianId === techId);
           const techOrdersSum = techOrders.reduce((acc, os) => {
-            const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * 0.50).toFixed(2));
+            const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * techRate).toFixed(2));
             return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
           }, 0);
           const techGross = techOrdersSum + allowance;
@@ -873,8 +878,15 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                   {filteredOrders.map((os, idx) => {
                     const visitDate = os.completedAt || os.scheduledDate || new Date().toISOString();
                     const dateFormatted = new Date(visitDate).toLocaleDateString('pt-BR');
+                    const matchedTech = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+                    const displayName = matchedTech?.name || os.technicianName || null;
+                    const isUnallocated = !displayName || displayName === 'Não Alocado';
+                    
+                    const techKmRate = Number(matchedTech?.kmRate ?? (matchedTech as any)?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
                     const km = os.kmTraveled || 0;
-                    const kmCost = os.kmTotalCost ?? Number((km * 0.50).toFixed(2));
+                    const kmCost = os.kmTotalCost !== undefined && (os.kmRateApplied === techKmRate || (os.kmRateApplied === undefined && os.kmTotalCost === Number((km * techKmRate).toFixed(2))))
+                      ? os.kmTotalCost
+                      : Number((km * techKmRate).toFixed(2));
                     const baseFee = os.baseServiceFee || 0;
                     const toll = os.tollCost || 0;
                     const support = os.supportCost || 0;
@@ -893,10 +905,6 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
 
                     const isPaid = os.paymentStatus === 'PAID';
                     const isLoading = actionLoadingId === os.id;
-
-                    const matchedTech = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
-                    const displayName = matchedTech?.name || os.technicianName || null;
-                    const isUnallocated = !displayName || displayName === 'Não Alocado';
 
                     return (
                       <tr
@@ -1187,7 +1195,11 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     {filteredOrders
                       .filter((os) => os.status === 'COMPLETED')
                       .reduce((acc, os) => {
-                        const kmCost = os.kmTotalCost ?? (os.kmTraveled || 0) * 0.50;
+                        const matched = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
+                        const rate = Number(matched?.kmRate ?? (matched as any)?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
+                        const kmCost = os.kmTotalCost !== undefined && (os.kmRateApplied === rate || (os.kmRateApplied === undefined && os.kmTotalCost === Number(((os.kmTraveled || 0) * rate).toFixed(2))))
+                          ? os.kmTotalCost
+                          : Number(((os.kmTraveled || 0) * rate).toFixed(2));
                         return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
                       }, 0)
                       .toFixed(2)}
