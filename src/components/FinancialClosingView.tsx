@@ -30,7 +30,7 @@ import { useApp } from '../context/AppContext';
 import { TechnicianClosingSummary, ServiceOrder } from '../types';
 import { WhatsAppDispatchModal } from './WhatsAppDispatchModal';
 import { CsvExportService } from '../services/csvExportService';
-import { isOrderInPeriod } from '../services/closingService';
+import { ClosingService, isOrderInPeriod } from '../services/closingService';
 
 interface FinancialClosingViewProps {
   onOpenNewAdvance: () => void;
@@ -245,7 +245,13 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
       const matchedUser = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
       const rate = Number(matchedUser?.kmRate ?? matchedUser?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
       const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * rate).toFixed(2));
-      let base = Number(os.baseServiceFee ?? 0);
+      let base = 0;
+      const techPrice = matchedUser && os.serviceCategory ? ClosingService.getTechnicianPriceForService(matchedUser, os.serviceCategory) : null;
+      if (techPrice !== null && techPrice > 0) {
+        base = techPrice;
+      } else {
+        base = Number(os.baseServiceFee ?? 0);
+      }
       if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
         base = 20;
       }
@@ -257,7 +263,13 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
       const matchedUser = safeUsers.find((u) => u.id === os.technicianId || (os.technicianName && u.name.toLowerCase() === os.technicianName.toLowerCase()));
       const rate = Number(matchedUser?.kmRate ?? matchedUser?.km_rate ?? os.kmRateApplied ?? 0.75) || 0.75;
       const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * rate).toFixed(2));
-      let base = Number(os.baseServiceFee ?? 0);
+      let base = 0;
+      const techPrice = matchedUser && os.serviceCategory ? ClosingService.getTechnicianPriceForService(matchedUser, os.serviceCategory) : null;
+      if (techPrice !== null && techPrice > 0) {
+        base = techPrice;
+      } else {
+        base = Number(os.baseServiceFee ?? 0);
+      }
       if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
         base = 20;
       }
@@ -322,7 +334,17 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
           const techOrders = periodCompletedOrders.filter((os) => os.technicianId === techId);
           const techOrdersSum = techOrders.reduce((acc, os) => {
             const kmCost = os.kmTotalCost ?? Number(((os.kmTraveled || 0) * techRate).toFixed(2));
-            return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+            let base = 0;
+            const techPrice = tech && os.serviceCategory ? ClosingService.getTechnicianPriceForService(tech, os.serviceCategory) : null;
+            if (techPrice !== null && techPrice > 0) {
+              base = techPrice;
+            } else {
+              base = Number(os.baseServiceFee ?? 0);
+            }
+            if (base <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+              base = 20;
+            }
+            return acc + base + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
           }, 0);
           const techGross = techOrdersSum + allowance;
           const rate = tech.specialTaxRate || 16;
@@ -887,7 +909,16 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                     const kmCost = os.kmTotalCost !== undefined && (os.kmRateApplied === techKmRate || (os.kmRateApplied === undefined && os.kmTotalCost === Number((km * techKmRate).toFixed(2))))
                       ? os.kmTotalCost
                       : Number((km * techKmRate).toFixed(2));
-                    const baseFee = os.baseServiceFee || 0;
+                    let baseFee = 0;
+                    const techPrice = matchedTech && os.serviceCategory ? ClosingService.getTechnicianPriceForService(matchedTech, os.serviceCategory) : null;
+                    if (techPrice !== null && techPrice > 0) {
+                      baseFee = techPrice;
+                    } else {
+                      baseFee = Number(os.baseServiceFee ?? 0);
+                    }
+                    if (baseFee <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+                      baseFee = 20;
+                    }
                     const toll = os.tollCost || 0;
                     const support = os.supportCost || 0;
                     const totalOs = baseFee + kmCost + toll + support;
@@ -1200,7 +1231,17 @@ export const FinancialClosingView: React.FC<FinancialClosingViewProps> = ({
                         const kmCost = os.kmTotalCost !== undefined && (os.kmRateApplied === rate || (os.kmRateApplied === undefined && os.kmTotalCost === Number(((os.kmTraveled || 0) * rate).toFixed(2))))
                           ? os.kmTotalCost
                           : Number(((os.kmTraveled || 0) * rate).toFixed(2));
-                        return acc + (os.baseServiceFee || 0) + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
+                        let baseFee = 0;
+                        const techPrice = matched && os.serviceCategory ? ClosingService.getTechnicianPriceForService(matched, os.serviceCategory) : null;
+                        if (techPrice !== null && techPrice > 0) {
+                          baseFee = techPrice;
+                        } else {
+                          baseFee = Number(os.baseServiceFee ?? 0);
+                        }
+                        if (baseFee <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
+                          baseFee = 20;
+                        }
+                        return acc + baseFee + kmCost + (os.tollCost || 0) + (os.supportCost || 0);
                       }, 0)
                       .toFixed(2)}
                   </strong>

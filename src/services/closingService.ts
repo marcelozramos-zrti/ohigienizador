@@ -174,12 +174,20 @@ export class ClosingService {
     if (!technician.priceTable || !Array.isArray(technician.priceTable) || technician.priceTable.length === 0) {
       return null;
     }
-    const cleanSearch = (serviceName || '').toLowerCase().trim();
+    const cleanSearch = (serviceName || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
     if (!cleanSearch) return null;
 
-    // Busca exata ou por substring
+    // Busca exata ou por substring insensível a acentos
     const found = technician.priceTable.find((item) => {
-      const itemService = (item.serviceType || '').toLowerCase().trim();
+      const itemService = (item.serviceType || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
       return itemService === cleanSearch || cleanSearch.includes(itemService) || itemService.includes(cleanSearch);
     });
 
@@ -235,13 +243,21 @@ export class ClosingService {
     let sumOrdersTotalCents = 0;
 
     const formattedOrdersList = completedOrders.map((os) => {
-      let baseFee = Number(os.baseServiceFee ?? (os as any).base_service_fee ?? 0);
-      if (baseFee <= 0 && os.serviceCategory) {
-        const tablePrice = this.getTechnicianPriceForService(technician, os.serviceCategory);
-        if (tablePrice !== null && tablePrice > 0) {
-          baseFee = tablePrice;
-        }
+      // 1. PRIORIDADE 1: Consulta à Tabela de Preços do Técnico (Preposto)
+      let baseFee = 0;
+      const technicianPrice = os.serviceCategory
+        ? this.getTechnicianPriceForService(technician, os.serviceCategory)
+        : null;
+
+      // 2. SE a tabela retornar um valor válido (> 0), sobrescreve e usa OBRIGATORIAMENTE
+      if (technicianPrice !== null && technicianPrice > 0) {
+        baseFee = technicianPrice;
+      } else {
+        // 3. Fallback: valor base original da importação/OS
+        baseFee = Number(os.baseServiceFee ?? (os as any).base_service_fee ?? 0);
       }
+
+      // 4. Fallback final: Visita Perdida a R$ 20.00 intacto caso não tenha em lugar nenhum
       if (baseFee <= 0 && (os.serviceCategory?.toLowerCase().includes('perdida') || (os.status as string)?.toLowerCase().includes('perdida'))) {
         baseFee = 20.00; // Valor padrão fixo Visita Perdida
       }
